@@ -1,0 +1,376 @@
+## 1. SOURCE CODE ANALYSIS
+
+The provided source is `org.apache.commons.lang3.math.NumberUtils.createNumber(String)`. The method accepts a `String` and chooses an appropriate numeric type among `Integer`, `Long`, `BigInteger`, `Float`, `Double`, and `BigDecimal`.
+
+### 1.1 Inputs
+
+Important input categories:
+
+| Input category         | Examples                       |
+| ---------------------- | ------------------------------ |
+| `null`                 | `null`                         |
+| Blank                  | `""`, `"   "`                  |
+| Integer                | `"123"`, `"-123"`              |
+| Large integer          | `"2147483648"`                 |
+| Decimal                | `"1.23"`                       |
+| Scientific notation    | `"1.23E5"`                     |
+| Explicit suffix        | `"1.23F"`, `"1.23D"`, `"123L"` |
+| Hexadecimal            | `"0xFF"`, `"-0xFF"`            |
+| Invalid numeric string | `"abc"`                        |
+
+The method explicitly returns `null` for `null` input and throws `NumberFormatException` for blank input. 
+
+### 1.2 Outputs
+
+Depending on the input, `createNumber()` may return:
+
+* `Integer`
+* `Long`
+* `BigInteger`
+* `Float`
+* `Double`
+* `BigDecimal`
+* `null`
+
+For an integer without a decimal point or exponent, the implementation tries `Integer`, then `Long`, then `BigInteger`. 
+
+For decimal/exponent values, it tries `Float`, then `Double`, and finally `BigDecimal`. 
+
+### 1.3 Important branches
+
+The major execution branches are:
+
+1. `null` input.
+2. Blank input.
+3. Hexadecimal input.
+4. Decimal-point input.
+5. Exponent input.
+6. Explicit type suffix (`L`, `F`, `D`).
+7. Integer → `Integer` / `Long` / `BigInteger`.
+8. Decimal → `Float` / `Double` / `BigDecimal`.
+9. Invalid input → `NumberFormatException`.
+
+A particularly important section is:
+
+```java
+// Check required precision (LANG-693)
+int numDecimals = 0;
+```
+
+The implementation calculates the number of digits after the decimal point:
+
+```java
+numDecimals = dec.length();
+```
+
+but the value is subsequently not used when selecting `Float`, `Double`, or `BigDecimal`. 
+
+This is the most important defect-related observation in the supplied source.
+
+### 1.4 Boundary conditions
+
+Important boundaries include:
+
+* `Integer` maximum/minimum.
+* `Long` maximum/minimum.
+* Hexadecimal digit counts of 8 and 16.
+* Decimal values with increasing numbers of decimal digits.
+* Values close to `Float`/`Double` precision limits.
+* Floating-point underflow to zero.
+* Floating-point overflow to infinity.
+
+For hexadecimal values, the implementation switches from `Integer` to `Long` after 8 hexadecimal digits and to `BigInteger` after 16. 
+
+### 1.5 Exception conditions
+
+`NumberFormatException` can occur for:
+
+* blank strings,
+* malformed decimal/exponent representations,
+* invalid suffixes,
+* invalid numeric strings,
+* values that cannot be represented by the attempted numeric types.
+
+The explicit blank-input check is at the beginning of `createNumber()`. 
+
+### 1.6 Relevant execution path for LANG-693
+
+The defect-oriented path is:
+
+```text
+createNumber(String)
+        |
+        +-- decimal point exists
+        |
+        +-- calculate numDecimals
+        |
+        +-- numDecimals = dec.length()
+        |
+        +-- try Float
+        |
+        +-- try Double
+        |
+        +-- otherwise BigDecimal
+```
+
+The source labels the precision calculation as `LANG-693`, but the calculated `numDecimals` is not subsequently used to control the selected numeric type. 
+
+Therefore, decimal inputs around the precision boundaries are the most relevant tests.
+
+---
+
+# 2. TEST CASE DESIGN
+
+The following tests are designed from the supplied buggy implementation only. They do **not** assume or reproduce the original Defects4J triggering test.
+
+| ID    | Input                   | Expected Result         | Testing rationale                                                | Targeted behavior                 | Defect? |
+| ----- | ----------------------- | ----------------------- | ---------------------------------------------------------------- | --------------------------------- | ------- |
+| TC-01 | `"123"`                 | `Integer(123)`          | Basic integer conversion                                         | Normal integer path               | No      |
+| TC-02 | `"2147483648"`          | `Long(2147483648L)`     | Crosses Integer maximum                                          | Integer → Long boundary           | No      |
+| TC-03 | `"9223372036854775808"` | `BigInteger`            | Crosses Long maximum                                             | Long → BigInteger boundary        | No      |
+| TC-04 | `"1.23"`                | `Float(1.23f)`          | Ordinary decimal                                                 | Floating-point path               | No      |
+| TC-05 | `"1.2345678"`           | `Double`                | Tests decimal precision boundary beyond typical Float precision  | Float → Double selection          | **Yes** |
+| TC-06 | `"1.2345678901234567"`  | `Double`                | Tests high decimal precision still representable by Double       | Double precision boundary         | **Yes** |
+| TC-07 | `"1.23456789012345678"` | `BigDecimal`            | Tests decimal precision beyond Double's useful decimal precision | BigDecimal precision preservation | **Yes** |
+| TC-08 | `"1.23E3"`              | `Float`                 | Normal exponent input                                            | Exponent path                     | No      |
+| TC-09 | `null`                  | `null`                  | Explicit null behavior                                           | Null handling                     | No      |
+| TC-10 | `"   "`                 | `NumberFormatException` | Explicit invalid blank input                                     | Exception path                    | No      |
+| TC-11 | `"abc"`                 | `NumberFormatException` | Invalid numeric input                                            | Exception handling                | No      |
+
+### Why TC-05–TC-07 matter
+
+The source explicitly introduces `numDecimals` under the comment:
+
+```text
+Check required precision (LANG-693)
+```
+
+and calculates the number of digits after the decimal point, but the current implementation does not use that information when deciding whether to return `Float`, `Double`, or `BigDecimal`. 
+
+Therefore, these boundary-oriented decimal tests are substantially more relevant to LANG-693 than simply testing ordinary integers or invalid input.
+
+The tests should verify the **returned numeric type**, not merely compare the numerical value, because the defect concerns preservation of precision through type selection.
+
+---
+
+# 3. JUNIT 4.12 TEST CODE
+
+```java
+package org.apache.commons.lang3.math;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
+
+import java.math.BigInteger;
+
+import org.junit.Test;
+
+public class NumberUtilsCreateNumberTest {
+
+    @Test
+    public void testCreateNumberInteger() {
+        Number result = NumberUtils.createNumber("123");
+
+        assertTrue(result instanceof Integer);
+        assertEquals(Integer.valueOf(123), result);
+    }
+
+    @Test
+    public void testCreateNumberLongWhenIntegerOverflow() {
+        Number result = NumberUtils.createNumber("2147483648");
+
+        assertTrue(result instanceof Long);
+        assertEquals(Long.valueOf(2147483648L), result);
+    }
+
+    @Test
+    public void testCreateNumberBigIntegerWhenLongOverflow() {
+        Number result = NumberUtils.createNumber("9223372036854775808");
+
+        assertTrue(result instanceof BigInteger);
+        assertEquals(
+                new BigInteger("9223372036854775808"),
+                result);
+    }
+
+    @Test
+    public void testCreateNumberSimpleDecimal() {
+        Number result = NumberUtils.createNumber("1.23");
+
+        assertTrue(result instanceof Float);
+        assertEquals(Float.valueOf(1.23f), result);
+    }
+
+    @Test
+    public void testCreateNumberUsesDoubleForHigherDecimalPrecision() {
+        Number result = NumberUtils.createNumber("1.2345678");
+
+        assertTrue(result instanceof Double);
+    }
+
+    @Test
+    public void testCreateNumberUsesDoubleAtDoublePrecisionBoundary() {
+        Number result = NumberUtils.createNumber("1.2345678901234567");
+
+        assertTrue(result instanceof Double);
+    }
+
+    @Test
+    public void testCreateNumberUsesBigDecimalForExcessiveDecimalPrecision() {
+        Number result =
+                NumberUtils.createNumber("1.23456789012345678");
+
+        assertTrue(result instanceof java.math.BigDecimal);
+        assertEquals(
+                new java.math.BigDecimal("1.23456789012345678"),
+                result);
+    }
+
+    @Test
+    public void testCreateNumberExponent() {
+        Number result = NumberUtils.createNumber("1.23E3");
+
+        assertTrue(result instanceof Float);
+        assertEquals(Float.valueOf(1.23E3f), result);
+    }
+
+    @Test
+    public void testCreateNumberNull() {
+        assertEquals(null, NumberUtils.createNumber(null));
+    }
+
+    @Test(expected = NumberFormatException.class)
+    public void testCreateNumberBlankString() {
+        NumberUtils.createNumber("   ");
+    }
+
+    @Test(expected = NumberFormatException.class)
+    public void testCreateNumberInvalidString() {
+        NumberUtils.createNumber("abc");
+    }
+}
+```
+
+The test class uses only the supplied public API, `NumberUtils.createNumber(String)`, and JUnit assertions. No production code, reflection, or invented API is required. The supplied source confirms that `createNumber(String)` is the method under test. 
+
+---
+
+# 4. DEFECT DETECTION STRATEGY
+
+The primary defect-oriented tests are **TC-05, TC-06, and TC-07**.
+
+### TC-05 — `"1.2345678"`
+
+**Why the input is relevant**
+
+This input contains more decimal digits than are normally appropriate for a `Float`.
+
+**What is checked**
+
+The test checks that the returned object is a `Double`, rather than accepting a lower-precision `Float`.
+
+**Why the supplied buggy implementation may fail**
+
+The implementation calculates:
+
+```java
+numDecimals = dec.length();
+```
+
+but does not use `numDecimals` when deciding whether to return `Float` or `Double`. 
+
+The code instead attempts `Float` first and returns it when it is not infinite and does not underflow to zero. 
+
+Consequently, a precision-oriented test can expose the missing precision-selection logic.
+
+**Expected behavior after the defect is fixed**
+
+The implementation should select a numeric type appropriate for the requested decimal precision rather than simply accepting the first finite floating-point representation.
+
+---
+
+### TC-06 — `"1.2345678901234567"`
+
+**Why the input is relevant**
+
+This exercises the high end of ordinary decimal precision before requiring arbitrary-precision representation.
+
+**What is checked**
+
+The returned value should be a `Double`, allowing more precision than `Float`.
+
+**Why the supplied buggy implementation may fail**
+
+Again, the current source computes `numDecimals` but does not use it to select the appropriate floating-point type. 
+
+**Expected behavior after the defect is fixed**
+
+The implementation should use the decimal precision information when determining whether `Float`, `Double`, or `BigDecimal` is appropriate.
+
+---
+
+### TC-07 — `"1.23456789012345678"`
+
+**Why the input is relevant**
+
+This deliberately goes beyond the useful decimal precision of a `Double`.
+
+**What is checked**
+
+The result must be a `BigDecimal`, and its exact decimal value must be preserved.
+
+**Why the supplied buggy implementation may fail**
+
+The current implementation tries `Float`, then `Double`, and only falls back to `BigDecimal` if the floating-point result is infinite or otherwise rejected by its checks. 
+
+A finite `Double` can therefore be accepted even though it cannot preserve every decimal digit represented by the input.
+
+**Expected behavior after the defect is fixed**
+
+A sufficiently precise decimal input should be represented using `BigDecimal` so that the requested decimal precision is not silently discarded.
+
+### Important experimental qualification
+
+These tests are **intended to detect** the defect based on the supplied source. Per the experiment rules, they cannot be declared successful defect detectors until they are actually executed against both versions.
+
+The required experimental result is:
+
+```text
+Buggy version:
+    test fails
+
+Fixed version:
+    same test passes
+```
+
+A test that passes on both versions or fails on both versions should **not** be counted as detecting LANG-693.
+
+---
+
+# 5. SUMMARY
+
+The key defect-related observation is that the supplied implementation explicitly calculates the number of decimal digits:
+
+```java
+numDecimals = dec.length();
+```
+
+under the `LANG-693` precision check, but that information is not subsequently used in the floating-point type-selection logic. 
+
+Therefore, the most valuable generated tests are the **decimal-precision boundary tests**, especially:
+
+* `"1.2345678"` → `Double`
+* `"1.2345678901234567"` → `Double`
+* `"1.23456789012345678"` → `BigDecimal`
+
+The remaining tests provide coverage for normal, boundary, null, and invalid-input behavior without unnecessarily duplicating the defect-oriented tests.
+
+---
+
+# 6. LIMITATIONS
+
+1. **The fixed implementation was not provided**, so the exact fixed-version behavior cannot be verified from the supplied material.
+2. **The original Defects4J triggering test was not provided**, so these tests are independently designed rather than reconstructed.
+3. The supplied material identifies the precision-related code with `LANG-693`, but it does not provide a separate textual statement of the exact expected precision thresholds.
+4. Therefore, the precise expected type boundaries used above are derived from the observable purpose of the precision logic and the behavior expected from the numeric types, rather than from the missing fixed implementation.
+5. No test can yet be labeled **BUGGY FAIL / FIXED PASS** without executing it on both Defects4J versions, as required by the experiment.
