@@ -1,0 +1,300 @@
+### 1. SOURCE CODE ANALYSIS
+
+#### 1. Inputs to the `LookupTranslator` Constructor
+
+The constructor takes a varargs parameter: `final CharSequence[]... lookup`. Each element in `lookup` is an array of `CharSequence` representing a key-value mapping (where `seq[0]` is the key and `seq[1]` is the replacement value).
+
+#### 2. Inputs to the `translate` Method
+
+* `CharSequence input`: The sequence of characters being translated.
+* `int index`: The starting offset position in `input` from which translation should be attempted.
+* `Writer out`: The destination stream to which translated character sequences are written.
+
+#### 3. Outputs of the `translate` Method
+
+* `int`: The number of characters consumed from `input` starting at `index` (returns `0` if no lookup match is found).
+* Side effect: Writes the mapped target value (`result.toString()`) to `Writer out` when a match occurs.
+
+#### 4. How `lookupMap` is Constructed
+
+In the constructor:
+
+```java
+lookupMap = new HashMap<CharSequence, CharSequence>();
+
+```
+
+It iterates through the provided `lookup` arrays and stores entries using `this.lookupMap.put(seq[0], seq[1])`.
+
+#### 5. How Lookup Keys are Stored
+
+Lookup keys (`seq[0]`) are stored directly as `CharSequence` instances without conversion to `String`.
+
+#### 6. How Lookup Keys are Retrieved During Translation
+
+During translation:
+
+```java
+final CharSequence subSeq = input.subSequence(index, index + i);
+final CharSequence result = lookupMap.get(subSeq);
+
+```
+
+`subSeq` is obtained via `CharSequence.subSequence()`, which may return a non-`String` `CharSequence` implementation (e.g., `CharSequence` returned by `StringBuilder.subSequence()`, `CharBuffer`, or custom implementations). `lookupMap.get(subSeq)` looks up the key in the `HashMap<CharSequence, CharSequence>`.
+
+#### 7. How `shortest` and `longest` are Calculated
+
+* `shortest` is initialized to `Integer.MAX_VALUE` and updated to the minimum length among all key `CharSequence` instances (`seq[0].length()`).
+* `longest` is initialized to `0` and updated to the maximum length among all key `CharSequence` instances.
+
+#### 8. How `translate` Determines the Maximum Substring Length
+
+`max` is initialized to `longest`. If `index + longest > input.length()`, `max` is adjusted to `input.length() - index` to avoid `IndexOutOfBoundsException`.
+
+#### 9. How the Greedy Matching Loop Works
+
+A descending `for` loop runs from `i = max` down to `i = shortest`. It attempts to find the longest matching key starting at `index`.
+
+#### 10. What Happens When a Matching Key is Found
+
+If `lookupMap.get(subSeq)` returns a non-null `result`:
+
+* `out.write(result.toString())` writes the mapped value to the destination writer.
+* The method immediately returns `i` (the number of consumed characters).
+
+#### 11. What Happens When No Matching Key is Found
+
+If loop completes from `max` down to `shortest` without `lookupMap.get(subSeq)` returning non-null, the method returns `0` and writes nothing to `out`.
+
+#### 12. Boundary Conditions
+
+* **`index` / `input length**`: When `index + longest > input.length()`, `max` truncates gracefully.
+* **`shortest` / `longest**`: Controls the bounds of loop execution.
+* **Single vs Multiple Character Keys**: Handles varying sequence lengths; single-character keys set both bounds to `1`.
+
+#### 13. Relevant `CharSequence` Implementations
+
+* `java.lang.String`
+* `java.lang.StringBuilder`
+* `java.lang.StringBuffer`
+* `java.nio.CharBuffer`
+
+#### 14. Potential Defect-Related Behavior (`HashMap` Key Equality & `hashCode`)
+
+`java.util.HashMap` relies on `equals(Object)` and `hashCode()` contract for key lookup:
+
+* `java.lang.String` implements `equals` and `hashCode` based on character content.
+* `StringBuilder` and `StringBuffer` do **NOT** override `equals` and `hashCode` from `Object` (they inherit identity equality and identity hash code).
+* `CharSequence.subSequence()` on various implementations may return objects whose `equals` / `hashCode` methods are incompatible with the key stored in `HashMap`.
+* If `lookupMap` stores keys as `CharSequence` (e.g., `StringBuilder` key or `String` key) and `subSeq` is evaluated using a different `CharSequence` implementation or type, `lookupMap.get(subSeq)` fails to match even if character contents are identical.
+* The class Javadoc explicitly references **LANG-882**, noting that lookup keys need to be converted to `String` so `hashCode` and `equals` work correctly across differing `CharSequence` types.
+
+#### 15. Relevant Execution Paths Distinguishing Correct and Incorrect Behavior
+
+* **Path A (Matching Type)**: Key stored as `String`, lookup evaluated using `String` or `subSequence` that equals key.
+* **Path B (Differing `CharSequence` Type)**: Key stored as `CharSequence` (e.g., `CharSequence` wrapped around non-`String`, or `CharSequence` key queried via `CharSequence.subSequence()` that does not match `equals`/`hashCode` of stored key).
+
+---
+
+### 2. TEST CASE DESIGN
+
+| Test Case ID | Input Setup | Expected Result | Testing Rationale | Targeted Behavior | Targets Defect? |
+| --- | --- | --- | --- | --- | --- |
+| **TC_LANG4_01** | Key: `"one"` (`String`), Input: `"one"` (`String`), Index: 0 | Returns `3`, writes `"1"` | Standard matching with `String` keys | Greedy translation with exact `String` match | No |
+| **TC_LANG4_02** | Key: `StringBuilder("one")`, Input: `"one"` (`String`), Index: 0 | Returns `3`, writes `"1"` | Key is `StringBuilder`, query is `String` | `CharSequence` keys that are not `String` instances | **Yes** |
+| **TC_LANG4_03** | Key: `"one"` (`String`), Input: `StringBuilder("one")`, Index: 0 | Returns `3`, writes `"1"` | Key is `String`, input is `StringBuilder` (where `subSequence` may return non-`String`) | Query `CharSequence` implementation differing from stored `String` | **Yes** |
+| **TC_LANG4_04** | Keys: `"a"`->`"1"`, `"ab"`->`"2"`, Input: `"abc"`, Index: 0 | Returns `2`, writes `"2"` | Verify greedy choice of longest matching key | Greedy evaluation order | No |
+| **TC_LANG4_05** | Key: `"test"`, Input: `"no-match"`, Index: 0 | Returns `0`, writes `""` | No key matches input | Non-matching sequence handling | No |
+| **TC_LANG4_06** | Key: `"cat"`, Input: `"bobcat"`, Index: 3 | Returns `3`, writes `"dog"` | Translation starting at non-zero index | Offset translation | No |
+| **TC_LANG4_07** | Keys: `null` array passed to constructor | Normal instantiation, no exception | Handle null lookup map | Null check safety in constructor | No |
+| **TC_LANG4_08** | Key: `CharBuffer.wrap("key")`, Input: `"key"`, Index: 0 | Returns `3`, writes `"val"` | Key created via `CharBuffer` | `CharSequence` key equality/hashCode behavior | **Yes** |
+
+---
+
+### 3. JUNIT 4.12 TEST CODE
+
+```java
+package org.apache.commons.lang3.text.translate;
+
+import org.junit.Test;
+
+import java.io.IOException;
+import java.io.StringWriter;
+import java.nio.CharBuffer;
+
+import static org.junit.Assert.assertEquals;
+
+/**
+ * Automated test suite for LookupTranslator targeting LANG-882 / Defects4J Lang-4.
+ */
+public class LookupTranslatorTest {
+
+    @Test
+    public void testBasicStringTranslation() throws IOException {
+        final CharSequence[][] lookup = new CharSequence[][] {
+            { "one", "1" },
+            { "two", "2" }
+        };
+        final LookupTranslator translator = new LookupTranslator(lookup);
+        final StringWriter out = new StringWriter();
+
+        final int consumed = translator.translate("oneTwo", 0, out);
+
+        assertEquals(3, consumed);
+        assertEquals("1", out.toString());
+    }
+
+    @Test
+    public void testGreedyMatch() throws IOException {
+        final CharSequence[][] lookup = new CharSequence[][] {
+            { "a", "1" },
+            { "ab", "2" }
+        };
+        final LookupTranslator translator = new LookupTranslator(lookup);
+        final StringWriter out = new StringWriter();
+
+        final int consumed = translator.translate("abc", 0, out);
+
+        assertEquals(2, consumed);
+        assertEquals("2", out.toString());
+    }
+
+    @Test
+    public void testNoMatch() throws IOException {
+        final CharSequence[][] lookup = new CharSequence[][] {
+            { "hello", "world" }
+        };
+        final LookupTranslator translator = new LookupTranslator(lookup);
+        final StringWriter out = new StringWriter();
+
+        final int consumed = translator.translate("goodbye", 0, out);
+
+        assertEquals(0, consumed);
+        assertEquals("", out.toString());
+    }
+
+    @Test
+    public void testTranslationWithOffsetIndex() throws IOException {
+        final CharSequence[][] lookup = new CharSequence[][] {
+            { "cat", "dog" }
+        };
+        final LookupTranslator translator = new LookupTranslator(lookup);
+        final StringWriter out = new StringWriter();
+
+        final int consumed = translator.translate("bobcat", 3, out);
+
+        assertEquals(3, consumed);
+        assertEquals("dog", out.toString());
+    }
+
+    @Test
+    public void testNullLookup() throws IOException {
+        final LookupTranslator translator = new LookupTranslator((CharSequence[][]) null);
+        final StringWriter out = new StringWriter();
+
+        final int consumed = translator.translate("test", 0, out);
+
+        assertEquals(0, consumed);
+        assertEquals("", out.toString());
+    }
+
+    @Test
+    public void testStringBuilderAsLookupKey() throws IOException {
+        final CharSequence key = new StringBuilder("key");
+        final CharSequence value = new StringBuilder("value");
+        final CharSequence[][] lookup = new CharSequence[][] {
+            { key, value }
+        };
+        final LookupTranslator translator = new LookupTranslator(lookup);
+        final StringWriter out = new StringWriter();
+
+        final int consumed = translator.translate("key", 0, out);
+
+        assertEquals(3, consumed);
+        assertEquals("value", out.toString());
+    }
+
+    @Test
+    public void testStringBuilderAsInput() throws IOException {
+        final CharSequence[][] lookup = new CharSequence[][] {
+            { "key", "value" }
+        };
+        final LookupTranslator translator = new LookupTranslator(lookup);
+        final StringWriter out = new StringWriter();
+        final CharSequence input = new StringBuilder("key");
+
+        final int consumed = translator.translate(input, 0, out);
+
+        assertEquals(3, consumed);
+        assertEquals("value", out.toString());
+    }
+
+    @Test
+    public void testCharBufferAsLookupKey() throws IOException {
+        final CharSequence key = CharBuffer.wrap("key");
+        final CharSequence value = CharBuffer.wrap("value");
+        final CharSequence[][] lookup = new CharSequence[][] {
+            { key, value }
+        };
+        final LookupTranslator translator = new LookupTranslator(lookup);
+        final StringWriter out = new StringWriter();
+
+        final int consumed = translator.translate("key", 0, out);
+
+        assertEquals(3, consumed);
+        assertEquals("value", out.toString());
+    }
+}
+
+```
+
+---
+
+### 4. DEFECT DETECTION STRATEGY
+
+#### Targeted Tests
+
+1. `testStringBuilderAsLookupKey`
+2. `testStringBuilderAsInput`
+3. `testCharBufferAsLookupKey`
+
+#### Analysis per Defect-Oriented Test
+
+##### 1. `testStringBuilderAsLookupKey`
+
+* **Input Relevance**: Uses `StringBuilder` instances as key/value elements in the `lookup` array passed to `LookupTranslator`.
+* **Behavior Checked**: Asserts that passing a character-equivalent `String` ("key") to `translate()` matches the `StringBuilder` key in `lookupMap`.
+* **Buggy Implementation Path**: `lookupMap.put(seq[0], seq[1])` stores `StringBuilder` as the key. `StringBuilder` inherits `Object.equals()` and `Object.hashCode()`.
+* **Why Buggy Behavior May Fail**: When `translate()` queries `lookupMap.get(subSeq)`, where `subSeq` is a `String` (or `String` slice), `subSeq.equals(stringBuilderKey)` evaluates to `false` (different classes / non-overridden `equals`), causing key lookup failure and returning `0`.
+* **Expected Behavior When Fixed**: Keys are converted to `String` (which implements proper content-based `equals` and `hashCode`), enabling successful lookup and returning `3` with output `"value"`.
+
+##### 2. `testStringBuilderAsInput`
+
+* **Input Relevance**: Lookup key is standard `String`, but input sequence is a `StringBuilder`.
+* **Behavior Checked**: Verifies translation succeeds when input sequence is a non-`String` `CharSequence`.
+* **Buggy Implementation Path**: `input.subSequence(index, index + i)` on a `StringBuilder` returns a `CharSequence` whose `equals`/`hashCode` might not match the stored key.
+* **Why Buggy Behavior May Fail**: If `subSequence` returns a non-`String` type that does not evaluate equal to a `String` key inside `HashMap.get()`, lookup returns `null`.
+* **Expected Behavior When Fixed**: Lookup key handling converts keys to `String` properly and matches equivalent `CharSequence` inputs.
+
+##### 3. `testCharBufferAsLookupKey`
+
+* **Input Relevance**: Uses `CharBuffer` objects as `lookup` table keys.
+* **Behavior Checked**: Verifies that character sequence equality works across different `CharSequence` implementations (`CharBuffer` vs `String`).
+* **Buggy Implementation Path**: Stores `CharBuffer` directly inside `HashMap<CharSequence, CharSequence>`.
+* **Why Buggy Behavior May Fail**: `CharBuffer.equals()` only returns true when comparing against another `Buffer` object, not against a `String` or general `CharSequence`.
+* **Expected Behavior When Fixed**: `LookupTranslator` normalizes key storing to `String.toString()`, allowing cross-type `CharSequence` matching.
+
+---
+
+### 5. SUMMARY
+
+* **Analyzed**: Evaluated `LookupTranslator` source code, focusing on how `HashMap<CharSequence, CharSequence>` interacts with `CharSequence` implementations.
+* **Identified Defect**: Using raw `CharSequence` objects as keys in a `HashMap` causes lookup failures due to `equals()` / `hashCode()` incompatibilities across differing `CharSequence` implementations (such as `StringBuilder` or `CharBuffer`).
+* **Designed & Generated**: Produced 8 JUnit 4.12 unit tests targeting standard translation, greedy matching, offset bounds, and non-`String` `CharSequence` key/input scenarios.
+
+---
+
+### 6. LIMITATIONS
+
+* **Execution Dependency**: Actual failure on the buggy version and passing on the fixed version can only be verified by running the test suite against both Defects4J Lang-4 revisions.
+* **No Source Modification**: Tests rely exclusively on public API signatures without altering package-private fields or internal structures via reflection.
