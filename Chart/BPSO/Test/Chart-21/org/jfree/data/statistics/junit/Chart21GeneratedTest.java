@@ -1,3 +1,0 @@
-package org.jfree.data.statistics.junit;
-import java.util.ArrayList; import junit.framework.TestCase; import org.jfree.data.Range; import org.jfree.data.statistics.BoxAndWhiskerItem; import org.jfree.data.statistics.DefaultBoxAndWhiskerCategoryDataset;
-public class Chart21GeneratedTest extends TestCase { public void testReplacingBoundaryItemRecalculatesRange() { DefaultBoxAndWhiskerCategoryDataset d=new DefaultBoxAndWhiskerCategoryDataset(); d.add(new BoxAndWhiskerItem(1d,2d,3d,4d,5d,6d,7d,8d,new ArrayList()),"R1","C1"); d.add(new BoxAndWhiskerItem(2d,3d,4d,5d,6d,7d,8.5d,9.5d,new ArrayList()),"R2","C1"); d.add(new BoxAndWhiskerItem(2d,3d,4d,5d,6d,7d,8.6d,9.6d,new ArrayList()),"R1","C1"); assertEquals(new Range(8.5d,9.6d),d.getRangeBounds(false)); } }
