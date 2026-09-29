@@ -1,35 +1,966 @@
-# AI-Assisted Testing vs. Automatic Test Case Generation Algorithms
+> **โครงสร้างใหม่สำหรับทุกโปรเจกต์:** มี 17 โฟลเดอร์โปรเจกต์ตามภาพ Defects4J และรายการ active bugs 854 รายการ ดู [ALL_PROJECTS_README.md](ALL_PROJECTS_README.md) โฟลเดอร์เหล่านี้ยังเป็นพื้นที่เตรียมงาน ผลทดลองเดิมด้านล่างเป็นของ Lang-3 เท่านั้น และขั้นตอนตรวจ baseline ของ Lang อยู่ใน [lang-study/README.md](lang-study/README.md)
 
-โครงงานนี้เปรียบเทียบการสร้างชุดทดสอบด้วย 4 วิธี ได้แก่ **BPSO, SA, ChatGPT และ Gemini** โดยทดลองกับบั๊กในชุดข้อมูล Defects4J และวัดผลด้วยเกณฑ์เดียวกัน
+# 1. ข้อมูลโครงงาน
 
-## งานทั้งหมดที่ต้องทำ
+## ชื่อโครงงาน
 
-| ลำดับ | งาน | รายละเอียดและสิ่งที่ต้องส่ง | ผู้รับผิดชอบ | สถานะ |
-|---|---|---|---|---|
-| 1 | เตรียมชุดข้อมูล | ตรวจรายชื่อโปรเจกต์และบั๊กใน Defects4J ระบุบั๊กที่จะทดลองใน `bug-index.csv` | รอมอบหมาย | เตรียมโครงสร้างโฟลเดอร์แล้ว |
-| 2 | เตรียมสภาพแวดล้อม | ติดตั้ง Java และ Defects4J ตรวจว่า checkout, compile และรันเทสต์ของบั๊กได้ | รอมอบหมาย | รอตรวจสอบบนเครื่องที่ใช้ทดลอง |
-| 3 | กำหนดวิธีทดลองร่วมกัน | ใช้บั๊กชุดเดียวกัน กำหนดจำนวนรอบ วิธีจับเวลา และวิธีวัดผลให้เปรียบเทียบกันได้ | ทั้งกลุ่ม | ยังไม่สรุป |
-| 4 | สร้างชุดทดสอบด้วย BPSO | พัฒนาโปรแกรม กำหนดค่าการทำงาน สร้างเทสต์ รันและบันทึกผล | **สโรชา เสาทอง** | **เริ่มทำก่อน** |
-| 5 | สร้างชุดทดสอบด้วย SA | เตรียมโปรแกรมและค่าการทำงาน สร้างเทสต์ รันและบันทึกผล | **กัญญาวี ศรีเหรา** | **กำลังทำ** |
-| 6 | สร้างชุดทดสอบด้วย ChatGPT | เก็บ prompt และเทสต์ที่สร้าง รันและบันทึกผล | รอมอบหมาย | ยังไม่ครบตามแผนใหม่ |
-| 7 | สร้างชุดทดสอบด้วย Gemini | เก็บ prompt และเทสต์ที่สร้าง รันและบันทึกผล | รอมอบหมาย | ยังไม่ครบตามแผนใหม่ |
-| 8 | ตรวจผลของเทสต์ | รันเทสต์กับเวอร์ชันที่มีบั๊กและเวอร์ชันที่แก้แล้ว บันทึกว่าเทสต์ตรวจพบบั๊กได้หรือไม่ | ทั้งกลุ่ม | ยังไม่ครบ |
-| 9 | เก็บค่าที่ใช้เปรียบเทียบ | จำนวนเทสต์, coverage, การตรวจพบบั๊ก, เวลาสร้างเทสต์ และเวลารันเทสต์ | ทั้งกลุ่ม | ยังไม่ครบ |
-| 10 | ทดลองซ้ำและขยายผล | บันทึกผลแต่ละรอบ และทำกับโปรเจกต์หรือบั๊กตามขอบเขตที่กลุ่มกำหนด | ทั้งกลุ่ม | ยังไม่ครบ |
-| 11 | วิเคราะห์ผล | ทำตารางหรือกราฟเปรียบเทียบทั้ง 4 วิธี พร้อมอธิบายข้อจำกัด | ทั้งกลุ่ม | ยังไม่เริ่ม |
-| 12 | จัดทำงานส่ง | ตรวจโค้ด ผลทดลอง README รายงาน และสไลด์นำเสนอให้ตรงกัน | ทั้งกลุ่ม | ยังไม่เริ่ม |
+**AI-Assisted Testing vs. Automatic Test Case Generation Algorithms: A Benchmark and Test Coverage Evaluation**
 
-## โครงสร้างโฟลเดอร์ของแต่ละโปรเจกต์
+**รายวิชา:** CP353201 Software Quality Assurance  
+**ปีการศึกษา:** 1/2569
 
-| วิธี | โฟลเดอร์ | ใช้เก็บอะไร |
-|---|---|---|
-| BPSO | `BPSO/Code`, `Configuration`, `Test`, `Result_Round1`, `Result_Round2` | โปรแกรม ค่าที่ตั้ง เทสต์ และผลทดลองสองรอบ |
-| SA | `SA/Code`, `Configuration`, `Test`, `Result_Round1`, `Result_Round2` | โปรแกรม ค่าที่ตั้ง เทสต์ และผลทดลองสองรอบ |
-| ChatGPT | `ChatGPT/Prompt`, `TestCode`, `Result` | คำสั่งที่ใช้ โค้ดเทสต์ และผลทดลอง |
-| Gemini | `Gemini/Prompt`, `TestCode`, `Result` | คำสั่งที่ใช้ โค้ดเทสต์ และผลทดลอง |
+โครงงานนี้ศึกษาและเปรียบเทียบการสร้าง Test Case แบบอัตโนมัติด้วย 2 แนวทาง ได้แก่
 
-## งานที่เริ่มทำก่อน: BPSO
+1. **Generative AI / AI-Assisted Testing**
+2. **Automatic Test Case Generation Algorithms**
 
-สโรชา เสาทองจะเริ่มจากทดลอง BPSO กับบั๊กหนึ่งตัวของ `Lang` เพื่อให้ได้ขั้นตอนครบตั้งแต่สร้างเทสต์จนถึงบันทึกผล จากนั้นจึงขยายไปยังบั๊กอื่นตามแผนของกลุ่ม
+โดยใช้ **ChatGPT, Gemini, Simulated Annealing (SA) และ Binary Particle Swarm Optimization (BPSO)** ในการสร้าง Test Case และนำผลลัพธ์มาทดลองกับ Java Project เดียวกัน เพื่อประเมินและเปรียบเทียบผลการทำงานของแต่ละแนวทาง
 
-**หมายเหตุ:** โฟลเดอร์และรายการใน `bug-index.csv` เป็นการเตรียมงาน ยังไม่ถือว่าบั๊กทั้งหมดผ่านการทดลองแล้ว ผลเดิมของ Lang-3 ต้องแยกจากผลการทดลองใหม่และระบุที่มาให้ชัดเจน
+--- 
+# 2. สมาชิกกลุ่ม
+
+## Group 10
+
+| ลำดับ | ชื่อ | รหัสนักศึกษา |
+|:---:|---|:---:|
+| 1 | นางสาวกัญญาวี ศรีเหรา | 673380026-6 |
+| 2 | นางสาวรสริน เมืองหงษ์ | 673380289-4 |
+| 3 | นางสาวสโรชา เสาทอง | 673380296-7 |
+
+---
+
+# 3. Repository Structure
+
+โครงสร้าง Repository ของโครงงานแบ่งออกเป็นส่วนหลัก ได้แก่
+
+```text
+SQA_Project/
+│
+├── README.md
+├── .gitignore
+│
+├── algorithms/
+│   ├── sa/
+│   │   └── SimulatedAnnealingGenerator.java
+│   │
+│   └── bpso/
+│
+├── ai-tests/
+│   ├── chatgpt/
+│   ├── gemini/
+│   │
+│   ├── sa/
+│   │   ├── suite/
+│   │   │   └── org/apache/commons/lang3/math/
+│   │   │       └── NumberUtilsCreateNumberSATest.java
+│   │   │
+│   │   └── Lang-3b-sa.1.tar.bz2
+│   │
+│   └── bpso/
+│
+├── results/
+│   ├── chatgpt/
+│   ├── gemini/
+│   ├── sa/
+│   ├── bpso/
+│   │
+│   └── summary/
+│       ├── ai_results.txt
+│       └── sa_result.txt
+│
+└── projects/
+    ├── Lang-3/
+    └── Lang-3-fixed/
+```
+
+## Folder Description
+
+| Folder | รายละเอียด |
+|---|---|
+| `algorithms/` | Source Code ของ Automatic Test Case Generation Algorithms |
+| `algorithms/sa/` | Implementation ของ Simulated Annealing |
+| `algorithms/bpso/` | Implementation ของ Binary Particle Swarm Optimization |
+| `ai-tests/` | Generated Test Cases จากแต่ละวิธี |
+| `ai-tests/chatgpt/` | Test Cases ที่สร้างโดย ChatGPT |
+| `ai-tests/gemini/` | Test Cases ที่สร้างโดย Gemini |
+| `ai-tests/sa/` | Test Suite ที่สร้างโดย SA |
+| `ai-tests/bpso/` | Test Suite ที่สร้างโดย BPSO |
+| `results/` | ผลการทดลองทั้งหมด |
+| `results/chatgpt/` | ผลการ Execute และ Coverage ของ ChatGPT |
+| `results/gemini/` | ผลการ Execute และ Coverage ของ Gemini |
+| `results/sa/` | ผลการทดลองของ SA |
+| `results/bpso/` | ผลการทดลองของ BPSO |
+| `results/summary/` | Summary Results |
+| `projects/` | Local Defects4J Project สำหรับการทดลอง |
+
+> **หมายเหตุ:** `projects/` เป็นพื้นที่สำหรับเก็บ Defects4J Project ที่ใช้ในการทดลองบนเครื่อง Local และอาจถูกกำหนดให้ไม่ถูก Commit ขึ้น Repository ตาม `.gitignore`
+
+---
+
+# 4. ที่มาและแนวคิดของโครงงาน
+
+การสร้าง Test Case เป็นขั้นตอนสำคัญของ Software Testing แต่การออกแบบ Test Case ด้วยวิธีการ Manual อาจใช้เวลาและทรัพยากรจำนวนมาก โดยเฉพาะเมื่อระบบมีจำนวน Branch, Condition และ Input ที่หลากหลาย
+
+ในปัจจุบันมีทั้ง Generative AI และ Automatic Test Case Generation Algorithms ที่สามารถนำมาใช้ช่วยสร้าง Test Case ได้ ดังนั้นโครงงานนี้จึงมุ่งศึกษาความสามารถของทั้งสองแนวทาง และเปรียบเทียบผลลัพธ์จากการนำไปใช้กับ Software Project จริง
+
+โครงงานเลือกใช้ทั้ง AI และ Algorithm เพื่อให้สามารถศึกษาความแตกต่างในด้านการสร้าง Test Case, Test Coverage, Fault Detection และเวลาที่ใช้ในการสร้าง Test Case
+
+แนวทางที่นำมาเปรียบเทียบประกอบด้วย
+
+- ChatGPT
+- Gemini
+- Simulated Annealing (SA)
+- Binary Particle Swarm Optimization (BPSO)
+
+ทั้ง 4 แนวทางจะถูกนำไปใช้กับ Java Project และ Method Under Test เดียวกัน และ Test Case ที่สร้างขึ้นจะถูกนำไป Compile และ Execute กับ Project จริง
+
+---
+
+# 5. วัตถุประสงค์
+
+โครงงานมีวัตถุประสงค์ดังต่อไปนี้
+
+1. ศึกษาการใช้ Automatic Test Case Generation Algorithms เพื่อสร้าง Test Input และ Test Case แบบอัตโนมัติ
+2. ศึกษาการใช้ Generative AI หรือ AI-Assisting Tools เพื่อสร้าง Unit Test
+3. ตรวจสอบความถูกต้องของ Test Case ที่สร้างขึ้นโดยการ Compile และ Execute กับ Java Project จริง
+4. วัด Test Coverage และ Code Coverage ของ Test Case ที่สร้างขึ้น
+5. เปรียบเทียบความสามารถในการตรวจพบ Fault ของแต่ละแนวทาง
+6. เปรียบเทียบจำนวน Test Case ที่สร้างขึ้น
+7. เปรียบเทียบเวลาที่ใช้ในการสร้าง Test Case
+8. เปรียบเทียบเวลาที่ใช้ในการ Execute Test Case
+9. ศึกษาความแตกต่างระหว่าง AI-Assisted Testing และ Algorithm-Based Automatic Test Case Generation
+
+---
+
+# 6. วิธีการที่ใช้ในการทดลอง
+
+โครงงานเลือกใช้ทั้งหมด **4 วิธี**
+
+## 6.1 ChatGPT
+
+ใช้ Generative AI ในการวิเคราะห์ Source Code และสร้าง JUnit Test Case โดยใช้ Prompt ที่ออกแบบขึ้นสำหรับการทดลอง
+
+ChatGPT จะได้รับข้อมูลเกี่ยวกับ
+
+- Project
+- Bug ID
+- Class
+- Method Under Test
+- Source Code
+- Testing Requirements
+- ขอบเขตของ Input
+- เงื่อนไขของการทดลอง
+
+จากนั้น AI จะสร้าง Test Case และ JUnit Test Code สำหรับนำไปทดลองจริง
+
+---
+
+## 6.2 Gemini
+
+Gemini ถูกนำมาใช้ในลักษณะเดียวกับ ChatGPT เพื่อให้การเปรียบเทียบมีความเป็นธรรม
+
+Gemini ได้รับข้อมูลของ Project, Bug, Class และ Method เดียวกัน และใช้ Prompt ที่ออกแบบให้มีวัตถุประสงค์เดียวกัน
+
+ผลลัพธ์ที่ได้จะถูกนำไป Compile และ Execute กับ Project จริงเช่นเดียวกับ ChatGPT
+
+---
+
+## 6.3 Simulated Annealing (SA)
+
+Simulated Annealing เป็น Search-Based Algorithm ที่นำมาใช้สำหรับค้นหาชุด Test Case จาก Candidate Input Pool ที่กำหนดไว้
+
+ค่าที่ใช้ในการทดลอง SA ได้แก่
+
+| รายการ | ค่า |
+|---|---:|
+| Random Seed | `20260923` |
+| Candidate Pool | `36` |
+| Test Suite Size | `12` |
+| Iterations | `5,000` |
+| Initial Temperature | `10.0` |
+| Cooling Rate | `0.995` |
+
+Algorithm จะเริ่มจาก Test Suite เริ่มต้น จากนั้นทำการเปลี่ยน Test Input ภายในชุดและประเมินค่า Fitness เพื่อค้นหาชุด Test Case ที่เหมาะสม
+
+การทดลองนี้ใช้ **Feature-Based Surrogate Fitness** โดยพิจารณาคุณลักษณะของ Input เช่น
+
+- Null
+- Integer
+- Hexadecimal
+- Decimal
+- Exponent
+- Numeric Suffix
+- Underflow
+- Overflow
+- Floating-Point Precision
+- Invalid Input
+
+Fitness ดังกล่าวเป็นค่า Heuristic ที่ใช้ช่วยนำทางการค้นหา และไม่ได้คำนวณ Runtime Coverage ในทุก Iteration
+
+---
+
+## 6.4 Binary Particle Swarm Optimization (BPSO)
+
+BPSO เป็นรูปแบบของ Particle Swarm Optimization ที่แทนคำตอบด้วยค่าบิต 0/1 เช่น บิตหนึ่งแทนว่าจะเลือก Candidate Test Input นั้นเข้าชุดทดสอบหรือไม่
+
+ในโครงงานนี้ BPSO ถูกกำหนดให้ใช้สำหรับการค้นหา Test Suite จาก Candidate Test Inputs เช่นเดียวกับ SA เพื่อให้สามารถเปรียบเทียบ Algorithm ทั้งสองได้
+
+> **สถานะปัจจุบันของ Repository:** ส่วน BPSO อยู่ในขั้นตอนการพัฒนา/ทดลอง และยังไม่ถือเป็นผลการทดลองที่เสร็จสมบูรณ์
+
+---
+
+# 7. Dataset และ Software Project
+
+โครงงานเลือกใช้ **Defects4J** ซึ่งเป็น Dataset สำหรับการทดลอง Software Testing และ Fault Detection บน Java Projects จริง
+
+Project ที่เลือกคือ
+
+**Apache Commons Lang**
+
+และ Bug ที่เลือกคือ
+
+**Lang-3**
+
+รายละเอียดของ Bug ได้แก่
+
+| รายการ | รายละเอียด |
+|---|---|
+| Project | Apache Commons Lang |
+| Bug ID | Lang-3 |
+| Bug Report | LANG-693 |
+| Buggy Version | Lang-3b |
+| Fixed Version | Lang-3f |
+| Class | `org.apache.commons.lang3.math.NumberUtils` |
+| Method Under Test | `createNumber(String)` |
+| Testing Framework | JUnit 4.12 |
+
+Bug Report ที่เกี่ยวข้องคือ
+
+**LANG-693**
+
+และ Trigger Test ของ Defects4J คือ
+
+```text
+org.apache.commons.lang3.math.NumberUtilsTest::testStringCreateNumberEnsureNoPrecisionLoss
+```
+
+---
+
+# 8. Version ที่ใช้ในการทดลอง
+
+การทดลองใช้ Defects4J Buggy Version และ Fixed Version เพื่อเปรียบเทียบความสามารถในการตรวจพบ Fault
+
+## Buggy Version
+
+```text
+Lang-3b
+```
+
+เป็น Version ที่มี Bug ของ LANG-693
+
+## Fixed Version
+
+```text
+Lang-3f
+```
+
+เป็น Version ที่ Bug ได้รับการแก้ไขแล้ว
+
+หลักการตรวจ Fault Detection คือ Test Case จะถือว่าสามารถตรวจพบ Bug ได้เมื่อ
+
+```text
+Buggy Version  -> Test FAIL
+Fixed Version  -> Test PASS
+```
+
+รูปแบบนี้ช่วยตรวจสอบว่า Test Case สามารถตรวจพบพฤติกรรมที่แตกต่างระหว่าง Buggy และ Fixed Version ได้หรือไม่
+
+---
+
+# 9. Method Under Test
+
+Method ที่ใช้ในการทดลองคือ
+
+```java
+NumberUtils.createNumber(String)
+```
+
+Method นี้อยู่ใน Class
+
+```text
+org.apache.commons.lang3.math.NumberUtils
+```
+
+Method `createNumber(String)` ทำหน้าที่แปลง String ที่เป็นตัวแทนของตัวเลขให้เป็นชนิด `Number` ที่เหมาะสม เช่น
+
+- Integer
+- Long
+- BigInteger
+- Float
+- Double
+- BigDecimal
+
+และมีการจัดการ Input หลายรูปแบบ เช่น
+
+- Null
+- Blank String
+- Integer
+- Floating Point
+- Exponent
+- Hexadecimal
+- Long suffix
+- Float suffix
+- Double suffix
+- Invalid Input
+
+ดังนั้น Method นี้จึงมีหลาย Branch และ Condition ซึ่งเหมาะสำหรับนำมาใช้ในการทดลอง Automatic Test Case Generation
+
+---
+
+# 10. Metrics ที่ใช้ในการประเมินผล
+
+โครงงานใช้ Metrics หลักในการเปรียบเทียบผลลัพธ์ของแต่ละวิธี ดังนี้
+
+## 10.1 Test Coverage
+
+ใช้ตรวจสอบว่าชุด Test Case สามารถเข้าถึงส่วนต่าง ๆ ของ Program ได้มากน้อยเพียงใด
+
+---
+
+## 10.2 Code Coverage Ratio
+
+ใช้วัดสัดส่วนของ Code ที่ถูก Execute โดย Test Case
+
+ในการทดลองมีการเก็บข้อมูล เช่น
+
+- Line Coverage
+- Condition Coverage
+
+โดยรายงานทั้งจำนวนที่ Covered และจำนวนทั้งหมด
+
+ตัวอย่าง
+
+```text
+Line Coverage = Lines Covered / Lines Total × 100
+```
+
+---
+
+## 10.3 Fault Detection Rate
+
+ใช้วัดความสามารถของ Test Suite ในการตรวจพบ Bug ที่กำหนด
+
+สำหรับการทดลองที่มี Bug จำนวน 1 ตัว
+
+```text
+Fault Detection Rate =
+Number of detected faults / Total faults × 100
+```
+
+หาก Test Suite ทำให้ Buggy Version FAIL และ Fixed Version PASS จะถือว่าสามารถตรวจพบ Fault ได้
+
+---
+
+## 10.4 Number of Test Cases
+
+ใช้วัดจำนวน Test Case ที่ถูกสร้างขึ้นโดยแต่ละวิธี
+
+ผลการทดลองปัจจุบัน
+
+```text
+ChatGPT = 26 Test Cases
+Gemini = 15 Test Cases
+SA = 12 Test Cases
+```
+
+---
+
+## 10.5 Generation Time
+
+เวลาที่ใช้ในการสร้าง Test Case หรือ Test Suite โดยแต่ละวิธี
+
+สำหรับ Algorithm จะวัดเวลาที่ใช้ในการทำงานของ Generator
+
+---
+
+## 10.6 Execution Time
+
+เวลาที่ใช้ในการ Compile และ Execute Generated Test Suite กับ Defects4J Project
+
+สำหรับการทดลอง SA ใช้ค่า `real` จาก Command Line เป็น Elapsed Execution Time
+
+---
+
+# 11. AI Prompt Design
+
+เพื่อให้การเปรียบเทียบระหว่าง ChatGPT และ Gemini มีความเป็นธรรม จึงออกแบบ Prompt ให้มีโครงสร้างและข้อมูลหลักเหมือนกัน
+
+Prompt ประกอบด้วยข้อมูลสำคัญ ได้แก่
+
+1. Project Information
+2. Defects4J Bug Information
+3. Class Information
+4. Method Under Test
+5. Source Code
+6. Testing Requirements
+7. Input Domain
+8. Boundary Cases
+9. Invalid Cases
+10. Special Cases
+11. Precision Cases
+12. Bug-oriented Test Cases
+13. JUnit Requirements
+
+AI ถูกกำหนดให้
+
+- วิเคราะห์ Source Code ก่อน
+- ระบุ Branch ที่สำคัญ
+- วิเคราะห์ Input Domain
+- ออกแบบ Normal Cases
+- ออกแบบ Boundary Cases
+- ออกแบบ Invalid Cases
+- ออกแบบ Special Cases
+- ให้ความสำคัญกับ LANG-693
+- ไม่แก้ไข Source Code
+- ไม่สร้าง API ที่ไม่มีอยู่จริง
+- ไม่อ้างพฤติกรรมของ Method โดยไม่มีหลักฐาน
+- แยกสิ่งที่วิเคราะห์จากผลการทดลองจริง
+- ไม่ใช้ Original Defects4J Trigger Test โดยตรงเป็น Test Case ที่สร้างขึ้นใหม่
+
+---
+
+# 12. AI-Generated Test Cases
+
+## 12.1 ChatGPT
+
+ChatGPT ใช้ Source Code และ Prompt ที่กำหนดเพื่อวิเคราะห์ Method และสร้าง JUnit Test Case
+
+จำนวน Test Case ที่สร้างได้คือ
+
+```text
+26 Test Cases
+```
+
+Test Cases ครอบคลุม Input หลายประเภท เช่น
+
+- Null
+- Blank
+- Integer
+- Long
+- BigInteger
+- Hexadecimal
+- Floating Point
+- Exponent
+- Float Suffix
+- Double Suffix
+- Long Suffix
+- Invalid Input
+- Precision-related Input
+- Overflow
+- Underflow
+
+---
+
+## 12.2 Gemini
+
+Gemini ใช้ข้อมูล Project, Bug, Class และ Method เดียวกับ ChatGPT และใช้ Prompt ที่มีวัตถุประสงค์เดียวกัน
+
+จำนวน Test Case ที่สร้างได้คือ
+
+```text
+15 Test Cases
+```
+
+Test Cases ครอบคลุม Input หลายประเภท เช่น
+
+- Null
+- Blank
+- Integer
+- Long
+- BigInteger
+- Hexadecimal
+- Float
+- Double
+- Exponent
+- Overflow
+- Underflow
+- Invalid Suffix
+- Precision-related Input
+
+---
+
+# 13. ผลการทดลอง ChatGPT
+
+## 13.1 Buggy Version - Lang-3b
+
+ChatGPT Generated Test Suite:
+
+```text
+Tests run: 26
+Failures: 3
+```
+
+Test ที่ Fail ได้แก่
+
+```text
+testFloatingPointPrecisionDecimal
+testFloatingPointPrecisionNearFloatMaximum
+testFloatingPointPrecisionLargeDecimal
+```
+
+Coverage:
+
+```text
+Lines Total        = 373
+Lines Covered      = 119
+Line Coverage      = 31.9%
+
+Conditions Total   = 334
+Conditions Covered = 80
+Condition Coverage = 24.0%
+```
+
+---
+
+## 13.2 Fixed Version - Lang-3f
+
+```text
+Tests run: 26
+Failures: 1
+```
+
+เหลือ Failure ใน
+
+```text
+testFloatingPointPrecisionLargeDecimal
+```
+
+Coverage:
+
+```text
+Lines Total        = 375
+Lines Covered      = 121
+Line Coverage      = 32.3%
+
+Conditions Total   = 338
+Conditions Covered = 82
+Condition Coverage = 24.3%
+```
+
+ผลลัพธ์ของ ChatGPT จึงต้องพิจารณาจากการ Execute จริงทั้ง Buggy และ Fixed Version ไม่ควรสรุปจากการวิเคราะห์ Source Code เพียงอย่างเดียว
+
+---
+
+# 14. ผลการทดลอง Gemini
+
+## 14.1 Buggy Version - Lang-3b
+
+```text
+Tests run: 15
+Failures: 3
+```
+
+Failures ประกอบด้วย
+
+```text
+testCreateNumber_HexadecimalLong
+testCreateNumberPrecisionLoss_LANG_693_Double
+testCreateNumberPrecisionLoss_LANG_693_BigDecimal
+```
+
+Coverage:
+
+```text
+Lines Total        = 373
+Lines Covered      = 110
+Line Coverage      = 29.5%
+
+Conditions Total   = 334
+Conditions Covered = 71
+Condition Coverage = 21.3%
+```
+
+---
+
+## 14.2 Fixed Version - Lang-3f
+
+```text
+Tests run: 15
+Failures: 1
+```
+
+Failure ที่เหลือคือ
+
+```text
+testCreateNumber_HexadecimalLong
+```
+
+Coverage:
+
+```text
+Lines Total        = 375
+Lines Covered      = 112
+Line Coverage      = 29.9%
+
+Conditions Total   = 338
+Conditions Covered = 75
+Condition Coverage = 22.2%
+```
+
+Test Case ที่เกี่ยวข้องกับ LANG-693 ทั้งสองกรณี Fail ใน Buggy Version และ Pass ใน Fixed Version จึงแสดงให้เห็นว่า Test Case เหล่านี้สามารถตรวจพบความแตกต่างของ Bug ที่กำหนดได้
+
+ส่วน `testCreateNumber_HexadecimalLong` พบ Failure ทั้งใน Buggy และ Fixed Version จึงไม่ถือว่าเป็นการตรวจพบ LANG-693
+
+---
+
+# 15. Simulated Annealing (SA)
+
+Simulated Annealing ถูกพัฒนาขึ้นเพื่อเลือก Test Input จาก Candidate Pool และสร้าง Test Suite สำหรับนำไป Execute กับ Defects4J Project
+
+## Configuration
+
+| Parameter | Value |
+|---|---:|
+| Random Seed | `20260923` |
+| Candidate Pool | `36` |
+| Suite Size | `12` |
+| Iterations | `5,000` |
+| Initial Temperature | `10.0` |
+| Cooling Rate | `0.995` |
+
+Generation Time:
+
+```text
+0.015136833 seconds
+```
+
+Generated Test Suite:
+
+```text
+ai-tests/sa/suite/org/apache/commons/lang3/math/NumberUtilsCreateNumberSATest.java
+```
+
+---
+
+## 15.1 SA Selected Test Inputs
+
+Test Input ที่ SA เลือก ได้แก่
+
+| # | Test Input |
+|---:|---|
+| 1 | `<NULL>` |
+| 2 | `0` |
+| 3 | `9223372036854775808` |
+| 4 | `0x0` |
+| 5 | `0x1000000000000000` |
+| 6 | `1e-500` |
+| 7 | `1.79769313486231585e+308` |
+| 8 | `1.5F` |
+| 9 | `1.5D` |
+| 10 | `1.2L` |
+| 11 | `1.2Q` |
+| 12 | `-` |
+
+รวมทั้งหมด **12 Test Cases**
+
+---
+
+# 16. ผลการทดลอง Simulated Annealing
+
+## 16.1 Buggy Version - Lang-3b
+
+Generated Test Suite:
+
+```text
+Tests run: 12
+Failures: 0
+```
+
+Coverage:
+
+```text
+Lines Total        = 373
+Lines Covered      = 107
+Line Coverage      = 28.7%
+
+Conditions Total   = 334
+Conditions Covered = 68
+Condition Coverage = 20.4%
+```
+
+Fault Detection:
+
+```text
+Fault Detected       = No
+Fault Detection Rate = 0%
+```
+
+Execution Time:
+
+```text
+real = 3.28 seconds
+```
+
+---
+
+## 16.2 Fixed Version - Lang-3f
+
+Generated Test Suite:
+
+```text
+Tests run: 12
+Failures: 0
+```
+
+Coverage:
+
+```text
+Lines Total        = 375
+Lines Covered      = 109
+Line Coverage      = 29.1%
+
+Conditions Total   = 338
+Conditions Covered = 70
+Condition Coverage = 20.7%
+```
+
+Fault Detection:
+
+```text
+Fault Detected = No
+```
+
+Execution Time:
+
+```text
+real = 3.19 seconds
+```
+
+ดังนั้นสำหรับการทดลอง Lang-3 ที่มี Fault จำนวน 1 ตัว
+
+```text
+Fault Detection Rate = 0%
+```
+
+---
+
+# 17. Binary Particle Swarm Optimization (BPSO)
+
+BPSO เป็นอัลกอริทึมอีกตัวที่กลุ่มเลือกใช้สร้างชุดทดสอบ โดยใช้ตัวแทนคำตอบแบบไบนารี
+
+แนวคิดของ BPSO คือให้แต่ละ Particle แทนการเลือกชุด Candidate Test Inputs ด้วยบิต 0/1 แล้วค้นหาชุดที่ได้คะแนนเหมาะสมตามฟังก์ชันประเมิน ทั้งนี้การตั้งค่าและโค้ดจริงต้องบันทึกก่อนนำไปสรุปผลทดลอง
+
+สำหรับโครงงานนี้ BPSO จะถูกนำมาใช้ค้นหา Test Suite จาก Candidate Test Inputs เช่นเดียวกับ SA เพื่อให้สามารถเปรียบเทียบ Algorithm ทั้งสองภายใต้เงื่อนไขที่ใกล้เคียงกัน
+
+> **สถานะปัจจุบัน: BPSO อยู่ในขั้นตอนการพัฒนาและทดลอง**
+
+ยังไม่มีผลการทดลอง Coverage, Fault Detection และ Execution Time ของ BPSO ที่บันทึกเป็นผลการทดลองอย่างเป็นทางการใน Repository
+
+---
+
+# 18. เปรียบเทียบ Coverage เบื้องต้น
+
+| Method | Version | Test Cases | Line Coverage | Condition Coverage |
+|---|---|---:|---:|---:|
+| ChatGPT | Lang-3b | 26 | 31.9% | 24.0% |
+| ChatGPT | Lang-3f | 26 | 32.3% | 24.3% |
+| Gemini | Lang-3b | 15 | 29.5% | 21.3% |
+| Gemini | Lang-3f | 15 | 29.9% | 22.2% |
+| SA | Lang-3b | 12 | 28.7% | 20.4% |
+| SA | Lang-3f | 12 | 29.1% | 20.7% |
+
+> **หมายเหตุ:** ตัวเลขเป็นผลจากการทดลองกับ Lang-3 และ Method `NumberUtils.createNumber(String)` เท่านั้น ไม่ควรนำไปสรุปเป็นประสิทธิภาพทั่วไปของแต่ละวิธีในทุก Software Project
+
+---
+
+# 19. เปรียบเทียบ Fault Detection
+
+สำหรับ Fault **Lang-3 / LANG-693**
+
+| Method | Buggy Version | Fixed Version | ผลการตรวจพบ Fault |
+|---|---|---|---|
+| ChatGPT | 3 Failures | 1 Failure | ต้องพิจารณา Test Case ที่แยก Buggy/Fixed ได้ |
+| Gemini | LANG-693 Tests Fail | LANG-693 Tests Pass | ตรวจพบ LANG-693 |
+| SA | Tests Pass | Tests Pass | ไม่ตรวจพบ Lang-3 |
+
+สำหรับ Gemini มี Test Case ที่สามารถแยกความแตกต่างระหว่าง Buggy และ Fixed Version ได้ โดย Test Case ที่เกี่ยวข้องกับ LANG-693 จะ Fail ใน Buggy Version และ Pass ใน Fixed Version
+
+ส่วน SA Generated Test Suite ไม่มี Failure ทั้งใน Buggy และ Fixed Version ดังนั้นไม่สามารถตรวจพบ Fault ในการทดลองนี้
+
+---
+
+# 20. Reproducibility
+
+เพื่อให้สามารถทำซ้ำการทดลองได้ Repository จัดเก็บข้อมูลสำคัญ ได้แก่
+
+- Source Code ของ Algorithm
+- Generated Test Suite
+- Test Execution Results
+- Coverage Results
+- Fault Detection Results
+- Generation Configuration
+- Random Seed
+- Generation Time
+- Execution Time
+- Summary Results
+
+สำหรับ SA ใช้ Seed
+
+```text
+20260923
+```
+
+เพื่อให้สามารถทำซ้ำการทดลองด้วย Random Sequence เดิมได้
+
+---
+
+# 21. ขั้นตอนการทดลองโดยรวม
+
+```text
+Select Project
+      │
+      ▼
+Select Defects4J Bug
+      │
+      ▼
+Select Method Under Test
+      │
+      ▼
+Prepare Buggy and Fixed Versions
+      │
+      ▼
+Generate Test Cases
+      │
+      ├──────────────────┐
+      │                  │
+      ▼                  ▼
+  AI Methods         Algorithms
+      │                  │
+ ChatGPT/Gemini       SA/BPSO
+      │                  │
+      └────────┬─────────┘
+               ▼
+       Compile Test Cases
+               │
+               ▼
+       Execute Test Cases
+               │
+               ▼
+        Measure Coverage
+               │
+               ▼
+       Check Fault Detection
+               │
+               ▼
+       Record Execution Time
+               │
+               ▼
+        Compare Results
+```
+
+---
+
+# 22. การตรวจสอบความถูกต้องของ Test Case
+
+Generated Test Case ทุกชุดจะผ่านขั้นตอนการตรวจสอบดังนี้
+
+### ขั้นที่ 1: Compile
+
+ตรวจสอบว่า Test Case สามารถ Compile กับ Project จริงได้หรือไม่
+
+### ขั้นที่ 2: Execute
+
+นำ Test Case ไป Execute กับ Buggy และ Fixed Version
+
+### ขั้นที่ 3: Coverage
+
+เก็บข้อมูล Code Coverage
+
+### ขั้นที่ 4: Fault Detection
+
+เปรียบเทียบผลลัพธ์ระหว่าง Buggy และ Fixed Version
+
+### ขั้นที่ 5: Record Results
+
+จัดเก็บผลลัพธ์ลงใน Repository
+
+---
+
+# 23. Git และ Version Control
+
+Git ถูกใช้สำหรับจัดเก็บ Source Code, Generated Test Cases, Configuration และ Experiment Results
+
+การใช้ Git ช่วยให้สามารถ
+
+- ตรวจสอบประวัติการเปลี่ยนแปลง
+- ติดตาม Source Code
+- ติดตาม Generated Test Cases
+- ติดตามผลการทดลอง
+- ย้อนกลับไปยัง Version ก่อนหน้าได้
+
+Commit ที่สำคัญของโครงงานจะครอบคลุมขั้นตอนต่าง ๆ เช่น
+
+- Initial project setup
+- Add AI-generated tests
+- Add coverage results
+- Add Simulated Annealing implementation
+- Add SA experiment results
+- Reorganize experiment results
+- Update README
+
+---
+
+# 24. ข้อจำกัดของการทดลอง
+
+การทดลองปัจจุบันมีข้อจำกัดดังต่อไปนี้
+
+1. ใช้ Defects4J เพียง Project และ Bug ที่เลือกไว้
+2. Method Under Test ที่ใช้ในการทดลองมีเพียง `NumberUtils.createNumber(String)`
+3. จำนวน Test Case ของแต่ละวิธีไม่เท่ากัน
+4. AI-generated Test Cases อาจมี Test Case ที่ไม่สามารถตรวจพบ Fault ได้
+5. Algorithm-based Test Generation ใช้ Candidate Pool ที่กำหนดไว้
+6. Coverage ที่ได้ขึ้นอยู่กับ Test Case และ Configuration ของแต่ละวิธี
+7. ผลการทดลองจาก Bug เดียวไม่สามารถใช้แทนประสิทธิภาพของทุก Software Project ได้
+8. BPSO ยังอยู่ในขั้นตอนการพัฒนาและทดลอง
+
+---
+
+# 25. สถานะการดำเนินงาน
+
+## Completed
+
+- [x] เลือก Project จาก Defects4J
+- [x] เลือก Bug Lang-3
+- [x] เตรียม Buggy Version
+- [x] เตรียม Fixed Version
+- [x] Compile Project
+- [x] Execute Original Test Suite
+- [x] ออกแบบ Prompt สำหรับ AI
+- [x] Generate Test Cases ด้วย ChatGPT
+- [x] Generate Test Cases ด้วย Gemini
+- [x] Execute ChatGPT Test Suite
+- [x] Execute Gemini Test Suite
+- [x] เก็บ Coverage ของ ChatGPT
+- [x] เก็บ Coverage ของ Gemini
+- [x] พัฒนา Simulated Annealing
+- [x] Generate Test Suite ด้วย SA
+- [x] Execute SA Test Suite
+- [x] เก็บ Coverage ของ SA
+- [x] ตรวจสอบ Fault Detection ของ SA
+- [x] เก็บ Generation Time ของ SA
+- [x] เก็บ Execution Time ของ SA
+- [x] จัดเก็บผลการทดลองใน Repository
+- [x] จัดทำ README
+
+## In Progress
+
+- [ ] พัฒนา Binary Particle Swarm Optimization
+- [ ] Generate Test Suite ด้วย BPSO
+- [ ] Execute BPSO Test Suite
+- [ ] เก็บ Coverage ของ BPSO
+- [ ] ตรวจสอบ Fault Detection ของ BPSO
+- [ ] เก็บ Generation Time ของ BPSO
+- [ ] เก็บ Execution Time ของ BPSO
+- [ ] เปรียบเทียบผลการทดลองทั้ง 4 วิธี
+- [ ] จัดทำ Final Comparison
+- [ ] จัดทำรายงานผลการทดลองฉบับสมบูรณ์

@@ -1,0 +1,3 @@
+package org.jfree.chart.axis.junit;
+import java.awt.Graphics2D; import java.awt.geom.Rectangle2D; import java.awt.image.BufferedImage; import junit.framework.TestCase; import org.jfree.chart.axis.NumberAxis; import org.jfree.chart.plot.PlotRenderingInfo; import org.jfree.ui.RectangleEdge;
+public class Chart26GeneratedTest extends TestCase { public void testAxisDrawAllowsPlotInfoWithoutOwner() { BufferedImage image=new BufferedImage(200,100,BufferedImage.TYPE_INT_ARGB); Graphics2D g=image.createGraphics(); try { NumberAxis axis=new NumberAxis("Axis"); Rectangle2D area=new Rectangle2D.Double(0,0,200,100); axis.draw(g,90.0,area,area,RectangleEdge.BOTTOM,new PlotRenderingInfo(null)); } finally { g.dispose(); } } }

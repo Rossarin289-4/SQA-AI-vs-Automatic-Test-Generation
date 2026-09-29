@@ -1,0 +1,3 @@
+package org.jfree.chart.renderer.category.junit;
+import java.awt.BasicStroke; import java.awt.Color; import junit.framework.TestCase; import org.jfree.chart.renderer.category.MinMaxCategoryRenderer;
+public class Chart23GeneratedTest extends TestCase { public void testEqualityIncludesRendererConfiguration() { MinMaxCategoryRenderer a=new MinMaxCategoryRenderer(),b=new MinMaxCategoryRenderer(); assertTrue(a.equals(b)); a.setDrawLines(true); assertFalse(a.equals(b)); b.setDrawLines(true); assertTrue(a.equals(b)); a.setGroupPaint(Color.red); assertFalse(a.equals(b)); b.setGroupPaint(Color.red); a.setGroupStroke(new BasicStroke(1.2f)); assertFalse(a.equals(b)); } }

@@ -1,11 +1,18 @@
-# Chart-1 BPSO pilot
+# Chart-1 BPSO candidates
 
-`chart-1-candidates.csv` contains **one original Defects4J trigger test** solely to check the selection pipeline. It is not a BPSO-generated test and cannot support a comparative outcome. Add independently prepared JUnit candidate methods and labels before the research run. The `labels` column is a semicolon-separated surrogate for selecting diverse test scenarios; it is not measured coverage.
+`chart-1-candidates.csv` maps independently prepared test methods to scenario
+labels. The labels are a surrogate objective that lets BPSO prefer a diverse,
+small selection; they must never be reported as coverage.
 
-Run from the repository root:
+The IDs in the CSV must exactly match the public `test*` methods in
+`Test/Chart-1/org/jfree/chart/renderer/category/junit/Chart1BPSOCandidateTest.java`.
+The runner validates that relationship before it starts.
+
+Run the two reproducible rounds from the repository root:
 
 ```bash
-python3 Chart/BPSO/Code/select_tests.py --candidates Chart/BPSO/Configuration/chart-1-candidates.csv --output Chart/BPSO/Result_Round1/Chart-1/selection.json
+python3 scripts/run_chart_bpso.py --rounds 2
 ```
 
-Repeat with `--seed 20260929` and `--output Chart/BPSO/Result_Round2/Chart-1/selection.json`. Record actual Defects4J buggy/fixed executions separately; never use this pilot selection as a fault detection or coverage result.
+The runner stores the actual Defects4J buggy/fixed execution, coverage, and
+timing logs in `Result_Round<N>/Chart-1/`.

@@ -1,0 +1,3 @@
+package org.jfree.chart.renderer.category.junit;
+import junit.framework.TestCase; import org.jfree.chart.JFreeChart; import org.jfree.chart.axis.CategoryAxis; import org.jfree.chart.axis.NumberAxis; import org.jfree.chart.plot.CategoryPlot; import org.jfree.data.statistics.DefaultStatisticalCategoryDataset; import org.jfree.chart.renderer.category.StatisticalBarRenderer;
+public class Chart25GeneratedTest extends TestCase { public void testVerticalDrawAllowsNullMeanAndDeviation() { DefaultStatisticalCategoryDataset d=new DefaultStatisticalCategoryDataset(); d.add(1.0,2.0,"S","C1"); d.add(null,4.0,"S","C2"); CategoryPlot p=new CategoryPlot(d,new CategoryAxis("C"),new NumberAxis("V"),new StatisticalBarRenderer()); new JFreeChart(p).createBufferedImage(300,200,null); } }
