@@ -3,7 +3,7 @@
 | ผู้รับผิดชอบ | Dataset Project | Project Name | Active Bugs | Bug IDs | สถานะ |
 |---|---|---|---:|---|---|
 | **สโรชา เสาทอง** | **Chart** | jfreechart | **26** | Chart-1 ถึง Chart-26 | ✅ **เสร็จแล้ว** |
-| **สโรชา**| Cli | commons-cli | 39 | 1-5, 7-40 | ดำเนินการ |
+| **สโรชา**| Cli | commons-cli | 39 | 1-5, 7-40 | ✅ **เสร็จแล้ว** |
 | - | Closure | closure-compiler | 174 | 1-62, 64-92, 94-176 | ⏳ ยังไม่ดำเนินการ |
 | - | Codec | commons-codec | 18 | 1-18 | ⏳ ยังไม่ดำเนินการ |
 | - | Collections | commons-collections | 28 | 1-28 | ⏳ ยังไม่ดำเนินการ |
