@@ -37,5 +37,10 @@ public final class Chart2GeneratedTest extends TestCase {
         range = DatasetUtilities.iterateRangeBounds(dataset);
         assertEquals(1.5, range.getLowerBound(), EPSILON);
         assertEquals(2.5, range.getUpperBound(), EPSILON);
+
+        series.add(1.0, Double.NaN, 0.5, Double.NaN, 3.5, Double.NaN);
+        range = DatasetUtilities.iterateRangeBounds(dataset);
+        assertEquals(1.5, range.getLowerBound(), EPSILON);
+        assertEquals(3.5, range.getUpperBound(), EPSILON);
     }
 }

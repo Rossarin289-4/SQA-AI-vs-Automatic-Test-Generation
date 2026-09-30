@@ -1,7 +1,9 @@
 package org.jfree.chart.util.junit;
 import java.awt.geom.GeneralPath;
+
+import org.jfree.util.ShapeUtilities;
+
 import junit.framework.TestCase;
-import org.jfree.chart.util.ShapeUtilities;
 public class Chart11GeneratedTest extends TestCase {
     public void testEquivalentGeneralPathsAreEqual() {
         GeneralPath a = new GeneralPath(); a.moveTo(1, 1); a.lineTo(2, 2);

@@ -1,29 +1,64 @@
-# สรุปผล SA — Round 1
+# SA Results — Round 3 & Round 4
 
-จากการทดลอง Simulated Annealing (SA) กับ Defects4J Chart จำนวนทั้งหมด **26 Bugs**
+การทดลองใช้ **Simulated Annealing (SA)** เพื่อคัดเลือก Test Case สำหรับทดสอบ Defects4J Chart จำนวน 26 Bug IDs
 
-เมื่อนับในระดับ Bug ID พบว่าสามารถตรวจจับได้ **21 จาก 26 Bugs**
+เกณฑ์การตรวจพบข้อบกพร่อง:
 
-- **Detected Bugs:** 21 Bugs
-- **Total Bugs:** 26 Bugs
-- **Fault Detection Rate (FDR): 21 / 26 = 80.77%**
-- Chart-6 ถึง Chart-9 มีผล `PASS/PASS` จึงไม่สามารถตรวจจับ Fault ได้
-- Chart-17 มีผล `FAIL/FAIL` คือ Test ล้มเหลวทั้ง Buggy และ Fixed Version จึงไม่ถือว่าสามารถตรวจจับ Fault ได้
+> **Buggy = FAIL และ Fixed = PASS → Fault Detected**
 
-## ตารางสรุป
+---
 
-| Round | Detected Bugs | Total Bugs | FDR |
-|---|---:|---:|---:|
-| Round 1 | 21 | 26 | 80.77% |
+## Round 3
 
-**สรุป:** SA ใน Round 1 สามารถตรวจจับข้อบกพร่องได้ **21 จาก 26 Bugs** คิดเป็น **Fault Detection Rate 80.77%**
+- Result: `results-20260929-125951`
+- Selected Scenarios: **26**
+- Detected Faults: **21 / 26**
+- Fault Detection Rate: **80.77%**
 
-## ค่าเฉลี่ย
+### Bugs ที่ตรวจไม่พบ
 
-ขณะนี้มีผลการทดลอง SA ที่รันสำเร็จครบ Chart-1 ถึง Chart-26 จำนวน **1 รอบ** ดังนั้นยังไม่คำนวณค่าเฉลี่ย Round 1–2 จนกว่าจะมีผล Round 2
+- Chart-6 → PASS / PASS
+- Chart-7 → PASS / PASS
+- Chart-8 → PASS / PASS
+- Chart-9 → PASS / PASS
+- Chart-17 → FAIL / FAIL
 
-หลังจากรัน Round 2 แล้วจะคำนวณด้วย:
+ดังนั้น Round 3 ตรวจพบข้อบกพร่องทั้งหมด **21 จาก 26 Bugs**
 
-**Average Detected Bugs = (Round 1 + Round 2) / 2**
+---
 
-**Average FDR = (Round 1 FDR + Round 2 FDR) / 2**
+## Round 4
+
+- Result: `results-20260929-131025`
+- Selected Scenarios: **26**
+- Detected Faults: **21 / 26**
+- Fault Detection Rate: **80.77%**
+
+### Bugs ที่ตรวจไม่พบ
+
+- Chart-6 → PASS / PASS
+- Chart-7 → PASS / PASS
+- Chart-8 → PASS / PASS
+- Chart-9 → PASS / PASS
+- Chart-17 → FAIL / FAIL
+
+ดังนั้น Round 4 ตรวจพบข้อบกพร่องทั้งหมด **21 จาก 26 Bugs**
+
+---
+
+## สรุปผล
+
+| Round | Selected Scenarios | Detected Faults | Total Bugs | Detection Rate |
+|------:|-------------------:|----------------:|-----------:|---------------:|
+| 3 | 26 | 21 | 26 | **80.77%** |
+| 4 | 26 | 21 | 26 | **80.77%** |
+
+### ค่าเฉลี่ย Round 3–4
+
+- Average Selected Scenarios: **26**
+- Average Detected Faults: **21**
+- Average Fault Detection Rate: **80.77%**
+
+ทั้ง Round 3 และ Round 4 ให้ผลการตรวจจับข้อบกพร่องเท่ากัน โดยตรวจพบ **21 จาก 26 Bugs (80.77%)**
+
+แม้ผลการตรวจจับจะเท่ากัน แต่ Execution Time ของแต่ละ Test Case มีความแตกต่างกันในแต่ละรอบ

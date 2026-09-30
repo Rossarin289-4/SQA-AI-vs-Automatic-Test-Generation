@@ -1,12 +1,16 @@
 package org.jfree.chart.block.junit;
 import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
-import junit.framework.TestCase;
+
 import org.jfree.chart.block.BlockContainer;
 import org.jfree.chart.block.BorderArrangement;
 import org.jfree.chart.block.EmptyBlock;
 import org.jfree.chart.block.RectangleConstraint;
-import org.jfree.chart.util.RectangleEdge;
+import org.jfree.ui.RectangleEdge;
+
+import junit.framework.TestCase;
+//import org.jfree.chart.util.RectangleEdge;
+
 public class Chart13GeneratedTest extends TestCase {
     public void testSizingWithTooSmallWidthDoesNotCreateInvalidRange() {
         BlockContainer container = new BlockContainer(new BorderArrangement());

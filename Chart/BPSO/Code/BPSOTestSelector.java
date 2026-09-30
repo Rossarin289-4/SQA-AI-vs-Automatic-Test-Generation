@@ -3,141 +3,503 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.HashSet;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Random;
-import java.util.Set;
 
-/** Selects candidate JUnit tests with binary particle swarm optimization. */
+/**
+ * BPSO selector for measured Defects4J developer tests.
+ *
+ * Input:
+ * test_id,test_target,line_pct,condition_pct,execution_ms,status
+ *
+ * Fitness:
+ *   45% Line Coverage
+ * + 45% Condition Coverage
+ * + 10% Execution-time efficiency
+ *
+ * The particle always contains exactly suiteSize selected tests.
+ */
 public class BPSOTestSelector {
-    private static final double INERTIA = 0.7;
-    private static final double COGNITIVE = 1.4;
-    private static final double SOCIAL = 1.4;
+
+    private static final double INERTIA = 0.729;
+    private static final double COGNITIVE = 1.49445;
+    private static final double SOCIAL = 1.49445;
 
     private static final class Candidate {
         final String id;
-        final Set<String> labels;
+        final String target;
+        final double line;
+        final double condition;
+        final long executionMs;
 
-        Candidate(String id, String labels) {
+        Candidate(
+                String id,
+                String target,
+                double line,
+                double condition,
+                long executionMs) {
+
             this.id = id;
-            this.labels = new HashSet<>();
-            for (String label : labels.split(";")) {
-                if (!label.trim().isEmpty()) this.labels.add(label.trim());
-            }
+            this.target = target;
+            this.line = line;
+            this.condition = condition;
+            this.executionMs = executionMs;
         }
     }
 
-    private static List<Candidate> readCandidates(Path file) throws IOException {
-        List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
-        if (lines.isEmpty() || !lines.get(0).trim().equals("test_id,labels")) {
-            throw new IllegalArgumentException("CSV header must be test_id,labels");
+    private static List<Candidate> readCandidates(Path file)
+            throws IOException {
+
+        List<String> lines =
+                Files.readAllLines(file, StandardCharsets.UTF_8);
+
+        if (lines.isEmpty()) {
+            throw new IllegalArgumentException("Empty CSV: " + file);
         }
-        List<Candidate> candidates = new ArrayList<>();
-        Set<String> seen = new HashSet<>();
+
+        List<Candidate> result = new ArrayList<>();
+
         for (int i = 1; i < lines.size(); i++) {
-            if (lines.get(i).isBlank()) continue;
-            String[] fields = lines.get(i).split(",", -1);
-            if (fields.length != 2 || fields[0].trim().isEmpty()
-                    || !seen.add(fields[0].trim())) {
-                throw new IllegalArgumentException("Invalid or duplicate candidate at line " + (i + 1));
+
+            String line = lines.get(i).trim();
+
+            if (line.isEmpty()) {
+                continue;
             }
-            candidates.add(new Candidate(fields[0].trim(), fields[1]));
+
+            String[] f = line.split(",", -1);
+
+            if (f.length < 6) {
+                throw new IllegalArgumentException(
+                        "Invalid CSV line " + (i + 1) + ": " + line);
+            }
+
+            if (!"OK".equalsIgnoreCase(f[5].trim())) {
+                continue;
+            }
+
+            result.add(
+                    new Candidate(
+                            f[0].trim(),
+                            f[1].trim(),
+                            Double.parseDouble(f[2].trim()),
+                            Double.parseDouble(f[3].trim()),
+                            Long.parseLong(f[4].trim())
+                    )
+            );
         }
-        if (candidates.isEmpty()) throw new IllegalArgumentException("No candidates in " + file);
-        return candidates;
+
+        if (result.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "No usable candidates in " + file);
+        }
+
+        return result;
     }
 
-    private static double fitness(boolean[] bits, List<Candidate> candidates, double penalty) {
-        Set<String> labels = new HashSet<>();
-        int selected = 0;
-        for (int j = 0; j < bits.length; j++) {
-            if (bits[j]) {
-                selected++;
-                labels.addAll(candidates.get(j).labels);
+    /**
+     * Fitness of a selected suite.
+     *
+     * Coverage values are normalized from 0..100 to 0..1.
+     * Runtime is normalized relative to the slowest candidate.
+     */
+    private static double fitness(
+            boolean[] bits,
+            List<Candidate> candidates,
+            long maxExecutionMs) {
+
+        double line = 0.0;
+        double condition = 0.0;
+        long execution = 0;
+
+        for (int i = 0; i < bits.length; i++) {
+            if (bits[i]) {
+                Candidate c = candidates.get(i);
+
+                /*
+                 * Candidate-level surrogate.
+                 * Sum individual measured coverage values.
+                 */
+                line += c.line;
+                condition += c.condition;
+                execution += c.executionMs;
             }
         }
-        return labels.size() - penalty * selected;
+
+        double lineScore = line / 100.0;
+        double conditionScore = condition / 100.0;
+
+        double worstSuiteTime =
+                (double) maxExecutionMs * countSelected(bits);
+
+        double timeScore = worstSuiteTime <= 0
+                ? 0
+                : Math.max(
+                        0,
+                        1.0 - (execution / worstSuiteTime)
+                );
+
+        return (0.45 * lineScore)
+                + (0.45 * conditionScore)
+                + (0.10 * timeScore);
     }
 
-    private static String jsonString(String value) {
-        return "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"")
-                .replace("\n", "\\n").replace("\r", "\\r") + "\"";
+    private static int countSelected(boolean[] bits) {
+        int count = 0;
+
+        for (boolean b : bits) {
+            if (b) {
+                count++;
+            }
+        }
+
+        return count;
     }
 
-    public static void main(String[] args) throws IOException {
-        if (args.length < 2 || args.length > 5) {
-            System.err.println("Usage: java BPSOTestSelector <candidates.csv> <output.json>"
-                    + " [seed=20260928] [particles=30] [iterations=200]");
+    /**
+     * Repair particle so exactly suiteSize tests are selected.
+     */
+    private static void repair(
+            boolean[] bits,
+            double[] velocities,
+            int suiteSize) {
+
+        List<Integer> indexes = new ArrayList<>();
+
+        for (int i = 0; i < bits.length; i++) {
+            indexes.add(i);
+        }
+
+        int selected = countSelected(bits);
+
+        if (selected > suiteSize) {
+
+            indexes.sort(
+                    Comparator.comparingDouble(i -> velocities[i])
+            );
+
+            for (int index : indexes) {
+
+                if (selected <= suiteSize) {
+                    break;
+                }
+
+                if (bits[index]) {
+                    bits[index] = false;
+                    selected--;
+                }
+            }
+
+        } else if (selected < suiteSize) {
+
+            indexes.sort(
+                    (a, b) ->
+                            Double.compare(
+                                    velocities[b],
+                                    velocities[a])
+            );
+
+            for (int index : indexes) {
+
+                if (selected >= suiteSize) {
+                    break;
+                }
+
+                if (!bits[index]) {
+                    bits[index] = true;
+                    selected++;
+                }
+            }
+        }
+    }
+
+    private static boolean[] randomPosition(
+            int n,
+            int suiteSize,
+            Random random) {
+
+        boolean[] result = new boolean[n];
+
+        List<Integer> indexes = new ArrayList<>();
+
+        for (int i = 0; i < n; i++) {
+            indexes.add(i);
+        }
+
+        Collections.shuffle(indexes, random);
+
+        for (int i = 0; i < suiteSize; i++) {
+            result[indexes.get(i)] = true;
+        }
+
+        return result;
+    }
+
+    public static void main(String[] args)
+            throws IOException {
+
+        if (args.length < 2 || args.length > 6) {
+
+            System.err.println(
+                    "Usage: java BPSOTestSelector "
+                    + "<measured.csv> <selected.csv> "
+                    + "[suiteSize=3] [seed=20260929] "
+                    + "[particles=30] [iterations=200]"
+            );
+
             System.exit(2);
         }
+
         Path input = Path.of(args[0]);
         Path output = Path.of(args[1]);
-        long seed = args.length > 2 ? Long.parseLong(args[2]) : 20260928L;
-        int particles = args.length > 3 ? Integer.parseInt(args[3]) : 30;
-        int iterations = args.length > 4 ? Integer.parseInt(args[4]) : 200;
-        if (particles < 1 || iterations < 0) throw new IllegalArgumentException("Invalid BPSO settings");
-        long started = System.nanoTime();
-        List<Candidate> candidates = readCandidates(input);
-        int n = candidates.size();
-        Random random = new Random(seed);
-        boolean[][] positions = new boolean[particles][n];
-        boolean[][] personal = new boolean[particles][n];
-        double[][] velocities = new double[particles][n];
-        double[] personalScores = new double[particles];
-        boolean[] global = null;
-        double globalScore = Double.NEGATIVE_INFINITY;
-        double penalty = 0.25;
 
-        for (int i = 0; i < particles; i++) {
+        int suiteSize =
+                args.length > 2
+                        ? Integer.parseInt(args[2])
+                        : 3;
+
+        long seed =
+                args.length > 3
+                        ? Long.parseLong(args[3])
+                        : 20260929L;
+
+        int particles =
+                args.length > 4
+                        ? Integer.parseInt(args[4])
+                        : 30;
+
+        int iterations =
+                args.length > 5
+                        ? Integer.parseInt(args[5])
+                        : 200;
+
+        List<Candidate> candidates =
+                readCandidates(input);
+
+        if (suiteSize < 1 || suiteSize > candidates.size()) {
+            throw new IllegalArgumentException(
+                    "suiteSize must be between 1 and "
+                    + candidates.size());
+        }
+
+        long maxExecutionMs = 1;
+
+        for (Candidate c : candidates) {
+            maxExecutionMs =
+                    Math.max(maxExecutionMs, c.executionMs);
+        }
+
+        int n = candidates.size();
+
+        Random random = new Random(seed);
+
+        boolean[][] positions =
+                new boolean[particles][n];
+
+        boolean[][] personalBest =
+                new boolean[particles][n];
+
+        double[][] velocities =
+                new double[particles][n];
+
+        double[] personalScore =
+                new double[particles];
+
+        boolean[] globalBest = null;
+
+        double globalScore =
+                Double.NEGATIVE_INFINITY;
+
+        long start = System.nanoTime();
+
+        // Initialize swarm
+        for (int p = 0; p < particles; p++) {
+
+            positions[p] =
+                    randomPosition(n, suiteSize, random);
+
             for (int j = 0; j < n; j++) {
-                positions[i][j] = random.nextBoolean();
-                velocities[i][j] = random.nextDouble() * 2 - 1;
+                velocities[p][j] =
+                        random.nextDouble() * 2.0 - 1.0;
             }
-            personal[i] = positions[i].clone();
-            personalScores[i] = fitness(positions[i], candidates, penalty);
-            if (personalScores[i] > globalScore) {
-                globalScore = personalScores[i];
-                global = positions[i].clone();
+
+            personalBest[p] =
+                    positions[p].clone();
+
+            personalScore[p] =
+                    fitness(
+                            positions[p],
+                            candidates,
+                            maxExecutionMs);
+
+            if (personalScore[p] > globalScore) {
+
+                globalScore =
+                        personalScore[p];
+
+                globalBest =
+                        positions[p].clone();
             }
         }
-        for (int step = 0; step < iterations; step++) {
-            for (int i = 0; i < particles; i++) {
+
+        // BPSO
+        for (int iteration = 0;
+             iteration < iterations;
+             iteration++) {
+
+            for (int p = 0; p < particles; p++) {
+
                 for (int j = 0; j < n; j++) {
-                    double v = INERTIA * velocities[i][j]
-                            + COGNITIVE * random.nextDouble() * ((personal[i][j] ? 1 : 0) - (positions[i][j] ? 1 : 0))
-                            + SOCIAL * random.nextDouble() * ((global[j] ? 1 : 0) - (positions[i][j] ? 1 : 0));
-                    velocities[i][j] = Math.max(-6, Math.min(6, v));
-                    positions[i][j] = random.nextDouble() < 1.0 / (1.0 + Math.exp(-velocities[i][j]));
+
+                    int x =
+                            positions[p][j] ? 1 : 0;
+
+                    int pBest =
+                            personalBest[p][j] ? 1 : 0;
+
+                    int gBest =
+                            globalBest[j] ? 1 : 0;
+
+                    double velocity =
+                            INERTIA * velocities[p][j]
+                            + COGNITIVE
+                            * random.nextDouble()
+                            * (pBest - x)
+                            + SOCIAL
+                            * random.nextDouble()
+                            * (gBest - x);
+
+                    velocity =
+                            Math.max(
+                                    -6.0,
+                                    Math.min(6.0, velocity));
+
+                    velocities[p][j] =
+                            velocity;
+
+                    double probability =
+                            1.0
+                            / (1.0
+                            + Math.exp(-velocity));
+
+                    positions[p][j] =
+                            random.nextDouble()
+                            < probability;
                 }
-                double score = fitness(positions[i], candidates, penalty);
-                if (score > personalScores[i]) {
-                    personalScores[i] = score;
-                    personal[i] = positions[i].clone();
+
+                repair(
+                        positions[p],
+                        velocities[p],
+                        suiteSize);
+
+                double score =
+                        fitness(
+                                positions[p],
+                                candidates,
+                                maxExecutionMs);
+
+                if (score > personalScore[p]) {
+
+                    personalScore[p] = score;
+
+                    personalBest[p] =
+                            positions[p].clone();
+
                     if (score > globalScore) {
+
                         globalScore = score;
-                        global = positions[i].clone();
+
+                        globalBest =
+                                positions[p].clone();
                     }
                 }
             }
         }
-        List<String> selected = new ArrayList<>();
-        for (int j = 0; j < n; j++) if (global[j]) selected.add(candidates.get(j).id);
-        double elapsed = (System.nanoTime() - started) / 1e9;
-        List<String> quoted = new ArrayList<>();
-        for (String id : selected) quoted.add(jsonString(id));
-        String json = "{\n  \"candidate_file\": " + jsonString(input.toString())
-                + ",\n  \"seed\": " + seed + ",\n  \"particles\": " + particles
-                + ",\n  \"iterations\": " + iterations
-                + ",\n  \"size_penalty\": 0.25"
-                + ",\n  \"surrogate_fitness\": " + String.format(Locale.ROOT, "%.6f", globalScore)
-                + ",\n  \"selected_test_ids\": [" + String.join(", ", quoted) + "]"
-                + ",\n  \"generation_seconds\": " + String.format(Locale.ROOT, "%.6f", elapsed)
-                + ",\n  \"measured_coverage\": null,\n  \"fault_detected\": null\n}\n";
-        if (output.getParent() != null) Files.createDirectories(output.getParent());
-        Files.writeString(output, json, StandardCharsets.UTF_8);
-        System.out.println("Selected " + selected.size() + "/" + n
-                + " tests; surrogate fitness " + String.format(Locale.ROOT, "%.3f", globalScore));
-        System.out.println("Saved " + output);
+
+        double seconds =
+                (System.nanoTime() - start)
+                / 1_000_000_000.0;
+
+        List<String> outputLines =
+                new ArrayList<>();
+
+        outputLines.add(
+                "test_id,test_target,"
+                + "line_pct,condition_pct,"
+                + "execution_ms");
+
+        System.out.println();
+        System.out.println(
+                "===== BPSO SELECTED TESTS =====");
+
+        for (int i = 0; i < n; i++) {
+
+            if (!globalBest[i]) {
+                continue;
+            }
+
+            Candidate c =
+                    candidates.get(i);
+
+            outputLines.add(
+                    c.id + ","
+                    + c.target + ","
+                    + c.line + ","
+                    + c.condition + ","
+                    + c.executionMs
+            );
+
+            System.out.printf(
+                    Locale.ROOT,
+                    "%s  %s  line=%.1f%%  condition=%.1f%%%n",
+                    c.id,
+                    c.target,
+                    c.line,
+                    c.condition
+            );
+        }
+
+        if (output.getParent() != null) {
+            Files.createDirectories(
+                    output.getParent());
+        }
+
+        Files.write(
+                output,
+                outputLines,
+                StandardCharsets.UTF_8);
+
+        System.out.println();
+        System.out.println(
+                "Candidates : " + candidates.size());
+
+        System.out.println(
+                "Selected   : "
+                + countSelected(globalBest));
+
+        System.out.println(
+                "Seed       : " + seed);
+
+        System.out.println(
+                "Particles  : " + particles);
+
+        System.out.println(
+                "Iterations : " + iterations);
+
+        System.out.printf(
+                Locale.ROOT,
+                "Fitness    : %.6f%n",
+                globalScore);
+
+        System.out.printf(
+                Locale.ROOT,
+                "BPSO time  : %.6f seconds%n",
+                seconds);
+
+        System.out.println(
+                "Saved      : " + output);
     }
 }
