@@ -1,0 +1,781 @@
+You are a Java unit test engineer. Generate ONE complete JUnit 4 test file
+for the production class and source context supplied.
+
+Requirements:
+- Use the exact requested package and public test class name.
+- Use JUnit 4 and Java 7 syntax. Do not use JUnit 5, Mockito, or new dependencies.
+- Write at most 3 concise test methods. Focus on useful observable behavior,
+  boundaries, and relevant branches. Avoid repetitive tests and unnecessary helpers.
+- Use only APIs shown in the supplied source context.
+- Tests must compile and pass on the supplied fixed version.
+- When supported by the available evidence, make a test fail on the buggy
+  version and pass on the fixed version. Do not invent bug behavior.
+- Do not copy or modify production code. Do not use @Ignore or weaken assertions.
+- Return the entire Java file only. No prose, no Markdown fences, and no
+  ellipses or omitted sections.
+
+Production class: com.google.javascript.jscomp.AnalyzePrototypeProperties
+Required test class: com.google.javascript.jscomp.AnalyzePrototypePropertiesAI163Test
+
+TARGET SOURCE: com.google.javascript.jscomp.AnalyzePrototypeProperties
+/*
+ * Copyright 2006 The Closure Compiler Authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package com.google.javascript.jscomp;
+
+import com.google.common.base.Preconditions;
+import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.common.collect.Sets;
+import com.google.javascript.jscomp.NodeTraversal.AbstractPostOrderCallback;
+import com.google.javascript.jscomp.Scope.Var;
+import com.google.javascript.jscomp.graph.FixedPointGraphTraversal;
+import com.google.javascript.jscomp.graph.LinkedDirectedGraph;
+import com.google.javascript.jscomp.graph.FixedPointGraphTraversal.EdgeCallback;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+
+import java.util.ArrayDeque;
+import java.util.Collection;
+import java.util.Deque;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.Stack;
+
+/**
+ * Analyzes properties on prototypes.
+ *
+ * Uses a reference graph to analyze prototype properties. Each unique property
+ * name is represented by a node in this graph. An edge from property A to
+ * property B means that there's a GETPROP access of a property B on some
+ * object inside of a method named A.
+ *
+ * Global functions are also represented by nodes in this graph, with
+ * similar semantics.
+ *
+ */
+class AnalyzePrototypeProperties implements CompilerPass {
+
+  // Constants for symbol types, for easier readability.
+  private final SymbolType PROPERTY = SymbolType.PROPERTY;
+  private final SymbolType VAR = SymbolType.VAR;
+
+  private final AbstractCompiler compiler;
+  private final boolean canModifyExterns;
+  private final boolean anchorUnusedVars;
+  private final JSModuleGraph moduleGraph;
+  private final JSModule firstModule;
+
+  // Properties that are implicitly used as part of the JS language.
+  private static final Set<String> IMPLICITLY_USED_PROPERTIES =
+      ImmutableSet.of("length", "toString", "valueOf");
+
+  // A graph where the nodes are property names or variable names,
+  // and the edges signify the modules where the property is referenced.
+  // For example, if we had the code:
+  //
+  // Foo.prototype.bar = function(x) { x.baz(); }; // in module 2.;
+  //
+  // then this would be represented in the graph by a node representing
+  // "bar", a node representing "baz", and an edge between them representing
+  // module #2.
+  //
+  // Similarly, if we had:
+  //
+  // var scotch = function(f) { return f.age(); };
+  //
+  // then there would be a node for "scotch", a node for "age", and an edge
+  // from scotch to age.
+  private final LinkedDirectedGraph<NameInfo, JSModule> symbolGraph =
+      LinkedDirectedGraph.createWithoutAnnotations();
+
+  // A dummy node for representing global references.
+  private final NameInfo globalNode = new NameInfo("[global]");
+
+  // A dummy node for representing extern references.
+  private final NameInfo externNode = new NameInfo("[extern]");
+
+  // A dummy node for representing all anonymous functions with no names.
+  private final NameInfo anonymousNode = new NameInfo("[anonymous]");
+
+  // All the real NameInfo for prototype properties, hashed by the name
+  // of the property that they represent.
+  private final Map<String, NameInfo> propertyNameInfo = Maps.newHashMap();
+
+  // All the NameInfo for global functions, hashed by the name of the
+  // gloval variable that it's assigned to.
+  private final Map<String, NameInfo> varNameInfo = Maps.newHashMap();
+
+  /**
+   * Creates a new pass for analyzing prototype properties.
+   * @param compiler The compiler.
+   * @param moduleGraph The graph for resolving module dependencies. May be
+   *     null if we don't care about module dependencies.
+   * @param canModifyExterns If true, then we can move prototype
+   *     properties that are declared in the externs file.
+   * @param anchorUnusedVars If true, then we must mark all vars as referenced,
+   *     even if they are never used.
+   */
+  AnalyzePrototypeProperties(AbstractCompiler compiler,
+      JSModuleGraph moduleGraph, boolean canModifyExterns,
+      boolean anchorUnusedVars) {
+    this.compiler = compiler;
+    this.moduleGraph = moduleGraph;
+    this.canModifyExterns = canModifyExterns;
+    this.anchorUnusedVars = anchorUnusedVars;
+
+    if (moduleGraph != null) {
+      firstModule = moduleGraph.getRootModule();
+    } else {
+      firstModule = null;
+    }
+
+    globalNode.markReference(null);
+    externNode.markReference(null);
+    symbolGraph.createNode(globalNode);
+    symbolGraph.createNode(externNode);
+
+    for (String property : IMPLICITLY_USED_PROPERTIES) {
+      NameInfo nameInfo = getNameInfoForName(property, PROPERTY);
+      if (moduleGraph == null) {
+        symbolGraph.connect(externNode, null, nameInfo);
+      } else {
+        for (JSModule module : moduleGraph.getAllModules()) {
+          symbolGraph.connect(externNode, module, nameInfo);
+        }
+      }
+    }
+  }
+
+  @Override
+  public void process(Node externRoot, Node root) {
+    if (!canModifyExterns) {
+      NodeTraversal.traverse(compiler, externRoot,
+          new ProcessExternProperties());
+    }
+
+    NodeTraversal.traverse(compiler, root, new ProcessProperties());
+
+    FixedPointGraphTraversal<NameInfo, JSModule> t =
+        FixedPointGraphTraversal.newTraversal(new PropagateReferences());
+    t.computeFixedPoint(symbolGraph,
+        Sets.newHashSet(externNode, globalNode));
+  }
+
+  /**
+   * Returns information on all prototype properties.
+   */
+  publ
+/* SOURCE MIDDLE OMITTED: context limit */
+turn var;
+    }
+
+    @Override
+    public void remove() {
+      Node parent = nameNode.getParent();
+      if (parent.isFunction() || parent.hasOneChild()) {
+        NodeUtil.removeChild(parent.getParent(), parent);
+      } else {
+        Preconditions.checkState(parent.isVar());
+        parent.removeChild(nameNode);
+      }
+    }
+
+    @Override
+    public JSModule getModule() {
+      return module;
+    }
+
+    public Node getFunctionNode() {
+      Node parent = nameNode.getParent();
+
+      if (parent.isFunction()) {
+        return parent;
+      } else {
+        // we are the name of a var node, so the function is name's second child
+        return nameNode.getChildAtIndex(1);
+      }
+    }
+  }
+
+  /**
+   * Since there are two ways of assigning properties to prototypes, we hide
+   * then behind this interface so they can both be removed regardless of type.
+   */
+  interface Property extends Symbol {
+
+    /** Returns the GETPROP node that refers to the prototype. */
+    Node getPrototype();
+
+    /** Returns the value of this property. */
+    Node getValue();
+  }
+
+  /**
+   * Properties created via EXPR assignment:
+   *
+   * <pre>function Foo() { ... };
+   * Foo.prototype.bar = function() { ... };</pre>
+   */
+  static class AssignmentProperty implements Property {
+    private final Node exprNode;
+    private final Var rootVar;
+    private final JSModule module;
+
+    /**
+     * @param node An EXPR node.
+     */
+    AssignmentProperty(Node node, Var rootVar, JSModule module) {
+      this.exprNode = node;
+      this.rootVar = rootVar;
+      this.module = module;
+    }
+
+    @Override
+    public Var getRootVar() {
+      return rootVar;
+    }
+
+    @Override
+    public void remove() {
+      NodeUtil.removeChild(exprNode.getParent(), exprNode);
+    }
+
+    @Override
+    public Node getPrototype() {
+      return getAssignNode().getFirstChild().getFirstChild();
+    }
+
+    @Override
+    public Node getValue() {
+      return getAssignNode().getLastChild();
+    }
+
+    private Node getAssignNode() {
+      return exprNode.getFirstChild();
+    }
+
+    @Override
+    public JSModule getModule() {
+      return module;
+    }
+  }
+
+  /**
+   * Properties created via object literals:
+   *
+   * <pre>function Foo() { ... };
+   * Foo.prototype = {bar: function() { ... };</pre>
+   */
+  static class LiteralProperty implements Property {
+    private final Node key;
+    private final Node value;
+    private final Node map;
+    private final Node assign;
+    private final Var rootVar;
+    private final JSModule module;
+
+    LiteralProperty(Node key, Node value, Node map, Node assign,
+        Var rootVar, JSModule module) {
+      this.key = key;
+      this.value = value;
+      this.map = map;
+      this.assign = assign;
+      this.rootVar = rootVar;
+      this.module = module;
+    }
+
+    @Override
+    public Var getRootVar() {
+      return rootVar;
+    }
+
+    @Override
+    public void remove() {
+      map.removeChild(key);
+    }
+
+    @Override
+    public Node getPrototype() {
+      return assign.getFirstChild();
+    }
+
+    @Override
+    public Node getValue() {
+      return value;
+    }
+
+    @Override
+    public JSModule getModule() {
+      return module;
+    }
+  }
+
+  /**
+   * The context of the current name. This includes the NameInfo and the scope
+   * if it is a scope defining name (function).
+   */
+  private class NameContext {
+    final NameInfo name;
+
+    // If this is a function context, then scope will be the scope of the
+    // corresponding function. Otherwise, it will be null.
+    final Scope scope;
+
+    NameContext(NameInfo name, Scope scope) {
+      this.name = name;
+      this.scope = scope;
+    }
+  }
+
+  /**
+   * Information on all properties or global variables of a given name.
+   */
+  class NameInfo {
+
+    final String name;
+
+    private boolean referenced = false;
+    private final Deque<Symbol> declarations = new ArrayDeque<Symbol>();
+    private JSModule deepestCommonModuleRef = null;
+
+    // True if this property is a function that reads a variable from an
+    // outer scope which isn't the global scope.
+    private boolean readClosureVariables = false;
+
+    /**
+     * Constructs a new NameInfo.
+     * @param name The name of the property that this represents. May be null
+     *     to signify dummy nodes in the property graph.
+     */
+    NameInfo(String name) {
+      this.name = name;
+    }
+
+    @Override public String toString() { return name; }
+
+    /** Determines whether we've marked a reference to this property name. */
+    boolean isReferenced() {
+      return referenced;
+    }
+
+    /** Determines whether it reads a closure variable. */
+    boolean readsClosureVariables() {
+      return readClosureVariables;
+    }
+
+    /**
+     * Mark a reference in a given module to this property name, and record
+     * the deepest common module reference.
+     * @param module The module where it was referenced.
+     * @return Whether the name info has changed.
+     */
+    boolean markReference(JSModule module) {
+      boolean hasChanged = false;
+      if (!referenced) {
+        referenced = true;
+        hasChanged = true;
+      }
+
+      if (moduleGraph != null) {
+        JSModule originalDeepestCommon = deepestCommonModuleRef;
+
+        if (deepestCommonModuleRef == null) {
+          deepestCommonModuleRef = module;
+        } else {
+          deepestCommonModuleRef =
+              moduleGraph.getDeepestCommonDependencyInclusive(
+                  deepestCommonModuleRef, module);
+        }
+
+        if (originalDeepestCommon != deepestCommonModuleRef) {
+          hasChanged = true;
+        }
+      }
+
+      return hasChanged;
+    }
+
+    /**
+     * Returns the deepest common module of all the references to this
+     * property.
+     */
+    JSModule getDeepestCommonModuleRef() {
+      return deepestCommonModuleRef;
+    }
+
+    /**
+     * Returns a mutable collection of all the prototype property declarations
+     * of this property name.
+     */
+    Deque<Symbol> getDeclarations() {
+      return declarations;
+    }
+  }
+}
+
+
+RELATED API DECLARATIONS (bodies omitted): Compiler.java
+package com.google.javascript.jscomp;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Supplier;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.javascript.jscomp.CompilerOptions.DevMode;
+import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
+import com.google.javascript.jscomp.CompilerOptions.TracerMode;
+import com.google.javascript.jscomp.ReferenceCollectingCallback.ReferenceCollection;
+import com.google.javascript.jscomp.Scope.Var;
+import com.google.javascript.jscomp.deps.SortedDependencies.CircularDependencyException;
+import com.google.javascript.jscomp.deps.SortedDependencies.MissingProvideException;
+import com.google.javascript.jscomp.mozilla.rhino.ErrorReporter;
+import com.google.javascript.jscomp.parsing.Config;
+import com.google.javascript.jscomp.parsing.ParserRunner;
+import com.google.javascript.rhino.IR;
+import com.google.javascript.rhino.InputId;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.jstype.JSTypeRegistry;
+import java.io.IOException;
+import java.io.PrintStream;
+import java.io.Serializable;
+import java.nio.charset.Charset;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import java.util.regex.Matcher;
+public class Compiler extends AbstractCompiler {
+  public PerformanceTracker tracker;
+  public static final DiagnosticType OPTIMIZE_LOOP_ERROR = DiagnosticType.error(
+  public static final DiagnosticType MOTION_ITERATIONS_ERROR =
+  public Compiler() {
+  public Compiler(PrintStream stream) {
+  public Compiler(ErrorManager errorManager) {
+  public void setErrorManager(ErrorManager errorManager) {
+  public void initOptions(CompilerOptions options) {
+  public void init(JSSourceFile[] externs, JSSourceFile[] inputs,
+  public void init(List<JSSourceFile> externs, List<JSSourceFile> inputs,
+  public void init(JSSourceFile[] externs, JSModule[] modules,
+  public void initModules(
+  public void rebuildInputsFromModules() {
+  public Result compile(
+  public Result compile(
+  public Result compile(
+  public Result compile(JSSourceFile[] externs,
+  public Result compile(List<JSSourceFile> externs,
+  public Result compile(JSSourceFile[] externs,
+  public Result compileModules(List<JSSourceFile> externs,
+      public Result call() throws Exception {
+  public void disableThreads() {
+      public void run() {
+  public void parse() {
+  public void setPassConfig(PassConfig passes) {
+  public void check() {
+    protected CompilerPass createInternal(AbstractCompiler compiler) {
+  public Result getResult() {
+  public JSError[] getMessages() {
+  public JSError[] getErrors() {
+  public JSError[] getWarnings() {
+  public Node getRoot() {
+      public String get() {
+  public CompilerInput getInput(InputId id) {
+  protected void removeExternInput(InputId id) {
+  public CompilerInput newExternInput(String name) {
+  public JSTypeRegistry getTypeRegistry() {
+  public SymbolTable buildKnownSymbolTable() {
+  public Scope getTopScope() {
+  public ReverseAbstractInterpreter getReverseAbstractInterpreter() {
+  public Node parse(JSSourceFile file) {
+  protected CompilerOptions newCompilerOptions() {
+  public String toSource() {
+      public String call() throws Exception {
+  public String[] toSourceArray() {
+      public String[] call() throws Exception {
+  public String toSource(final JSModule module) {
+      public String call() throws Exception {
+  public String[] toSourceArray(final JSModule module) {
+      public String[] call() throws Exception {
+  public void toSource(final CodeBuilder cb,
+      public Void call() throws Exception {
+  public static class CodeBuilder {
+    public String toString() {
+    public int getLength() {
+  public void optimize() {
+  public void processDefines() {
+  public void normalize() {
+  protected final CodeChangeHandler.RecentChange recentChange =
+  public void reportCodeChange() {
+  public CodingConvention getCodingConvention() {
+  public boolean isIdeMode() {
+  public boolean acceptEcmaScript5() {
+  public LanguageMode languageMode() {
+  public boolean acceptConstKeyword() {
+  public boolean isTypeCheckingEnabled() {
+  protected DiagnosticGroups getDiagnosticGroups() {
+  public void report(JSError error) {
+  public CheckLevel getErrorLevel(JSError error) {
+  public int getErrorCount() {
+  public int getWarningCount() {
+  public boolean hasErrors() {
+  public String getSourceLine(String sourceName, int lineNumber) {
+  public Region getSourceRegion(String sourceName, int lineNumber) {
+  public SourceMap getSourceMap() {
+  public static void setLoggingLevel(Level level) {
+  public String getAstDotGraph() throws IOException {
+  public ErrorManager getErrorManager() {
+  public Map<InputId, CompilerInput> 
+
+RELATED API DECLARATIONS (bodies omitted): CompilerOptions.java
+package com.google.javascript.jscomp;
+import com.google.common.base.Preconditions;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.common.collect.Multimap;
+import com.google.common.collect.Sets;
+import com.google.javascript.rhino.IR;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.SourcePosition;
+import java.io.Serializable;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+public class CompilerOptions implements Serializable, Cloneable {
+  public enum Reach {
+  public boolean ideMode;
+  public transient MessageBundle messageBundle = null;
+  public boolean checkSymbols;
+  public CheckLevel aggressiveVarCheck;
+  public void setAggressiveVarCheck(CheckLevel level) {
+  public boolean checkDuplicateMessages;
+  public boolean allowLegacyJsMessages;
+  public boolean strictMessageReplacement;
+  public boolean checkSuspiciousCode;
+  public boolean checkControlStructures;
+  public boolean checkTypes;
+  public boolean tightenTypes;
+  public CheckLevel reportMissingOverride;
+  public void setReportMissingOverride(CheckLevel level) {
+  public CheckLevel reportUnknownTypes;
+  public void setReportUnknownTypes(CheckLevel level) {
+  public CheckLevel checkRequires;
+  public void setCheckRequires(CheckLevel level) {
+  public CheckLevel checkProvides;
+  public void setCheckProvides(CheckLevel level) {
+  public CheckLevel checkGlobalNamesLevel;
+  public void setCheckGlobalNamesLevel(CheckLevel level) {
+  public CheckLevel brokenClosureRequiresLevel;
+  public void setBrokenClosureRequiresLevel(CheckLevel level) {
+  public CheckLevel checkGlobalThisLevel;
+  public void setCheckGlobalThisLevel(CheckLevel level) {
+  public CheckLevel checkMissingGetCssNameLevel;
+  public void setCheckMissingGetCssNameLevel(CheckLevel level) {
+  public String checkMissingGetCssNameBlacklist;
+  public boolean checkEs5Strict;
+  public boolean checkCaja;
+  public boolean foldConstants;
+  public boolean deadAssignmentElimination;
+  public boolean inlineConstantVars;
+  public boolean inlineFunctions;
+  public boolean inlineLocalFunctions;
+  public boolean assumeClosuresOnlyCaptureReferences;
+  public boolean crossModuleCodeMotion;
+  public boolean coalesceVariableNames;
+  public boolean crossModuleMethodMotion;
+  public boolean inlineGetters;
+  public boolean inlineVariables;
+  public boolean inlineLocalVariables;
+  public boolean flowSensitiveInlineVariables;
+  public boolean smartNameRemoval;
+  public boolean removeDeadCode;
+  public CheckLevel checkUnreachableCode;
+  public void setCheckUnreachableCode(CheckLevel level) {
+  public CheckLevel checkMissingReturn;
+  public void setCheckMissingReturn(CheckLevel level) {
+  public boolean extractPrototypeMemberDeclarations;
+  public boolean removeEmptyFunctions;
+  public boolean removeUnusedPrototypeProperties;
+  public boolean removeUnusedPrototypePropertiesInExterns;
+  public boolean removeUnusedVars;
+  public boolean removeUnusedLocalVars;
+  public boolean aliasExternals;
+  public String aliasableGlobals;
+  public String unaliasableGlobals;
+  public boolean collapseVariableDeclarations;
+  public boolean groupVariableDeclarations;
+  public boolean collapseAnonymousFunctions;
+  public Set<String> aliasableStrings;
+  public String aliasStringsBlacklist;
+  public boolean aliasAllStrings;
+  public boolean convertToDottedProperties;
+  public boolean rewriteFunctionExpressions;
+  public boolean optimizeParameters;
+  public boolean optimizeReturns;
+  public boolean optimizeCalls;
+  public boolean optimizeArgumentsArray;
+  public VariableRenamingPolicy variableRenaming;
+  public PropertyRenamingPolicy propertyRenaming;
+  public boolean labelRenaming;
+  public boolean reserveRawExports;
+  public boolean generatePseudoNames;
+  public String renamePrefix;
+  public String renamePrefixNamespace;
+  public boolean aliasKeywords;
+  public boolean collapseProperties;
+  public boolean collapseObjectLiterals;
+  public boolean devirtualizePrototypeMethods;
+  public boolean computeFunctionSideEffects;
+  public String debugFunctionSideEffectsPath;
+  public boolean disambiguateProperties;
+  public boolean ambiguateProperties;
+  public AnonymousFunctionNamingPolicy anonymousFunctionNaming;
+  public byte[] inputVariableMapSerialized;
+  public byte[] inputPropertyMapSerialized;
+  public boolean exportTestFunctions;
+  public boolean specializeInitialModule;
+  public boolean instrumentForCoverage;
+  public boolean instrumentForCoverageOnly;
+  public boolean ignoreCajaProperties;
+  public String syntheticBlockStartMarker;
+  public String syntheticBlockEndMarker;
+  public String locale;
+  public boolean markAsCompiled;
+  public boolean removeTryCatchFinally;
+  public boolean closurePass;
+  public boolean gatherCssNames;
+  public Set<String> stripTypes;
+  public Set<String> stripNameSuffixes;
+  public Set<String> stripNamePrefixes;
+  public Set<String> stripTypePr
+
+RELATED API DECLARATIONS (bodies omitted): CompilationLevel.java
+package com.google.javascript.jscomp;
+import com.google.javascript.jscomp.CompilerOptions.Reach;
+public enum CompilationLevel {
+  public void setOptionsForCompilationLevel(CompilerOptions options) {
+  public void setDebugOptionsForCompilationLevel(CompilerOptions options) {
+
+RELATED API DECLARATIONS (bodies omitted): SourceFile.java
+package com.google.javascript.jscomp;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Charsets;
+import com.google.common.io.CharStreams;
+import com.google.common.io.Files;
+import com.google.javascript.rhino.jstype.StaticSourceFile;
+import java.io.File;
+import java.io.FileReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.Reader;
+import java.io.Serializable;
+import java.io.StringReader;
+import java.nio.charset.Charset;
+public class SourceFile implements StaticSourceFile, Serializable {
+  public interface Generator {
+    public String getCode();
+  public SourceFile(String fileName) {
+  public int getLineOffset(int lineno) {
+  public String getCode() throws IOException {
+  public Reader getCodeReader() throws IOException {
+  public String getOriginalPath() {
+  public void setOriginalPath(String originalPath) {
+  public void clearCachedSource() {
+  public String getName() {
+  public boolean isExtern() {
+  public String getLine(int lineNumber) {
+  public Region getRegion(int lineNumber) {
+  public String toString() {
+  public static SourceFile fromFile(String fileName, Charset c) {
+  public static SourceFile fromFile(String fileName) {
+  public static SourceFile fromFile(File file, Charset c) {
+  public static SourceFile fromFile(File file) {
+  public static SourceFile fromCode(String fileName, String code) {
+  public static SourceFile fromCode(String fileName,
+  public static SourceFile fromInputStream(String fileName, InputStream s)
+  public static SourceFile fromInputStream(String fileName,
+  public static SourceFile fromReader(String fileName, Reader r)
+  public static SourceFile fromGenerator(String fileName,
+  public static Builder builder() {
+  public static class Builder {
+    public Builder() {}
+    public Builder withCharset(Charset charset) {
+    public Builder withOriginalPath(String originalPath) {
+    public SourceFile buildFromFile(String fileName) {
+    public SourceFile buildFromFile(File file) {
+    public SourceFile buildFromCode(String fileName, String code) {
+    public SourceFile buildFromInputStream(String fileName, InputStream s)
+    public SourceFile buildFromReader(String fileName, Reader r)
+    public SourceFile buildFromGenerator(String fileName,
+    Preloaded(String fileName, String originalPath, String code) {
+    Generated(String fileName, String originalPath, Generator generator) {
+    public synchronized String getCode() throws IOException {
+    public void clearCachedSource() {
+    OnDisk(File file, String originalPath, Charset c) {
+    public synchronized String getCode() throws IOException {
+    public Reader getCodeReader() throws IOException {
+    public void clearCachedSource() {
+    public void setCharset(Charset c) {
+    public Charset getCharset() {
+
+RELATED API DECLARATIONS (bodies omitted): JSSourceFile.java
+package com.google.javascript.jscomp;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Charsets;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.Serializable;
+import java.nio.charset.Charset;
+public class JSSourceFile extends SourceFile implements Serializable {
+  public static JSSourceFile fromFile(String fileName, Charset charSet) {
+  public static JSSourceFile fromFile(String fileName) {
+  public static JSSourceFile fromFile(File file, Charset charSet) {
+  public static JSSourceFile fromFile(File file) {
+  public static JSSourceFile fromCode(String fileName, String code) {
+  public static JSSourceFile fromInputStream(String fileName, InputStream s)
+  public static JSSourceFile fromGenerator(String fileName,
+  public String getCode() throws IOException {
+  public void clearCachedSource() {
+
+RELATED API DECLARATIONS (bodies omitted): Result.java
+package com.google.javascript.jscomp;
+import java.util.Map;
+public class Result {
+  public final boolean success;
+  public final JSError[] errors;
+  public final JSError[] warnings;
+  public final String debugLog;
+  public final VariableMap variableMap;
+  public final VariableMap propertyMap;
+  public final VariableMap namedAnonFunctionMap;
+  public final VariableMap stringMap;
+  public final FunctionInformationMap functionInformationMap;
+  public final SourceMap sourceMap;
+  public final Map<String, Integer> cssNames;
+  public final String externExport;
+  public final String idGeneratorMap;
+  Result(JSError[] errors, JSError[] warnings, String debugLog,
+  public Result(JSError[] errors, JSError[] warnings, String debugLog,

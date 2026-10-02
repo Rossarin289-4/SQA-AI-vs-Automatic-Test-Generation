@@ -1,0 +1,738 @@
+You are a Java unit test engineer. Generate ONE complete JUnit 4 test file
+for the production class and source context supplied.
+
+Requirements:
+- Use the exact requested package and public test class name.
+- Use JUnit 4 and Java 7 syntax. Do not use JUnit 5, Mockito, or new dependencies.
+- Write at most 3 concise test methods. Focus on useful observable behavior,
+  boundaries, and relevant branches. Avoid repetitive tests and unnecessary helpers.
+- Use only APIs shown in the supplied source context.
+- Tests must compile and pass on the supplied fixed version.
+- When supported by the available evidence, make a test fail on the buggy
+  version and pass on the fixed version. Do not invent bug behavior.
+- Do not copy or modify production code. Do not use @Ignore or weaken assertions.
+- Return the entire Java file only. No prose, no Markdown fences, and no
+  ellipses or omitted sections.
+
+Production class: com.google.javascript.jscomp.NodeUtil
+Required test class: com.google.javascript.jscomp.NodeUtilAI174Test
+
+TARGET SOURCE: com.google.javascript.jscomp.NodeUtil
+/*
+ * Copyright 2004 The Closure Compiler Authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package com.google.javascript.jscomp;
+
+import com.google.common.base.Preconditions;
+import com.google.common.base.Predicate;
+import com.google.common.base.Predicates;
+import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Maps;
+import com.google.javascript.rhino.IR;
+import com.google.javascript.rhino.InputId;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.TokenStream;
+import com.google.javascript.rhino.jstype.FunctionType;
+import com.google.javascript.rhino.jstype.JSType;
+import com.google.javascript.rhino.jstype.StaticSourceFile;
+import com.google.javascript.rhino.jstype.TernaryValue;
+
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+
+import javax.annotation.Nullable;
+
+/**
+ * NodeUtil contains generally useful AST utilities.
+ *
+ */
+public final class NodeUtil {
+
+  static final long MAX_POSITIVE_INTEGER_NUMBER = (long) Math.pow(2, 53);
+
+  static final String JSC_PROPERTY_NAME_FN = "JSCompiler_renameProperty";
+
+  static final char LARGEST_BASIC_LATIN = 0x7f;
+
+  /** the set of builtin constructors that don't have side effects. */
+  private static final Set<String> CONSTRUCTORS_WITHOUT_SIDE_EFFECTS =
+      new HashSet<String>(Arrays.asList(
+        "Array",
+        "Date",
+        "Error",
+        "Object",
+        "RegExp",
+        "XMLHttpRequest"));
+
+  // Utility class; do not instantiate.
+  private NodeUtil() {}
+
+  /**
+   * Gets the boolean value of a node that represents a expression. This method
+   * effectively emulates the <code>Boolean()</code> JavaScript cast function.
+   * Note: unlike getBooleanValue this function does not return UNKNOWN
+   * for expressions with side-effects.
+   */
+  static TernaryValue getImpureBooleanValue(Node n) {
+    switch (n.getType()) {
+      case Token.ASSIGN:
+      case Token.COMMA:
+        // For ASSIGN and COMMA the value is the value of the RHS.
+        return getImpureBooleanValue(n.getLastChild());
+      case Token.NOT:
+        TernaryValue value = getImpureBooleanValue(n.getLastChild());
+        return value.not();
+      case Token.AND: {
+        TernaryValue lhs = getImpureBooleanValue(n.getFirstChild());
+        TernaryValue rhs = getImpureBooleanValue(n.getLastChild());
+        return lhs.and(rhs);
+      }
+      case Token.OR:  {
+        TernaryValue lhs = getImpureBooleanValue(n.getFirstChild());
+        TernaryValue rhs = getImpureBooleanValue(n.getLastChild());
+        return lhs.or(rhs);
+      }
+      case Token.HOOK:  {
+        TernaryValue trueValue = getImpureBooleanValue(
+            n.getFirstChild().getNext());
+        TernaryValue falseValue = getImpureBooleanValue(n.getLastChild());
+        if (trueValue.equals(falseValue)) {
+          return trueValue;
+        } else {
+          return TernaryValue.UNKNOWN;
+        }
+      }
+      case Token.ARRAYLIT:
+      case Token.OBJECTLIT:
+        // ignoring side-effects
+        return TernaryValue.TRUE;
+
+      case Token.VOID:
+        return TernaryValue.FALSE;
+
+      default:
+        return getPureBooleanValue(n);
+    }
+  }
+
+  /**
+   * Gets the boolean value of a node that represents a literal. This method
+   * effectively emulates the <code>Boolean()</code> JavaScript cast function
+   * except it return UNKNOWN for known values with side-effects, use
+   * getImpureBooleanValue if you don't care about side-effects.
+   */
+  static TernaryValue getPureBooleanValue(Node n) {
+    switch (n.getType()) {
+      case Token.STRING:
+        return TernaryValue.forBoolean(n.getString().length() > 0);
+
+      case Token.NUMBER:
+        return TernaryValue.forBoolean(n.getDouble() != 0);
+
+      case Token.NOT:
+        return getPureBooleanValue(n.getLastChild()).not();
+
+      case Token.NULL:
+      case Token.FALSE:
+        return TernaryValue.FALSE;
+
+      case Token.VOID:
+        if (!mayHaveSideEffects(n.getFirstChild())) {
+          return TernaryValue.FALSE;
+        }
+        break;
+
+      case Token.NAME:
+        String name = n.getString();
+        if ("undefined".equals(name)
+            || "NaN".equals(name)) {
+          // We assume here that programs don't change the value of the keyword
+          // undefined to something other than the value undefined.
+          return TernaryValue.FALSE;
+        } else if ("Infinity".equals(name)) {
+          return TernaryValue.TRUE;
+        }
+        break;
+
+      case Token.TRUE:
+      case Token.REGEXP:
+        return TernaryValue.TRUE;
+
+      case Token.ARRAYLIT:
+      case Token.OBJECTLIT:
+        if (!mayHaveSideEffects(n)) {
+          return TernaryValue.TRUE;
+        }
+        break;
+    }
+
+    return TernaryValue.UNKNOWN;
+  }
+
+  /**
+   * Gets the value of a node as a String, or null if it cannot be converted.
+   * When it returns a non-null String, this method effectively emulates the
+   * <code>String()</code> JavaScript cast function.
+   */
+  static String getStringValue(Node n) {
+    // TODO(user): regex literals as well.
+    switch (n.getType()) {
+      case Token.STRING:
+      case Token.STRING_KEY:
+        return n.getString();
+
+      case Token.NAME:
+        String name = n.getString();
+        if ("undefined".equals(name)
+            || "Infinity".equals(name)
+      
+/* SOURCE MIDDLE OMITTED: context limit */
+     return (expr == parent.getFirstChild())
+            ? true : isExpressionResultUsed(parent);
+      case Token.COMMA:
+        Node gramps = parent.getParent();
+        if (gramps.isCall() &&
+            parent == gramps.getFirstChild()) {
+          // Semantically, a direct call to eval is different from an indirect
+          // call to an eval. See ECMA-262 S15.1.2.1. So it's OK for the first
+          // expression to a comma to be a no-op if it's used to indirect
+          // an eval. This we pretend that this is "used".
+          if (expr == parent.getFirstChild() &&
+              parent.getChildCount() == 2 &&
+              expr.getNext().isName() &&
+              "eval".equals(expr.getNext().getString())) {
+            return true;
+          }
+        }
+
+        return (expr == parent.getFirstChild())
+            ? false : isExpressionResultUsed(parent);
+      case Token.FOR:
+        if (!NodeUtil.isForIn(parent)) {
+          // Only an expression whose result is in the condition part of the
+          // expression is used.
+          return (parent.getChildAtIndex(1) == expr);
+        }
+        break;
+    }
+    return true;
+  }
+
+  /**
+   * @param n The expression to check.
+   * @return Whether the expression is unconditionally executed only once in the
+   *     containing execution scope.
+   */
+  static boolean isExecutedExactlyOnce(Node n) {
+    inspect: do {
+      Node parent = n.getParent();
+      switch (parent.getType()) {
+        case Token.IF:
+        case Token.HOOK:
+        case Token.AND:
+        case Token.OR:
+          if (parent.getFirstChild() != n) {
+            return false;
+          }
+          // other ancestors may be conditional
+          continue inspect;
+        case Token.FOR:
+          if (NodeUtil.isForIn(parent)) {
+            if (parent.getChildAtIndex(1) != n) {
+              return false;
+            }
+          } else {
+            if (parent.getFirstChild() != n) {
+              return false;
+            }
+          }
+          // other ancestors may be conditional
+          continue inspect;
+        case Token.WHILE:
+        case Token.DO:
+          return false;
+        case Token.TRY:
+          // Consider all code under a try/catch to be conditionally executed.
+          if (!hasFinally(parent) || parent.getLastChild() != n) {
+            return false;
+          }
+          continue inspect;
+        case Token.CASE:
+        case Token.DEFAULT_CASE:
+          return false;
+        case Token.SCRIPT:
+        case Token.FUNCTION:
+          // Done, we've reached the scope root.
+          break inspect;
+      }
+    } while ((n = n.getParent()) != null);
+    return true;
+  }
+
+  /**
+   * @return An appropriate AST node for the boolean value.
+   */
+  static Node booleanNode(boolean value) {
+    return value ? IR.trueNode() : IR.falseNode();
+  }
+
+  /**
+   * @return An appropriate AST node for the double value.
+   */
+  static Node numberNode(double value, Node srcref) {
+    Node result;
+    if (Double.isNaN(value)) {
+      result = IR.name("NaN");
+    } else if (value == Double.POSITIVE_INFINITY) {
+      result = IR.name("Infinity");
+    } else if (value == Double.NEGATIVE_INFINITY) {
+      result = IR.neg(IR.name("Infinity"));
+    } else {
+      result = IR.number(value);
+    }
+    if (srcref != null) {
+      result.srcrefTree(srcref);
+    }
+    return result;
+  }
+
+  static boolean isNaN(Node n) {
+    if ((n.isName() && n.getString().equals("NaN")) ||
+        (n.getType() == Token.DIV &&
+         n.getFirstChild().isNumber() && n.getFirstChild().getDouble() == 0 &&
+         n.getLastChild().isNumber() && n.getLastChild().getDouble() == 0)) {
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Given an AST and its copy, map the root node of each scope of main to the
+   * corresponding root node of clone
+   */
+  public static Map<Node, Node> mapMainToClone(Node main, Node clone) {
+    Preconditions.checkState(main.isEquivalentTo(clone));
+    Map<Node, Node> mtoc = new HashMap<Node, Node>();
+    mtoc.put(main, clone);
+    mtocHelper(mtoc, main, clone);
+    return mtoc;
+  }
+
+  private static void mtocHelper(Map<Node, Node> map, Node main, Node clone) {
+    if (main.isFunction()) {
+      map.put(main, clone);
+    }
+    Node mchild = main.getFirstChild(), cchild = clone.getFirstChild();
+    while (mchild != null) {
+      mtocHelper(map, mchild, cchild);
+      mchild = mchild.getNext();
+      cchild = cchild.getNext();
+    }
+  }
+
+  /** Checks that the scope roots marked as changed have indeed changed */
+  public static void verifyScopeChanges(Map<Node, Node> map,
+      Node main, boolean verifyUnchangedNodes,
+      AbstractCompiler compiler) {
+    // compiler is passed only to call compiler.toSource during debugging to see
+    // mismatches in scopes
+
+    // If verifyUnchangedNodes is false, we are comparing the initial AST to the
+    // final AST. Don't check unmarked nodes b/c they may have been changed by
+    // non-loopable passes.
+    // If verifyUnchangedNodes is true, we are comparing the ASTs before & after
+    // a pass. Check all scope roots.
+    final Map<Node, Node> mtoc = map;
+    final boolean checkUnchanged = verifyUnchangedNodes;
+    Node clone = mtoc.get(main);
+    if (main.getChangeTime() > clone.getChangeTime()) {
+      Preconditions.checkState(!main.isEquivalentToShallow(clone));
+    } else if (checkUnchanged) {
+      Preconditions.checkState(main.isEquivalentToShallow(clone));
+    }
+    visitPreOrder(main,
+        new Visitor() {
+          @Override
+          public void visit(Node n) {
+            if (n.isFunction() && mtoc.containsKey(n)) {
+              Node clone = mtoc.get(n);
+              if (n.getChangeTime() > clone.getChangeTime()) {
+                Preconditions.checkState(!n.isEquivalentToShallow(clone));
+              } else if (checkUnchanged) {
+                Preconditions.checkState(n.isEquivalentToShallow(clone));
+              }
+            }
+          }
+        },
+        Predicates.<Node>alwaysTrue());
+  }
+}
+
+
+RELATED API DECLARATIONS (bodies omitted): Compiler.java
+package com.google.javascript.jscomp;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Charsets;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Supplier;
+import com.google.common.base.Throwables;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.common.io.CharStreams;
+import com.google.javascript.jscomp.CompilerOptions.DevMode;
+import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
+import com.google.javascript.jscomp.ReferenceCollectingCallback.ReferenceCollection;
+import com.google.javascript.jscomp.Scope.Var;
+import com.google.javascript.jscomp.deps.SortedDependencies;
+import com.google.javascript.jscomp.deps.SortedDependencies.CircularDependencyException;
+import com.google.javascript.jscomp.deps.SortedDependencies.MissingProvideException;
+import com.google.javascript.jscomp.parsing.Config;
+import com.google.javascript.jscomp.parsing.ParserRunner;
+import com.google.javascript.jscomp.type.ChainableReverseAbstractInterpreter;
+import com.google.javascript.jscomp.type.ClosureReverseAbstractInterpreter;
+import com.google.javascript.jscomp.type.ReverseAbstractInterpreter;
+import com.google.javascript.jscomp.type.SemanticReverseAbstractInterpreter;
+import com.google.javascript.rhino.IR;
+import com.google.javascript.rhino.InputId;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.head.ErrorReporter;
+import com.google.javascript.rhino.head.ast.AstRoot;
+import com.google.javascript.rhino.jstype.JSTypeRegistry;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.PrintStream;
+import java.io.Serializable;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.ResourceBundle;
+import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import java.util.regex.Matcher;
+public class Compiler extends AbstractCompiler {
+  public PerformanceTracker tracker;
+  public static final DiagnosticType OPTIMIZE_LOOP_ERROR = DiagnosticType.error(
+  public static final DiagnosticType MOTION_ITERATIONS_ERROR =
+  public Compiler() {
+  public Compiler(PrintStream stream) {
+  public Compiler(ErrorManager errorManager) {
+  public void setErrorManager(ErrorManager errorManager) {
+  public void initOptions(CompilerOptions options) {
+  protected void reconcileOptionsWithGuards() {
+  public void init(JSSourceFile[] externs, JSSourceFile[] inputs,
+  public <T1 extends SourceFile, T2 extends SourceFile> void init(
+  public void init(JSSourceFile[] externs, JSModule[] modules,
+  public <T extends SourceFile> void initModules(
+  public void rebuildInputsFromModules() {
+  public Result compile(
+  public Result compile(
+  public Result compile(
+  public Result compile(JSSourceFile[] externs,
+  public <T1 extends SourceFile, T2 extends SourceFile> Result compile(
+  public Result compile(JSSourceFile[] externs,
+  public <T extends SourceFile> Result compileModules(List<T> externs,
+      public Result call() throws Exception {
+  public void disableThreads() {
+      public T call() {
+  public void parse() {
+  public void setPassConfig(PassConfig passes) {
+  public void check() {
+    protected CompilerPass create(AbstractCompiler compiler) {
+  public Result getResult() {
+  public JSError[] getMessages() {
+  public JSError[] getErrors() {
+  public JSError[] getWarnings() {
+  public Node getRoot() {
+      public String get() {
+  public CompilerInput getInput(InputId id) {
+  protected void removeExternInput(InputId id) {
+  public CompilerInput newExternInput(String name) {
+  public JSTypeRegistry getTypeRegistry() {
+  public MemoizedScopeCreator getTypedScopeCreator() {
+  public SymbolTable buildKnownSymbolTable() {
+  public Scope getTopScope() {
+  public ReverseAbstractInterpreter getReverseAbstractInterpreter() {
+  public Node parse(SourceFile file) {
+  protected CompilerOptions newCompilerOptions() {
+  public String toSource() {
+      public String call() throws Exception {
+  public String[] toSourceArray() {
+      public String[] call() throws Exception {
+  public String toSource(final JSModule module) {
+      public String call() throws Exception {
+  public String[] toSourceArray(final JSModule module) {
+      public String[] call() throws Exception {
+  public void toSource(final CodeBuilder cb,
+      public Void call() throws Exception {
+  public static class CodeBuilder {
+    public String toString() {
+    public int getLength() {
+  public void optimize() {
+  public void processDefines() {
+  public void normalize() {
+  protected final RecentChange recentChange = new RecentChange();
+  public void re
+
+RELATED API DECLARATIONS (bodies omitted): CompilerOptions.java
+package com.google.javascript.jscomp;
+import com.google.common.base.Preconditions;
+import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.common.collect.Multimap;
+import com.google.javascript.rhino.IR;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.SourcePosition;
+import java.io.Serializable;
+import java.nio.charset.Charset;
+import java.text.ParseException;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+public class CompilerOptions implements Serializable, Cloneable {
+  public enum Reach {
+  public boolean ideMode;
+  public transient MessageBundle messageBundle = null;
+  public boolean checkSymbols;
+  public CheckLevel aggressiveVarCheck;
+  public void setAggressiveVarCheck(CheckLevel level) {
+  public boolean checkSuspiciousCode;
+  public boolean checkControlStructures;
+  public boolean checkTypes;
+  public void setTightenTypes(boolean tighten) {
+  public CheckLevel reportMissingOverride;
+  public void setReportMissingOverride(CheckLevel level) {
+  public CheckLevel checkRequires;
+  public void setCheckRequires(CheckLevel level) {
+  public CheckLevel checkProvides;
+  public void setCheckProvides(CheckLevel level) {
+  public CheckLevel checkGlobalNamesLevel;
+  public void setCheckGlobalNamesLevel(CheckLevel level) {
+  public CheckLevel brokenClosureRequiresLevel;
+  public void setBrokenClosureRequiresLevel(CheckLevel level) {
+  public CheckLevel checkGlobalThisLevel;
+  public void setCheckGlobalThisLevel(CheckLevel level) {
+  public CheckLevel checkMissingGetCssNameLevel;
+  public void setCheckMissingGetCssNameLevel(CheckLevel level) {
+  public String checkMissingGetCssNameBlacklist;
+  public void setCheckCaja(boolean check) {
+  public void setCheckEventfulObjectDisposalPolicy(
+  public CheckEventfulObjectDisposal.DisposalCheckingPolicy getCheckEventfulObjectDisposalPolicy() {
+  public boolean foldConstants;
+  public boolean deadAssignmentElimination;
+  public boolean inlineConstantVars;
+  public boolean inlineFunctions;
+  public boolean inlineLocalFunctions;
+  public boolean crossModuleCodeMotion;
+  public boolean coalesceVariableNames;
+  public boolean crossModuleMethodMotion;
+  public boolean inlineGetters;
+  public boolean inlineVariables;
+  public boolean flowSensitiveInlineVariables;
+  public boolean smartNameRemoval;
+  public boolean removeDeadCode;
+  public CheckLevel checkUnreachableCode;
+  public void setCheckUnreachableCode(CheckLevel level) {
+  public CheckLevel checkMissingReturn;
+  public void setCheckMissingReturn(CheckLevel level) {
+  public boolean extractPrototypeMemberDeclarations;
+  public boolean removeUnusedPrototypeProperties;
+  public boolean removeUnusedPrototypePropertiesInExterns;
+  public boolean removeUnusedClassProperties;
+  public boolean removeUnusedVars;
+  public boolean removeUnusedLocalVars;
+  public boolean aliasExternals;
+  public void setAliasableGlobals(String names) {
+  public void setUnaliasableGlobals(String names) {
+  public boolean collapseVariableDeclarations;
+  public boolean collapseAnonymousFunctions;
+  public Set<String> aliasableStrings;
+  public String aliasStringsBlacklist;
+  public boolean aliasAllStrings;
+  public boolean convertToDottedProperties;
+  public boolean rewriteFunctionExpressions;
+  public boolean optimizeParameters;
+  public boolean optimizeReturns;
+  public boolean optimizeCalls;
+  public boolean optimizeArgumentsArray;
+  public VariableRenamingPolicy variableRenaming;
+  public PropertyRenamingPolicy propertyRenaming;
+  public boolean labelRenaming;
+  public boolean reserveRawExports;
+  public boolean generatePseudoNames;
+  public String renamePrefix;
+  public String renamePrefixNamespace;
+  public boolean aliasKeywords;
+  public boolean collapseProperties;
+  public void setCollapseObjectLiterals(boolean enabled) {
+  public boolean devirtualizePrototypeMethods;
+  public boolean computeFunctionSideEffects;
+  public boolean disambiguateProperties;
+  public boolean ambiguateProperties;
+  public AnonymousFunctionNamingPolicy anonymousFunctionNaming;
+  public boolean exportTestFunctions;
+  public void setSpecializeInitialModule(boolean enabled) {
+  public void setReplaceMessagesWithChromeI18n(
+  public void setIgnoreCajaProperties(boolean enabled) {
+  public String syntheticBlockStartMarker;
+  public String syntheticBlockEndMarker;
+  public String locale;
+  public boolean markAsCompiled;
+  public boolean removeTryCatchFinally;
+  public boolean closurePass;
+  public boolean jqueryPass;
+  public boolean gatherCssNames;
+  public Set<String> stripTypes;
+  public Set<String> stripNameSuffixes;
+  public Set<String> stripNamePrefixes;
+  public Set<String> stripTypePrefixes;
+  public transient
+  public boolean markNoSideEffectCalls;
+  public boolean moveFunctionDeclarations;
+  public String instrumentationTemplate;
+  public void setAppNameStr
+
+RELATED API DECLARATIONS (bodies omitted): CompilationLevel.java
+package com.google.javascript.jscomp;
+import com.google.javascript.jscomp.CompilerOptions.Reach;
+public enum CompilationLevel {
+  public void setOptionsForCompilationLevel(CompilerOptions options) {
+  public void setDebugOptionsForCompilationLevel(CompilerOptions options) {
+  public void setTypeBasedOptimizationOptions(CompilerOptions options) {
+
+RELATED API DECLARATIONS (bodies omitted): SourceFile.java
+package com.google.javascript.jscomp;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Charsets;
+import com.google.common.io.CharStreams;
+import com.google.common.io.Files;
+import com.google.javascript.rhino.jstype.StaticSourceFile;
+import java.io.File;
+import java.io.FileReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.Reader;
+import java.io.Serializable;
+import java.io.StringReader;
+import java.nio.charset.Charset;
+import java.util.Arrays;
+public class SourceFile implements StaticSourceFile, Serializable {
+  public interface Generator {
+    public String getCode();
+  public SourceFile(String fileName) {
+  public int getLineOffset(int lineno) {
+  public String getCode() throws IOException {
+  public Reader getCodeReader() throws IOException {
+  public String getOriginalPath() {
+  public void setOriginalPath(String originalPath) {
+  public void clearCachedSource() {
+  public String getName() {
+  public boolean isExtern() {
+  public int getLineOfOffset(int offset) {
+  public int getColumnOfOffset(int offset) {
+  public String getLine(int lineNumber) {
+  public Region getRegion(int lineNumber) {
+  public String toString() {
+  public static SourceFile fromFile(String fileName, Charset c) {
+  public static SourceFile fromFile(String fileName) {
+  public static SourceFile fromFile(File file, Charset c) {
+  public static SourceFile fromFile(File file) {
+  public static SourceFile fromCode(String fileName, String code) {
+  public static SourceFile fromCode(String fileName,
+  public static SourceFile fromInputStream(String fileName, InputStream s)
+  public static SourceFile fromInputStream(String fileName,
+  public static SourceFile fromReader(String fileName, Reader r)
+  public static SourceFile fromGenerator(String fileName,
+  public static Builder builder() {
+  public static class Builder {
+    public Builder() {}
+    public Builder withCharset(Charset charset) {
+    public Builder withOriginalPath(String originalPath) {
+    public SourceFile buildFromFile(String fileName) {
+    public SourceFile buildFromFile(File file) {
+    public SourceFile buildFromCode(String fileName, String code) {
+    public SourceFile buildFromInputStream(String fileName, InputStream s)
+    public SourceFile buildFromReader(String fileName, Reader r)
+    public SourceFile buildFromGenerator(String fileName,
+    Preloaded(String fileName, String originalPath, String code) {
+    Generated(String fileName, String originalPath, Generator generator) {
+    public synchronized String getCode() throws IOException {
+    public void clearCachedSource() {
+    OnDisk(File file, String originalPath, Charset c) {
+    public synchronized String getCode() throws IOException {
+    public Reader getCodeReader() throws IOException {
+    public void clearCachedSource() {
+    public void setCharset(Charset c) {
+    public Charset getCharset() {
+
+RELATED API DECLARATIONS (bodies omitted): JSSourceFile.java
+package com.google.javascript.jscomp;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Charsets;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.Serializable;
+import java.nio.charset.Charset;
+public class JSSourceFile extends SourceFile implements Serializable {
+  public static JSSourceFile fromFile(String fileName, Charset charSet) {
+  public static JSSourceFile fromFile(String fileName) {
+  public static JSSourceFile fromFile(File file, Charset charSet) {
+  public static JSSourceFile fromFile(File file) {
+  public static JSSourceFile fromCode(String fileName, String code) {
+  public static JSSourceFile fromInputStream(String fileName, InputStream s)
+  public static JSSourceFile fromGenerator(String fileName,
+  public String getCode() throws IOException {
+  public void clearCachedSource() {
+
+RELATED API DECLARATIONS (bodies omitted): Result.java
+package com.google.javascript.jscomp;
+import java.util.Map;
+public class Result {
+  public final boolean success;
+  public final JSError[] errors;
+  public final JSError[] warnings;
+  public final String debugLog;
+  public final VariableMap variableMap;
+  public final VariableMap propertyMap;
+  public final VariableMap namedAnonFunctionMap;
+  public final VariableMap stringMap;
+  public final FunctionInformationMap functionInformationMap;
+  public final SourceMap sourceMap;
+  public final Map<String, Integer> cssNames;
+  public final String externExport;
+  public final String idGeneratorMap;
+  Result(JSError[] errors, JSError[] warnings, String debugLog,
+  public Result(JSError[] errors, JSError[] warnings, String debugLog,

@@ -1,0 +1,761 @@
+You are a Java unit test engineer. Generate ONE complete JUnit 4 test file
+for the production class and source context supplied.
+
+Requirements:
+- Use the exact requested package and public test class name.
+- Use JUnit 4 and Java 7 syntax. Do not use JUnit 5, Mockito, or new dependencies.
+- Write at most 3 concise test methods. Focus on useful observable behavior,
+  boundaries, and relevant branches. Avoid repetitive tests and unnecessary helpers.
+- Use only APIs shown in the supplied source context.
+- Tests must compile and pass on the supplied fixed version.
+- When supported by the available evidence, make a test fail on the buggy
+  version and pass on the fixed version. Do not invent bug behavior.
+- Do not copy or modify production code. Do not use @Ignore or weaken assertions.
+- Return the entire Java file only. No prose, no Markdown fences, and no
+  ellipses or omitted sections.
+
+Production class: com.google.javascript.jscomp.FunctionRewriter
+Required test class: com.google.javascript.jscomp.FunctionRewriterAI55Test
+
+TARGET SOURCE: com.google.javascript.jscomp.FunctionRewriter
+/*
+ * Copyright 2009 The Closure Compiler Authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package com.google.javascript.jscomp;
+
+import com.google.common.collect.HashMultimap;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Multimap;
+import com.google.javascript.jscomp.NodeTraversal.Callback;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+
+import java.util.Collection;
+import java.util.List;
+
+/**
+ * Reduces the size of common function expressions.
+ *
+ * This pass will rewrite:
+ *
+ * C.prototype.getA = function() { return this.a_ };
+ * C.prototype.setA = function(newValue) { this.a_ = newValue };
+ *
+ * as:
+ *
+ * C.prototype.getA = JSCompiler_get("a_);
+ * C.prototype.setA = JSCompiler_set("a_);
+ *
+ * if by doing so we will save bytes, after the helper functions are
+ * added and renaming is done.
+ *
+ */
+class FunctionRewriter implements CompilerPass {
+  private final AbstractCompiler compiler;
+  // Safety margin used to avoid growing simple programs by a few bytes.
+  // Selected arbitrarily.
+  private static final int SAVINGS_THRESHOLD = 16;
+
+  FunctionRewriter(AbstractCompiler compiler) {
+    this.compiler = compiler;
+  }
+
+  @Override
+  public void process(Node externs, Node root) {
+    List<Reducer> reducers = ImmutableList.of(new ReturnConstantReducer(),
+                                              new GetterReducer(),
+                                              new SetterReducer(),
+                                              new EmptyFunctionReducer(),
+                                              new IdentityReducer());
+
+    Multimap<Reducer, Reduction> reductionMap = HashMultimap.create();
+
+    // Accumulate possible reductions in the reduction multi map.  They
+    // will be applied in the loop below.
+    NodeTraversal.traverse(compiler, root,
+                           new ReductionGatherer(reducers, reductionMap));
+
+    // Apply reductions iff they will provide some savings.
+    for (Reducer reducer : reducers) {
+      Collection<Reduction> reductions = reductionMap.get(reducer);
+      if (reductions.isEmpty()) {
+        continue;
+      }
+
+      Node helperCode = parseHelperCode(reducer);
+      if (helperCode == null) {
+        continue;
+      }
+
+      int helperCodeCost = InlineCostEstimator.getCost(helperCode);
+
+      // Estimate savings
+      int savings = 0;
+      for (Reduction reduction : reductions) {
+        savings += reduction.estimateSavings();
+      }
+
+      // Compare estimated savings against the helper cost.  Apply
+      // reductions if doing so will result in some savings.
+      if (savings > (helperCodeCost + SAVINGS_THRESHOLD)) {
+        for (Reduction reduction : reductions) {
+          reduction.apply();
+        }
+
+        Node addingRoot = compiler.getNodeForCodeInsertion(null);
+        addingRoot.addChildrenToFront(helperCode);
+        compiler.reportCodeChange();
+      }
+    }
+  }
+
+  /**
+   * Parse helper code needed by a reducer.
+   *
+   * @return Helper code root.  If parse fails, return null.
+   */
+  public Node parseHelperCode(Reducer reducer) {
+    Node root = compiler.parseSyntheticCode(
+        reducer.getClass().toString() + ":helper", reducer.getHelperSource());
+    return (root != null) ? root.removeFirstChild() : null;
+  }
+
+  private static boolean isReduceableFunctionExpression(Node n) {
+    return NodeUtil.isFunctionExpression(n)
+        && !NodeUtil.isGetOrSetKey(n.getParent());
+  }
+
+  /**
+   * Information needed to apply a reduction.
+   */
+  private class Reduction {
+    private final Node parent;
+    private final Node oldChild;
+    private final Node newChild;
+
+    Reduction(Node parent, Node oldChild, Node newChild) {
+      this.parent = parent;
+      this.oldChild = oldChild;
+      this.newChild = newChild;
+    }
+
+    /**
+     * Apply the reduction by replacing the old child with the new child.
+     */
+    void apply() {
+      parent.replaceChild(oldChild, newChild);
+      compiler.reportCodeChange();
+    }
+
+    /**
+     * Estimate number of bytes saved by applying this reduction.
+     */
+    int estimateSavings() {
+      return InlineCostEstimator.getCost(oldChild) -
+          InlineCostEstimator.getCost(newChild);
+    }
+  }
+
+  /**
+   * Gathers a list of reductions to apply later by doing an in-order
+   * AST traversal.  If a suitable reduction is found, stop traversal
+   * in that branch.
+   */
+  private class ReductionGatherer implements Callback {
+    private final List<Reducer> reducers;
+    private final Multimap<Reducer, Reduction> reductions;
+
+    /**
+     * @param reducers List of reducers to apply during traversal.
+     * @param reductions Reducer -> Reduction multimap,
+     *                   populated during traversal.
+     */
+    ReductionGatherer(List<Reducer> reducers,
+                      Multimap<Reducer, Reduction> reductions) {
+      this.reducers = reducers;
+      this.reductions = reductions;
+    }
+
+    @Override
+    public boolean shouldTraverse(NodeTraversal raversal,
+                                  Node node,
+                                  Node parent) {
+      for (Reducer reducer : reducers) {
+        Node replacement = reducer.reduce(node);
+        if (replacement != node) {
+          reductions.put(reducer, new Reduction(parent, node, replacement));
+          return false;
+        }
+      }
+      return true;
+    }
+
+
+    @Override
+    public void visit(NodeTraversal traversal, Node node, Node parent) {
+    }
+  }
+
+  /**
+ 
+/* SOURCE MIDDLE OMITTED: context limit */
+Name(value) &&
+          value.getString().equals(paramNode.getString())) {
+        return true;
+      }
+      return false;
+    }
+  }
+
+  /**
+   * Reduces return immutable constant literal methods declarations
+   * with calls to a constant return method factory.
+   *
+   * Example:
+   *   a.prototype.b = function() {return 10}
+   * is reduced to:
+   *   a.prototype.b = returnconst(10);
+   */
+  private static class ReturnConstantReducer
+      extends SingleReturnStatementReducer {
+    static final String FACTORY_METHOD_NAME = "JSCompiler_returnArg";
+    static final String HELPER_SOURCE =
+        "function " + FACTORY_METHOD_NAME +
+        "(" + FACTORY_METHOD_NAME + "_value) {" +
+        "  return function() {return " + FACTORY_METHOD_NAME + "_value}" +
+        "}";
+
+    @Override
+    public String getHelperSource() {
+      return HELPER_SOURCE;
+    }
+
+    @Override
+    public Node reduce(Node node) {
+      if (!isReduceableFunctionExpression(node)) {
+        return node;
+      }
+
+      Node valueNode = getValueNode(node);
+      if (valueNode != null) {
+        return buildCallNode(FACTORY_METHOD_NAME, valueNode,
+                             node.getLineno(), node.getCharno());
+      } else {
+        return node;
+      }
+    }
+
+    /**
+     * Checks if the function matches the pattern:
+     *   function(<args>) {return <immutable value>}
+     * and returns <immutable value> if a match is found.
+     *
+     * @return the immutable value node; or null.
+     */
+    private Node getValueNode(Node functionNode) {
+      Node value = maybeGetSingleReturnRValue(functionNode);
+      if (value != null &&
+          NodeUtil.isImmutableValue(value)) {
+        return value;
+      }
+      return null;
+    }
+  }
+
+  /**
+   * Reduces property getter method declarations with calls to a
+   * getter method factory.
+   *
+   * Example:
+   *   a.prototype.b = function() {return this.b_}
+   * is reduced to:
+   *   a.prototype.b = getter("b_");
+   */
+  private static class GetterReducer extends SingleReturnStatementReducer {
+    static final String FACTORY_METHOD_NAME = "JSCompiler_get";
+    static final String HELPER_SOURCE =
+        "function " + FACTORY_METHOD_NAME + "(" +
+        FACTORY_METHOD_NAME + "_name) {" +
+        "  return function() {return this[" + FACTORY_METHOD_NAME + "_name]}" +
+        "}";
+
+    @Override
+    public String getHelperSource() {
+      return HELPER_SOURCE;
+    }
+
+    @Override
+    public Node reduce(Node node) {
+      if (!isReduceableFunctionExpression(node)) {
+        return node;
+      }
+
+      Node propName = getGetPropertyName(node);
+      if (propName != null) {
+        if (propName.getType() != Token.STRING) {
+          throw new IllegalStateException(
+              "Expected STRING, got " + Token.name(propName.getType()));
+        }
+
+        return buildCallNode(FACTORY_METHOD_NAME, propName,
+                             node.getLineno(), node.getCharno());
+      } else {
+        return node;
+      }
+    }
+
+    /**
+     * Checks if the function matches the pattern:
+     *   function(<args>) {return this.<name>}
+     * and returns <name> if a match is found.
+     *
+     * @return STRING node that is the rhs of a this property get; or null.
+     */
+    private Node getGetPropertyName(Node functionNode) {
+      Node value = maybeGetSingleReturnRValue(functionNode);
+      if (value != null &&
+          NodeUtil.isGetProp(value) &&
+          NodeUtil.isThis(value.getFirstChild())) {
+        return value.getLastChild();
+      }
+      return null;
+    }
+  }
+
+  /**
+   * Reduces property setter method declarations with calls to a
+   * setter method factory.
+   *
+   * Example:
+   *   a.prototype.setB = function(value) {this.b_ = value}
+   * reduces to:
+   *   a.prototype.setB = getter("b_");
+   */
+  private static class SetterReducer extends Reducer {
+    static final String FACTORY_METHOD_NAME = "JSCompiler_set";
+    static final String HELPER_SOURCE =
+        "function " + FACTORY_METHOD_NAME + "(" +
+        FACTORY_METHOD_NAME + "_name) {" +
+        "  return function(" + FACTORY_METHOD_NAME + "_value) {" +
+        "this[" + FACTORY_METHOD_NAME + "_name] = " +
+        FACTORY_METHOD_NAME + "_value}" +
+        "}";
+
+    @Override
+    public String getHelperSource() {
+      return HELPER_SOURCE;
+    }
+
+    @Override
+    public Node reduce(Node node) {
+      if (!isReduceableFunctionExpression(node)) {
+        return node;
+      }
+
+      Node propName = getSetPropertyName(node);
+      if (propName != null) {
+        if (propName.getType() != Token.STRING) {
+          throw new IllegalStateException(
+              "Expected STRING, got " + Token.name(propName.getType()));
+        }
+
+        return buildCallNode(FACTORY_METHOD_NAME, propName,
+                             node.getLineno(), node.getCharno());
+      } else {
+        return node;
+      }
+    }
+
+    /**
+     * Checks if the function matches the pattern:
+     *   function(<value>, <rest>) {this.<name> = <value>}
+     * and returns <name> if a match is found.
+     *
+     * @return STRING node that is the rhs of a this property get; or null.
+     */
+    private Node getSetPropertyName(Node functionNode) {
+      Node body = functionNode.getLastChild();
+      if (!body.hasOneChild()) {
+        return null;
+      }
+
+      Node argList = functionNode.getFirstChild().getNext();
+      Node paramNode = argList.getFirstChild();
+      if (paramNode == null) {
+        return null;
+      }
+
+      Node statement = body.getFirstChild();
+      if (!NodeUtil.isExprAssign(statement)) {
+        return null;
+      }
+
+      Node assign = statement.getFirstChild();
+      Node lhs = assign.getFirstChild();
+      if (NodeUtil.isGetProp(lhs) && NodeUtil.isThis(lhs.getFirstChild())) {
+        Node rhs = assign.getLastChild();
+        if (NodeUtil.isName(rhs) &&
+            rhs.getString().equals(paramNode.getString())) {
+          Node propertyName = lhs.getLastChild();
+          return propertyName;
+        }
+      }
+      return null;
+    }
+  }
+}
+
+
+RELATED API DECLARATIONS (bodies omitted): Compiler.java
+package com.google.javascript.jscomp;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Supplier;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.javascript.jscomp.CompilerOptions.DevMode;
+import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
+import com.google.javascript.jscomp.CompilerOptions.TracerMode;
+import com.google.javascript.jscomp.ReferenceCollectingCallback.ReferenceCollection;
+import com.google.javascript.jscomp.ReferenceCollectingCallback.ReferenceMap;
+import com.google.javascript.jscomp.Scope.Var;
+import com.google.javascript.jscomp.deps.SortedDependencies.CircularDependencyException;
+import com.google.javascript.jscomp.deps.SortedDependencies.MissingProvideException;
+import com.google.javascript.jscomp.mozilla.rhino.ErrorReporter;
+import com.google.javascript.jscomp.parsing.Config;
+import com.google.javascript.jscomp.parsing.ParserRunner;
+import com.google.javascript.rhino.InputId;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.jstype.JSTypeRegistry;
+import java.io.IOException;
+import java.io.PrintStream;
+import java.io.Serializable;
+import java.nio.charset.Charset;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import java.util.regex.Matcher;
+public class Compiler extends AbstractCompiler {
+  public PerformanceTracker tracker;
+  public static final DiagnosticType OPTIMIZE_LOOP_ERROR = DiagnosticType.error(
+  public static final DiagnosticType MOTION_ITERATIONS_ERROR =
+  public Compiler() {
+  public Compiler(PrintStream stream) {
+  public Compiler(ErrorManager errorManager) {
+  public void setErrorManager(ErrorManager errorManager) {
+  public void initOptions(CompilerOptions options) {
+  public void init(JSSourceFile[] externs, JSSourceFile[] inputs,
+  public void init(List<JSSourceFile> externs, List<JSSourceFile> inputs,
+  public void init(JSSourceFile[] externs, JSModule[] modules,
+  public void initModules(
+  public void rebuildInputsFromModules() {
+  public Result compile(
+  public Result compile(
+  public Result compile(
+  public Result compile(JSSourceFile[] externs,
+  public Result compile(List<JSSourceFile> externs,
+  public Result compile(JSSourceFile[] externs,
+  public Result compileModules(List<JSSourceFile> externs,
+      public Result call() throws Exception {
+  public void disableThreads() {
+      public void run() {
+  public void parse() {
+  public void setPassConfig(PassConfig passes) {
+  public void check() {
+    protected CompilerPass createInternal(AbstractCompiler compiler) {
+  public Result getResult() {
+  public JSError[] getMessages() {
+  public JSError[] getErrors() {
+  public JSError[] getWarnings() {
+  public Node getRoot() {
+      public String get() {
+  public CompilerInput getInput(InputId id) {
+  protected void removeExternInput(InputId id) {
+  public CompilerInput newExternInput(String name) {
+  public JSTypeRegistry getTypeRegistry() {
+  public SymbolTable buildKnownSymbolTable() {
+  public Scope getTopScope() {
+  public ReverseAbstractInterpreter getReverseAbstractInterpreter() {
+  public Node parse(JSSourceFile file) {
+  public String toSource() {
+      public String call() throws Exception {
+  public String[] toSourceArray() {
+      public String[] call() throws Exception {
+  public String toSource(final JSModule module) {
+      public String call() throws Exception {
+  public String[] toSourceArray(final JSModule module) {
+      public String[] call() throws Exception {
+  public void toSource(final CodeBuilder cb,
+      public Void call() throws Exception {
+  public static class CodeBuilder {
+    public String toString() {
+    public int getLength() {
+  public void optimize() {
+  public void processDefines() {
+  public void normalize() {
+  protected final CodeChangeHandler.RecentChange recentChange =
+  public void reportCodeChange() {
+  public CodingConvention getCodingConvention() {
+  public boolean isIdeMode() {
+  public boolean acceptEcmaScript5() {
+  public LanguageMode languageMode() {
+  public boolean acceptConstKeyword() {
+  public boolean isTypeCheckingEnabled() {
+  protected DiagnosticGroups getDiagnosticGroups() {
+  public void report(JSError error) {
+  public CheckLevel getErrorLevel(JSError error) {
+  public int getErrorCount() {
+  public int getWarningCount() {
+  public boolean hasErrors() {
+  public String getSourceLine(String sourceName, int lineNumber) {
+  public Region getSourceRegion(String sourceName, int lineNumber) {
+  public SourceMap getSourceMap() {
+  public static void setLoggingLevel(Level level) {
+  public String getAstDotGraph() throws IOException {
+  public ErrorManager getErrorManager() {
+  publi
+
+RELATED API DECLARATIONS (bodies omitted): CompilerOptions.java
+package com.google.javascript.jscomp;
+import com.google.common.base.Preconditions;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.common.collect.Multimap;
+import com.google.common.collect.Sets;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.SourcePosition;
+import com.google.javascript.rhino.Token;
+import java.io.Serializable;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+public class CompilerOptions implements Serializable, Cloneable {
+  public enum Reach {
+  public boolean ideMode;
+  public transient MessageBundle messageBundle = null;
+  public boolean checkSymbols;
+  public CheckLevel checkShadowVars;
+  public void setCheckShadowVars(CheckLevel level) {
+  public CheckLevel aggressiveVarCheck;
+  public void setAggressiveVarCheck(CheckLevel level) {
+  public CheckLevel checkFunctions;
+  public void setCheckFunctions(CheckLevel level) {
+  public CheckLevel checkMethods;
+  public void setCheckMethods(CheckLevel level) {
+  public boolean checkDuplicateMessages;
+  public boolean allowLegacyJsMessages;
+  public boolean strictMessageReplacement;
+  public boolean checkSuspiciousCode;
+  public boolean checkControlStructures;
+  public boolean checkTypes;
+  public boolean tightenTypes;
+  public boolean inferTypesInGlobalScope;
+  public boolean checkTypedPropertyCalls;
+  public CheckLevel reportMissingOverride;
+  public void setReportMissingOverride(CheckLevel level) {
+  public CheckLevel reportUnknownTypes;
+  public void setReportUnknownTypes(CheckLevel level) {
+  public CheckLevel checkRequires;
+  public void setCheckRequires(CheckLevel level) {
+  public CheckLevel checkProvides;
+  public void setCheckProvides(CheckLevel level) {
+  public CheckLevel checkGlobalNamesLevel;
+  public void setCheckGlobalNamesLevel(CheckLevel level) {
+  public CheckLevel brokenClosureRequiresLevel;
+  public void setBrokenClosureRequiresLevel(CheckLevel level) {
+  public CheckLevel checkGlobalThisLevel;
+  public void setCheckGlobalThisLevel(CheckLevel level) {
+  public CheckLevel checkMissingGetCssNameLevel;
+  public void setCheckMissingGetCssNameLevel(CheckLevel level) {
+  public String checkMissingGetCssNameBlacklist;
+  public boolean checkEs5Strict;
+  public boolean checkCaja;
+  public boolean foldConstants;
+  public boolean deadAssignmentElimination;
+  public boolean inlineConstantVars;
+  public boolean inlineFunctions;
+  public boolean inlineLocalFunctions;
+  public boolean crossModuleCodeMotion;
+  public boolean coalesceVariableNames;
+  public boolean crossModuleMethodMotion;
+  public boolean inlineGetters;
+  public boolean inlineVariables;
+  public boolean inlineLocalVariables;
+  public boolean flowSensitiveInlineVariables;
+  public boolean smartNameRemoval;
+  public boolean removeDeadCode;
+  public CheckLevel checkUnreachableCode;
+  public void setCheckUnreachableCode(CheckLevel level) {
+  public CheckLevel checkMissingReturn;
+  public void setCheckMissingReturn(CheckLevel level) {
+  public boolean extractPrototypeMemberDeclarations;
+  public boolean removeEmptyFunctions;
+  public boolean removeUnusedPrototypeProperties;
+  public boolean removeUnusedPrototypePropertiesInExterns;
+  public boolean removeUnusedVars;
+  public boolean removeUnusedLocalVars;
+  public boolean aliasExternals;
+  public String aliasableGlobals;
+  public String unaliasableGlobals;
+  public boolean collapseVariableDeclarations;
+  public boolean groupVariableDeclarations;
+  public boolean collapseAnonymousFunctions;
+  public Set<String> aliasableStrings;
+  public String aliasStringsBlacklist;
+  public boolean aliasAllStrings;
+  public boolean convertToDottedProperties;
+  public boolean rewriteFunctionExpressions;
+  public boolean optimizeParameters;
+  public boolean optimizeReturns;
+  public boolean optimizeCalls;
+  public boolean optimizeArgumentsArray;
+  public VariableRenamingPolicy variableRenaming;
+  public PropertyRenamingPolicy propertyRenaming;
+  public boolean labelRenaming;
+  public boolean reserveRawExports;
+  public boolean generatePseudoNames;
+  public String renamePrefix;
+  public boolean aliasKeywords;
+  public boolean collapseProperties;
+  public boolean collapseObjectLiterals;
+  public boolean devirtualizePrototypeMethods;
+  public boolean computeFunctionSideEffects;
+  public String debugFunctionSideEffectsPath;
+  public boolean disambiguateProperties;
+  public boolean ambiguateProperties;
+  public AnonymousFunctionNamingPolicy anonymousFunctionNaming;
+  public byte[] inputVariableMapSerialized;
+  public byte[] inputPropertyMapSerialized;
+  public boolean exportTestFunctions;
+  public boolean specializeInitialModule;
+  public boolean instrumentForCoverage;
+  public boolean instrumentForCoverageOnly;
+  public boolean ignoreCajaProperties;
+  public String syntheticBlockStartMarker;
+  public String syntheticBlockEndMarker;
+  public String locale;
+  public boolean markAsCo
+
+RELATED API DECLARATIONS (bodies omitted): CompilationLevel.java
+package com.google.javascript.jscomp;
+import com.google.javascript.jscomp.CompilerOptions.Reach;
+public enum CompilationLevel {
+  public void setOptionsForCompilationLevel(CompilerOptions options) {
+  public void setDebugOptionsForCompilationLevel(CompilerOptions options) {
+
+RELATED API DECLARATIONS (bodies omitted): SourceFile.java
+package com.google.javascript.jscomp;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Charsets;
+import com.google.common.io.CharStreams;
+import com.google.common.io.Files;
+import com.google.javascript.rhino.jstype.StaticSourceFile;
+import java.io.File;
+import java.io.FileReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.Reader;
+import java.io.Serializable;
+import java.io.StringReader;
+import java.nio.charset.Charset;
+public class SourceFile implements StaticSourceFile, Serializable {
+  public interface Generator {
+    public String getCode();
+  public SourceFile(String fileName) {
+  public int getLineOffset(int lineno) {
+  public String getCode() throws IOException {
+  public Reader getCodeReader() throws IOException {
+  public String getOriginalPath() {
+  public void setOriginalPath(String originalPath) {
+  public void clearCachedSource() {
+  public String getName() {
+  public boolean isExtern() {
+  public String getLine(int lineNumber) {
+  public Region getRegion(int lineNumber) {
+  public String toString() {
+  public static SourceFile fromFile(String fileName, Charset c) {
+  public static SourceFile fromFile(String fileName) {
+  public static SourceFile fromFile(File file, Charset c) {
+  public static SourceFile fromFile(File file) {
+  public static SourceFile fromCode(String fileName, String code) {
+  public static SourceFile fromCode(String fileName,
+  public static SourceFile fromInputStream(String fileName, InputStream s)
+  public static SourceFile fromInputStream(String fileName,
+  public static SourceFile fromReader(String fileName, Reader r)
+  public static SourceFile fromGenerator(String fileName,
+    Preloaded(String fileName, String code) {
+    Preloaded(String fileName, String originalPath, String code) {
+    Generated(String fileName, Generator generator) {
+    public synchronized String getCode() throws IOException {
+    public void clearCachedSource() {
+    protected String inputCharset = Charsets.UTF_8.name();
+    OnDisk(File file, Charset c) {
+    OnDisk(File file) {
+    public synchronized String getCode() throws IOException {
+    public Reader getCodeReader() throws IOException {
+    public void clearCachedSource() {
+    public void setCharset(Charset c) {
+    public Charset getCharset() {
+
+RELATED API DECLARATIONS (bodies omitted): JSSourceFile.java
+package com.google.javascript.jscomp;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Charsets;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.Serializable;
+import java.nio.charset.Charset;
+public class JSSourceFile extends SourceFile implements Serializable {
+  public static JSSourceFile fromFile(String fileName, Charset charSet) {
+  public static JSSourceFile fromFile(String fileName) {
+  public static JSSourceFile fromFile(File file, Charset charSet) {
+  public static JSSourceFile fromFile(File file) {
+  public static JSSourceFile fromCode(String fileName, String code) {
+  public static JSSourceFile fromInputStream(String fileName, InputStream s)
+  public static JSSourceFile fromGenerator(String fileName,
+  public String getCode() throws IOException {
+  public void clearCachedSource() {
+
+RELATED API DECLARATIONS (bodies omitted): Result.java
+package com.google.javascript.jscomp;
+import java.util.Map;
+public class Result {
+  public final boolean success;
+  public final JSError[] errors;
+  public final JSError[] warnings;
+  public final String debugLog;
+  public final VariableMap variableMap;
+  public final VariableMap propertyMap;
+  public final VariableMap namedAnonFunctionMap;
+  public final VariableMap stringMap;
+  public final FunctionInformationMap functionInformationMap;
+  public final SourceMap sourceMap;
+  public final Map<String, Integer> cssNames;
+  public final String externExport;
+  public final String idGeneratorMap;
+  Result(JSError[] errors, JSError[] warnings, String debugLog,
+  public Result(JSError[] errors, JSError[] warnings, String debugLog,
