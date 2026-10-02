@@ -227,20 +227,34 @@ print(name.replace(".", "/") + ".java")
 PY2
 )"
 
-BUGGY_SOURCE="$BUGGY_DIR/src/main/java/$SOURCE_RELATIVE_PATH"
-FIXED_SOURCE="$FIXED_DIR/src/main/java/$SOURCE_RELATIVE_PATH"
+BUGGY_SOURCE=""
+FIXED_SOURCE=""
 
-if [[ ! -f "$BUGGY_SOURCE" ]]; then
+# Defects4J projects may use either the modern Maven-style layout
+# (src/main/java) or the legacy layout (src/java).
+for SOURCE_ROOT in "src/main/java" "src/java"; do
+    if [[ -z "$BUGGY_SOURCE" && -f "$BUGGY_DIR/$SOURCE_ROOT/$SOURCE_RELATIVE_PATH" ]]; then
+        BUGGY_SOURCE="$BUGGY_DIR/$SOURCE_ROOT/$SOURCE_RELATIVE_PATH"
+    fi
+
+    if [[ -z "$FIXED_SOURCE" && -f "$FIXED_DIR/$SOURCE_ROOT/$SOURCE_RELATIVE_PATH" ]]; then
+        FIXED_SOURCE="$FIXED_DIR/$SOURCE_ROOT/$SOURCE_RELATIVE_PATH"
+    fi
+done
+
+# Final fallback: locate the source file anywhere under the checkout.
+if [[ -z "$BUGGY_SOURCE" ]]; then
     BUGGY_SOURCE="$(
-        find "$BUGGY_DIR/src/main/java"             -type f             -name "$(basename "$SOURCE_RELATIVE_PATH")"             -print             | head -1
+        find "$BUGGY_DIR" -type f             -name "$(basename "$SOURCE_RELATIVE_PATH")"             -print | head -1
     )"
 fi
 
-if [[ ! -f "$FIXED_SOURCE" ]]; then
+if [[ -z "$FIXED_SOURCE" ]]; then
     FIXED_SOURCE="$(
-        find "$FIXED_DIR/src/main/java"             -type f             -name "$(basename "$SOURCE_RELATIVE_PATH")"             -print             | head -1
+        find "$FIXED_DIR" -type f             -name "$(basename "$SOURCE_RELATIVE_PATH")"             -print | head -1
     )"
 fi
+
 
 echo ""
 echo "BUGGY source:"
