@@ -1,0 +1,476 @@
+#!/usr/bin/env python3
+
+import argparse
+import csv
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+
+PROJECT_ROOT = Path("/Users/fangfang/Documents/SQA_Project_2026")
+D4J = Path(
+    "/Users/fangfang/Documents/SQA_Project/defects4j/framework/bin/defects4j"
+)
+
+
+def load_metadata(metadata_file, project, bug_id):
+    with metadata_file.open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+
+    matches = [
+        row
+        for row in rows
+        if row["project"] == project
+        and row["bug_id"] == str(bug_id)
+    ]
+
+    if not matches:
+        raise ValueError(
+            f"Bug {project}-{bug_id} not found in {metadata_file}"
+        )
+
+    if len(matches) > 1:
+        raise ValueError(
+            f"Duplicate metadata rows for {project}-{bug_id}"
+        )
+
+    return matches[0], rows
+
+
+def normalize_trigger_tests(trigger_test):
+    """
+    Normalize Defects4J tests.trigger output.
+
+    Keep only actual Class::method trigger entries and
+    preserve their original order without duplicates.
+    """
+
+    if trigger_test is None:
+        return []
+
+    result = []
+    seen = set()
+
+    for line in str(trigger_test).splitlines():
+        line = line.strip()
+
+        if not line:
+            continue
+
+        if line.count("::") != 1:
+            continue
+
+        class_name, method_name = line.split("::", 1)
+
+        class_name = class_name.strip()
+        method_name = method_name.strip()
+
+        if not class_name or not method_name:
+            continue
+
+        normalized = f"{class_name}::{method_name}"
+
+        if normalized not in seen:
+            seen.add(normalized)
+            result.append(normalized)
+
+    return result
+
+
+def split_trigger(trigger):
+    if "::" not in trigger:
+        return trigger, ""
+
+    return trigger.split("::", 1)
+
+
+def load_config(project):
+    config_file = (
+        PROJECT_ROOT
+        / "automation"
+        / "config"
+        / f"{project}.env"
+    )
+
+    config = {}
+
+    if not config_file.is_file():
+        return config
+
+    for raw_line in config_file.read_text(
+        encoding="utf-8"
+    ).splitlines():
+
+        line = raw_line.strip()
+
+        if not line:
+            continue
+
+        if line.startswith("#"):
+            continue
+
+        if "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+
+        config[key] = (
+            value.strip()
+            .strip('"')
+            .strip("'")
+        )
+
+    return config
+
+
+def export_workspace(workspace):
+    result = {}
+
+    if not workspace.is_dir():
+        return result
+
+    properties = {
+        "src_classes": "dir.src.classes",
+        "src_tests": "dir.src.tests",
+        "modified_source": "classes.modified",
+        "trigger_test": "tests.trigger",
+    }
+
+    for key, prop in properties.items():
+
+        process = subprocess.run(
+            [
+                str(D4J),
+                "export",
+                "-p",
+                prop,
+                "-w",
+                str(workspace),
+            ],
+            text=True,
+            capture_output=True,
+        )
+
+        if process.returncode == 0:
+            result[key] = process.stdout.strip()
+
+    return result
+
+
+def build_context(project, bug_id):
+
+    metadata_file = (
+        PROJECT_ROOT
+        / "automation"
+        / "datasets"
+        / project
+        / "bugs.csv"
+    )
+
+    if not metadata_file.is_file():
+        raise ValueError(
+            f"Metadata file not found: {metadata_file}"
+        )
+
+    row, rows = load_metadata(
+        metadata_file,
+        project,
+        bug_id,
+    )
+
+    trigger_class, trigger_method = split_trigger(
+        row["trigger_test"]
+    )
+
+    config = load_config(project)
+
+    buggy_workspace = (
+        PROJECT_ROOT
+        / "workspaces"
+        / f"{project}-{bug_id}-buggy"
+    )
+
+    fixed_workspace = (
+        PROJECT_ROOT
+        / "workspaces"
+        / f"{project}-{bug_id}-fixed"
+    )
+
+    context = {
+        "dataset": row["project"],
+        "project_id": row["project"],
+
+        "bug_id": int(row["bug_id"]),
+        "bug_key": f'{row["project"]}-{row["bug_id"]}',
+
+        "status": row["status"],
+
+        "bug_report": row["bug_report"],
+        "fixed_revision": row["fixed_revision"],
+
+        "trigger_test": row["trigger_test"],
+        "trigger_class": trigger_class,
+        "trigger_method": trigger_method,
+
+        "modified_source": row["modified_source"],
+
+        "d4j_project": config.get(
+            "D4J_PROJECT",
+            row["project"],
+        ),
+
+        "test_framework": config.get(
+            "TEST_FRAMEWORK",
+            "JUnit 4.12",
+        ),
+
+        "seed": (
+            int(config["SEED"])
+            if config.get("SEED", "").isdigit()
+            else config.get("SEED")
+        ),
+
+        "buggy_workspace": str(
+            buggy_workspace
+        ),
+
+        "fixed_workspace": str(
+            fixed_workspace
+        ),
+
+        "buggy_exists": buggy_workspace.is_dir(),
+        "fixed_exists": fixed_workspace.is_dir(),
+
+        "metadata_file": str(
+            metadata_file
+        ),
+
+        "source_class_path": (
+            row["modified_source"]
+            .replace(".", "/")
+            + ".java"
+        ),
+
+        "src_classes": "src/main/java",
+        "src_tests": "src/test/java",
+
+        "dataset_row_count": len(rows),
+    }
+
+    buggy_export = export_workspace(
+        buggy_workspace
+    )
+
+    fixed_export = export_workspace(
+        fixed_workspace
+    )
+
+    context["buggy_export"] = buggy_export
+    context["fixed_export"] = fixed_export
+
+    errors = []
+
+    if row["status"] != "READY":
+        errors.append(
+            f'metadata status is {row["status"]}'
+        )
+
+    if not row["fixed_revision"]:
+        errors.append(
+            "missing fixed_revision"
+        )
+
+    if not row["trigger_test"]:
+        errors.append(
+            "missing trigger_test"
+        )
+
+    if not row["modified_source"]:
+        errors.append(
+            "missing modified_source"
+        )
+
+    if (
+        buggy_export.get("modified_source")
+        and buggy_export["modified_source"]
+        != row["modified_source"]
+    ):
+        errors.append(
+            "BUGGY classes.modified does not match metadata"
+        )
+
+    if (
+        fixed_export.get("modified_source")
+        and fixed_export["modified_source"]
+        != row["modified_source"]
+    ):
+        errors.append(
+            "FIXED classes.modified does not match metadata"
+        )
+
+    if (
+        buggy_export.get("trigger_test")
+        and buggy_export["trigger_test"]
+        != normalize_trigger_tests(
+            row["trigger_test"]
+        )
+    ):
+        errors.append(
+            "BUGGY tests.trigger does not match metadata"
+        )
+
+    if (
+        fixed_export.get("trigger_test")
+        and fixed_export["trigger_test"]
+        != normalize_trigger_tests(
+            row["trigger_test"]
+        )
+    ):
+        errors.append(
+            "FIXED tests.trigger does not match metadata"
+        )
+
+    context["validation"] = {
+        "ok": not errors,
+        "errors": errors,
+    }
+
+    return context
+
+
+def print_context(context):
+
+    print("=" * 64)
+    print(
+        f"BUG CONTEXT: {context['bug_key']}"
+    )
+    print("=" * 64)
+
+    fields = [
+        "status",
+        "bug_report",
+        "fixed_revision",
+        "trigger_test",
+        "trigger_class",
+        "trigger_method",
+        "modified_source",
+        "test_framework",
+        "buggy_workspace",
+        "fixed_workspace",
+        "buggy_exists",
+        "fixed_exists",
+    ]
+
+    for key in fields:
+        print(
+            f"{key:20}: {context[key]}"
+        )
+
+    print()
+
+    validation = context["validation"]
+
+    print(
+        "validation          : "
+        + (
+            "OK"
+            if validation["ok"]
+            else "ERROR"
+        )
+    )
+
+    for error in validation["errors"]:
+        print(f"  - {error}")
+
+    if context["buggy_export"]:
+
+        print()
+        print("BUGGY exports:")
+
+        for key, value in context[
+            "buggy_export"
+        ].items():
+
+            print(
+                f"  {key:18}: {value}"
+            )
+
+    if context["fixed_export"]:
+
+        print()
+        print("FIXED exports:")
+
+        for key, value in context[
+            "fixed_export"
+        ].items():
+
+            print(
+                f"  {key:18}: {value}"
+            )
+
+
+def main():
+
+    parser = argparse.ArgumentParser(
+        description="Load and validate Defects4J bug context"
+    )
+
+    parser.add_argument(
+        "project"
+    )
+
+    parser.add_argument(
+        "bug_id",
+        type=int
+    )
+
+    parser.add_argument(
+        "--json",
+        action="store_true"
+    )
+
+    args = parser.parse_args()
+
+    try:
+
+        context = build_context(
+            args.project,
+            args.bug_id,
+        )
+
+        if args.json:
+
+            print(
+                json.dumps(
+                    context,
+                    indent=2,
+                    ensure_ascii=False,
+                )
+            )
+
+        else:
+
+            print_context(context)
+
+        return (
+            0
+            if context["validation"]["ok"]
+            else 1
+        )
+
+    except (
+        ValueError,
+        OSError,
+    ) as error:
+
+        print(
+            f"ERROR: {error}",
+            file=sys.stderr,
+        )
+
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

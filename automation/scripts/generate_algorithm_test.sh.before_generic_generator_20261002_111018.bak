@@ -1,0 +1,240 @@
+#!/bin/zsh
+
+set -u
+
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+
+PROJECT="${1:-}"
+BUG="${2:-}"
+METHOD="${3:-}"
+ARTIFACT_DIR="${4:-}"
+
+if [[ -z "$PROJECT" || -z "$BUG" || -z "$METHOD" || -z "$ARTIFACT_DIR" ]]; then
+    echo "Usage:"
+    echo "  $0 <project> <bug> <method> <artifact_dir>"
+    exit 2
+fi
+
+case "$METHOD" in
+    SA|BPSO)
+        ;;
+    *)
+        echo "ERROR: Unsupported algorithm method: $METHOD"
+        exit 2
+        ;;
+esac
+
+mkdir -p "$ARTIFACT_DIR"
+
+GEN_ROOT="$ROOT/automation/scripts/generators"
+TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/sqa_generator.XXXXXX")"
+DRIVER="$TMP_ROOT/AlgorithmGeneratorDriver.java"
+
+cleanup() {
+    rm -rf "$TMP_ROOT"
+}
+
+trap cleanup EXIT
+
+cat > "$DRIVER" <<'JAVA'
+import generators.common.Candidate;
+import generators.common.CandidateProvider;
+import generators.lang.Lang5LocaleUtilsCandidateProvider;
+import generators.sa.SimulatedAnnealingEngine;
+import generators.bpso.BinaryParticleSwarmEngine;
+
+import java.io.File;
+import java.io.FileWriter;
+import java.util.List;
+
+public class AlgorithmGeneratorDriver {
+
+    public static void main(String[] args) throws Exception {
+
+        if (args.length != 5) {
+            throw new IllegalArgumentException(
+                "Usage: <method> <output> <package> <class> <seed>"
+            );
+        }
+
+        String method = args[0];
+        String output = args[1];
+        String packageName = args[2];
+        String className = args[3];
+        long seed = Long.parseLong(args[4]);
+
+        CandidateProvider provider =
+            new Lang5LocaleUtilsCandidateProvider();
+
+        List<Candidate> candidates =
+            provider.buildCandidates();
+
+        boolean[] state;
+
+        if ("SA".equals(method)) {
+
+            SimulatedAnnealingEngine engine =
+                new SimulatedAnnealingEngine(
+                    12,
+                    5000,
+                    seed
+                );
+
+            state = engine.search(
+                candidates,
+                provider
+            );
+
+        } else if ("BPSO".equals(method)) {
+
+            BinaryParticleSwarmEngine engine =
+                new BinaryParticleSwarmEngine(
+                    20,
+                    5000,
+                    12,
+                    seed
+                );
+
+            state = engine.search(
+                candidates,
+                provider
+            );
+
+        } else {
+            throw new IllegalArgumentException(
+                "Unsupported method: " + method
+            );
+        }
+
+        String source =
+            provider.generateTestSuite(
+                candidates,
+                state,
+                packageName,
+                className
+            );
+
+        File outputFile = new File(output);
+
+        FileWriter writer =
+            new FileWriter(outputFile);
+
+        writer.write(source);
+        writer.close();
+
+        int selected = 0;
+
+        for (boolean value : state) {
+            if (value) {
+                selected++;
+            }
+        }
+
+        System.out.println(
+            "Generated tests : " + selected
+        );
+
+        System.out.println(
+            "Candidate pool  : " + candidates.size()
+        );
+
+        System.out.println(
+            "Method           : " + method
+        );
+
+        System.out.println(
+            "Seed             : " + seed
+        );
+
+        System.out.println(
+            "Output           : " + output
+        );
+    }
+}
+JAVA
+
+echo
+echo "============================================================"
+echo "ALGORITHM TEST GENERATION"
+echo "============================================================"
+echo "Project     : $PROJECT"
+echo "Bug         : $BUG"
+echo "Method      : $METHOD"
+echo "Artifact    : $ARTIFACT_DIR"
+echo
+
+if [[ "$PROJECT" != "Lang" || "$BUG" != "5" ]]; then
+    echo "STATUS      : PENDING_GENERATOR"
+    echo "Reason      : No generalized CandidateProvider exists yet"
+    echo "for this project/bug."
+    printf '%s\n' \
+        "Project=$PROJECT" \
+        "Bug=$BUG" \
+        "Method=$METHOD" \
+        "Status=PENDING_GENERATOR" \
+        "Reason=No CandidateProvider" \
+        > "$ARTIFACT_DIR/generation.log"
+    printf '%s\n' "PENDING_GENERATOR" > "$ARTIFACT_DIR/status"
+    exit 0
+fi
+
+echo "Provider    : Lang5LocaleUtilsCandidateProvider"
+echo "Suite size  : 12"
+echo "Iterations  : 5000"
+echo "Seed        : 20260923"
+echo
+
+javac \
+    -cp "$GEN_ROOT" \
+    "$DRIVER"
+
+if [[ "$?" -ne 0 ]]; then
+    echo "ERROR: Generator driver compilation failed."
+
+    printf '%s\n' \
+        "Project=$PROJECT" \
+        "Bug=$BUG" \
+        "Method=$METHOD" \
+        "Status=FAILED" \
+        "Reason=Driver compilation failed" \
+        > "$ARTIFACT_DIR/generation.log"
+
+    printf '%s\n' "FAILED" > "$ARTIFACT_DIR/status"
+    exit 1
+fi
+
+PACKAGE_NAME="org.apache.commons.lang3"
+CLASS_NAME="Lang5GeneratedTest${METHOD}"
+
+java \
+    -cp "$GEN_ROOT:$TMP_ROOT" \
+    AlgorithmGeneratorDriver \
+    "$METHOD" \
+    "$ARTIFACT_DIR/generated_test.java" \
+    "$PACKAGE_NAME" \
+    "$CLASS_NAME" \
+    "20260923" \
+    > "$ARTIFACT_DIR/generation.log" 2>&1
+
+RC=$?
+
+if [[ "$RC" -ne 0 ]]; then
+    echo "ERROR: Algorithm generation failed with status $RC"
+    printf '%s\n' "FAILED" > "$ARTIFACT_DIR/status"
+    exit "$RC"
+fi
+
+if [[ ! -s "$ARTIFACT_DIR/generated_test.java" ]]; then
+    echo "ERROR: generated_test.java was not created."
+    printf '%s\n' "FAILED" > "$ARTIFACT_DIR/status"
+    exit 1
+fi
+
+printf '%s\n' "GENERATED" > "$ARTIFACT_DIR/status"
+
+echo
+echo "STATUS      : GENERATED"
+echo "Generated   : $ARTIFACT_DIR/generated_test.java"
+echo "============================================================"
+
+exit 0

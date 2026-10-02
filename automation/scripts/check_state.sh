@@ -2,33 +2,34 @@
 
 set -u
 
-PROJECT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+PROJECT_ROOT="/Users/fangfang/Documents/SQA_Project_2026"
 
-STATE_FILE="$PROJECT_ROOT/automation/state/Lang-3.json"
+PROJECT="${1:-Lang}"
 
-if [[ ! -f "$STATE_FILE" ]]; then
-    echo "ERROR: State file not found:"
-    echo "$STATE_FILE"
-    exit 1
+STATE_DIR="$PROJECT_ROOT/automation/state"
+
+echo "============================================================"
+echo "EXPERIMENT STATE"
+echo "============================================================"
+echo "Project: $PROJECT"
+echo
+
+if [[ ! -d "$STATE_DIR" ]]; then
+    echo "No state directory."
+    exit 0
 fi
 
-echo "=============================================="
-echo "CURRENT EXPERIMENT STATE"
-echo "=============================================="
+FOUND=0
 
-cat "$STATE_FILE"
+for file in "$STATE_DIR"/*.json(N); do
+    FOUND=1
+    echo "--- $(basename "$file") ---"
+    cat "$file"
+    echo
+done
 
-echo
-echo "=============================================="
-echo "EXPECTED STATES"
-echo "=============================================="
+if [[ "$FOUND" -eq 0 ]]; then
+    echo "No state files found."
+fi
 
-echo "PENDING"
-echo "GENERATING"
-echo "COMPILED"
-echo "EXECUTING_BUGGY"
-echo "EXECUTING_FIXED"
-echo "EVALUATING"
-echo "DONE"
-echo "FAILED"
-echo "SKIPPED"
+echo "============================================================"

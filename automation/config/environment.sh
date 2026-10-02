@@ -1,22 +1,44 @@
 #!/bin/zsh
 
-export PROJECT_ROOT="$HOME/Documents/SQA_Project_2026"
+# ============================================================
+# SQA PROJECT 2026 — EXPERIMENT ENVIRONMENT
+# ============================================================
 
-export DEFECTS4J_HOME="$HOME/Documents/SQA_Project/defects4j"
-export PATH="$DEFECTS4J_HOME/framework/bin:$PATH"
+# Project root
+export PROJECT_ROOT="${PROJECT_ROOT:-$HOME/Documents/SQA_Project_2026}"
 
-export BUGGY_WORKSPACE="$PROJECT_ROOT/workspaces/Lang-3-buggy"
-export FIXED_WORKSPACE="$PROJECT_ROOT/workspaces/Lang-3-fixed"
+# Defects4J
+export DEFECTS4J_HOME="${DEFECTS4J_HOME:-$HOME/Documents/SQA_Project/defects4j}"
+export DEFECTS4J_BIN="$DEFECTS4J_HOME/framework/bin"
 
-export GROUND_TRUTH="$PROJECT_ROOT/projects/Lang/Bug-3"
+# Java 11 — required by this Defects4J environment
+export JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@11/libexec/openjdk.jdk/Contents/Home}"
 
-export MASTER_RESULTS="$PROJECT_ROOT/results/master_results.csv"
-export EXPERIMENT_CONFIG="$PROJECT_ROOT/automation/config/experiment.json"
+# Put Java 11 and Defects4J first in PATH
+export PATH="$JAVA_HOME/bin:$DEFECTS4J_BIN:$PATH"
 
-export JAVA_HOME="/opt/homebrew/opt/openjdk@11/libexec/openjdk.jdk/Contents/Home"
-export PATH="$JAVA_HOME/bin:$PATH"
+# Perl module installed in user's local Perl library
+PERL_LOCAL="$HOME/perl5/lib/perl5"
+case ":${PERL5LIB:-}:" in
+    *":$PERL_LOCAL:"*)
+        ;;
+    *)
+        export PERL5LIB="$PERL_LOCAL${PERL5LIB:+:$PERL5LIB}"
+        ;;
+esac
 
-export TEST_PACKAGE="org.apache.commons.lang3.math"
-export TEST_CLASS="NumberUtilsGeneratedTest"
+# Automation directories
+export AUTOMATION_ROOT="$PROJECT_ROOT/automation"
+export DATASET_ROOT="$AUTOMATION_ROOT/datasets"
+export RUN_ROOT="$AUTOMATION_ROOT/runs"
+export SCRIPT_ROOT="$AUTOMATION_ROOT/scripts"
 
-export MODIFIED_CLASS="org.apache.commons.lang3.math.NumberUtils"
+# Default experiment seed
+export EXPERIMENT_SEED="${EXPERIMENT_SEED:-20260923}"
+
+# Test framework
+export TEST_FRAMEWORK="${TEST_FRAMEWORK:-JUnit 4.12}"
+
+# Do not hard-code a particular bug/project here.
+# Dataset, bug ID, buggy/fixed workspace, modified class,
+# trigger test, and result directory are resolved from metadata.
