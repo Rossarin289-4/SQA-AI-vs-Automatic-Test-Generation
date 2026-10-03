@@ -14,7 +14,7 @@
 | - | JacksonDatabind | jackson-databind | 110 | 1-64, 66-88, 90-112 | ⏳ ยังไม่ดำเนินการ |
 | **สโรชา** | JacksonXml | jackson-dataformat-xml | 6 | 1-6 | ✅ ดำเนินการแล้ว |
 | - | Jsoup | jsoup | 93 | 1-93 | ⏳ ยังไม่ดำเนินการ |
-| - | JxPath | commons-jxpath | 22 | 1-22 | ⏳ ยังไม่ดำเนินการ |
+| **กัญญาวี ศรีเหรา** | JxPath | commons-jxpath | 22 | 1-22 | ⏳ กำลังดำเนินการ |
 | - | Lang | commons-lang | 61 | 1, 3-17, 19-24, 26-47, 49-65 | ⏳ ยังไม่ดำเนินการ |
 | - | Math | commons-math | 106 | 1-106 | ⏳ ยังไม่ดำเนินการ |
 | **กัญญาวี ศรีเหรา** | Mockito | mockito | 38 | 1-38 | ⏳ กำลังดำเนินการ |
