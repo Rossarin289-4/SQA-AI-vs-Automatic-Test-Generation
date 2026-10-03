@@ -1,3 +1,25 @@
+## 📊 สถานะการดำเนินงาน Defects4J Dataset
+
+| ผู้รับผิดชอบ | Dataset Project | Project Name | Active Bugs | Bug IDs | สถานะ |
+|---|---|---|---:|---|---|
+| **สโรชา เสาทอง** | **Chart** | jfreechart | **26** | Chart-1 ถึง Chart-26 | ✅ ดำเนินการแล้ว|
+| **สโรชา**| Cli | commons-cli | 39 | 1-5, 7-40 | ✅ ดำเนินการแล้ว |
+|  **สโรชา** | Closure | closure-compiler | 174 | 1-62, 64-92, 94-176 |✅ ดำเนินการแล้ว |
+|  **สโรชา** | Codec | commons-codec | 18 | 1-18 | ✅ ดำเนินการแล้ว |
+| **สโรชา**  | Collections | commons-collections | 28 | 1-28 | ✅ ดำเนินการแล้ว |
+| -**สโรชา** | Compress | commons-compress | 47 | 1-47 | ✅ ดำเนินการแล้ว |
+| **สโรชา**  | Csv | commons-csv | 16 | 1-16 | ✅ ดำเนินการแล้ว |
+| **สโรชา**  | Gson | gson | 18 | 1-18 | ✅ ดำเนินการแล้ว |
+| **สโรชา** | JacksonCore | jackson-core | 26 | 1-26 | ✅ ดำเนินการแล้ว |
+| - | JacksonDatabind | jackson-databind | 110 | 1-64, 66-88, 90-112 | ⏳ ยังไม่ดำเนินการ |
+| **สโรชา** | JacksonXml | jackson-dataformat-xml | 6 | 1-6 | ✅ ดำเนินการแล้ว |
+| - | Jsoup | jsoup | 93 | 1-93 | ⏳ ยังไม่ดำเนินการ |
+| - | JxPath | commons-jxpath | 22 | 1-22 | ⏳ ยังไม่ดำเนินการ |
+| - | Lang | commons-lang | 61 | 1, 3-17, 19-24, 26-47, 49-65 | ⏳ ยังไม่ดำเนินการ |
+| - | Math | commons-math | 106 | 1-106 | ⏳ ยังไม่ดำเนินการ |
+| **กัญญาวี ศรีเหรา** | Mockito | mockito | 38 | 1-38 | ⏳ กำลังดำเนินการ |
+| **กัญญาวี ศรีเหรา** | Time | joda-time | 26 | 1-20, 22-27 | ✅ ดำเนินการแล้ว |
+
 # 1. ข้อมูลโครงงาน
 
 ## ชื่อโครงงาน

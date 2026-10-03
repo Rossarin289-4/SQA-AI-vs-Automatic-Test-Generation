@@ -1,0 +1,1 @@
+ChatGPT-generated first-pass tests for Defects4J Chart-1..26. Generated only from the supplied Prompt/Diff files. These tests have NOT yet been compiled or executed against Chart-Xb/Chart-Xf; actual results must be measured and compile incompatibilities, if any, recorded rather than fabricated.
