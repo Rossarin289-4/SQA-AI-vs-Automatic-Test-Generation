@@ -1,0 +1,107 @@
+### Identify:
+1. **The behavior that differs:** 
+   In the buggy version, when `stop()` is invoked on a `StopWatch` that is currently in the `STATE_SUSPENDED` state, the `stopTime` field is unconditionally overwritten with `System.currentTimeMillis()`. In the fixed version, `stopTime` is only updated if `runningState == STATE_RUNNING`; when the stopwatch is suspended (`STATE_SUSPENDED`), `stopTime` retains the timestamp when it was suspended, representing the accurate recorded stop time.
+2. **The likely root cause visible from the source:** 
+   The `stop()` method in the buggy implementation lacked a check or conditional guard on whether the stopwatch was running versus suspended. It executed `stopTime = System.currentTimeMillis();` for both `STATE_RUNNING` and `STATE_SUSPENDED`. Since suspending a stopwatch records the suspension time in `stopTime`, calling `stop()` subsequently overwrites that preserved time with the current wall-clock time, corrupting the final elapsed time calculation.
+3. **The specific behavior that a generated test should distinguish between the buggy and fixed versions:** 
+   A test should start a stopwatch, suspend it (allowing some elapsed time to pass during suspension), and then call `stop()`. In the fixed version, calling `stop()` on a suspended stopwatch preserves the original suspension time (so `getTime()` remains equal to the active duration before suspension). In the buggy version, `stop()` overwrites `stopTime` with the current time, incorrectly including or altering the elapsed duration based on when `stop()` was called relative to suspension.
+4. **Boundary cases, representative cases, and regression cases that are independently designed:**
+   - *Case 1 (Suspended then Stopped):* Start watch, sleep/wait briefly, suspend watch, sleep/wait longer, call `stop()`, and verify that `getTime()` equals the duration prior to suspension rather than including the post-suspension wait time.
+   - *Case 2 (Resumed then Stopped):* Start watch, suspend, resume, and then stop, ensuring standard running-to-stop behavior remains uncorrupted.
+   - *Case 3 (Multiple Suspensions/Stops interaction):* Verify state transitions and timing integrity when stopping after suspension.
+
+---
+
+### TEST CASE DESIGN
+
+- **`testStopAfterSuspendPreservesSuspensionTime`**: Directly targets the core defect. Starts the stopwatch, suspends it immediately, records a delay, calls `stop()`, and asserts that the recorded time corresponds to the moment of suspension rather than the moment of stopping.
+- **`testSuspendThenStopElapsedTimeIntegrity`**: Validates that active timing before suspension is correctly recorded and not elongated or overwritten by calling `stop()` after a suspension period.
+
+---
+
+### JUNIT 4.12 TEST CODE
+
+```java
+package org.apache.commons.lang.time;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+
+/**
+ * Independent test suite for Defects4J Lang-55.
+ * Tests StopWatch behavior when stopping a suspended stopwatch.
+ */
+public class StopWatchTest_Lang55 {
+
+    @Test
+    public void testStopAfterSuspendPreservesSuspensionTime() throws InterruptedException {
+        StopWatch watch = new StopWatch();
+        watch.start();
+        
+        // Let some time pass while running
+        Thread.sleep(50);
+        
+        watch.suspend();
+        long timeAtSuspend = watch.getTime();
+        
+        // Let more time pass while suspended (this extra time should NOT be counted)
+        Thread.sleep(100);
+        
+        // Stop the watch after it has been suspended
+        watch.stop();
+        
+        long finalTime = watch.getTime();
+        
+        // In the fixed version, stop() does not overwrite stopTime if already suspended,
+        // so finalTime should match the time when it was suspended.
+        // In the buggy version, stop() overwrites stopTime with current time, making finalTime much larger.
+        assertTrue("Stop time after suspend should not exceed suspension duration plus small delta",
+                finalTime >= timeAtSuspend && finalTime < timeAtSuspend + 80);
+    }
+
+    @Test
+    public void testSuspendResumeAndStopSequence() throws InterruptedException {
+        StopWatch watch = new StopWatch();
+        watch.start();
+        Thread.sleep(30);
+        
+        watch.suspend();
+        Thread.sleep(50);
+        
+        watch.resume();
+        Thread.sleep(30);
+        
+        watch.stop();
+        long totalTime = watch.getTime();
+        
+        // Total active time should be approximately 30ms + 30ms = 60ms, excluding the 50ms suspension.
+        // The buggy version corrupts stopTime when stop() is called if state is suspended (though here it ended running).
+        // This test ensures normal resume->stop paths work correctly alongside suspension logic.
+        assertTrue("Total active time should reflect running periods only", totalTime >= 50 && totalTime < 150);
+    }
+}
+```
+
+---
+
+### DEFECT DETECTION STRATEGY
+
+- **BUGGY VERSION:** 
+  - `testStopAfterSuspendPreservesSuspensionTime` will fail because `watch.stop()` overwrites `stopTime` with `System.currentTimeMillis()` at the moment `stop()` is invoked (long after suspension). Thus, `finalTime` will include the suspension wait period, causing the assertion `finalTime < timeAtSuspend + 80` to fail.
+- **FIXED VERSION:** 
+  - `testStopAfterSuspendPreservesSuspensionTime` will pass because `watch.stop()` checks if `runningState == STATE_RUNNING` and does *not* overwrite `stopTime` when `runningState == STATE_SUSPENDED`, preserving the accurate timing recorded at suspension.
+
+---
+
+### SUMMARY
+
+- **Root cause:** Unconditional updating of `stopTime` inside `StopWatch.stop()` regardless of whether the stopwatch was running or suspended.
+- **Targeted behavior:** Ensuring that calling `stop()` on a suspended `StopWatch` preserves the original suspension time rather than overwriting it with the current system time.
+- **Number of generated tests:** 2 complementary test methods.
+- **Why the tests are independent from the original trigger test:** They are designed from first principles by analyzing the state machine logic in `StopWatch.stop()` versus `StopWatch.suspend()`, using custom assertions and sleep durations distinct from any developer-provided or original patch test case.
+
+---
+
+### LIMITATIONS
+
+- Timing-based tests using `Thread.sleep()` can occasionally be flaky on heavily loaded continuous integration environments due to OS thread scheduling jitter. However, generous delta bounds and logic checks mitigate this risk.

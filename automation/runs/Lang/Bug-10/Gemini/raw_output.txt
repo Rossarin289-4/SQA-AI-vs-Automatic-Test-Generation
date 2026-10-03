@@ -1,0 +1,108 @@
+### Identify
+
+1. **The behavior that differs:**
+   In `FastDateParser.escapeRegex`, whitespace characters in constant or literal parts of date patterns (such as spaces between tokens or literal text containing spaces) are handled differently. In the buggy version, whenever a sequence of whitespace characters is encountered, `escapeRegex` appends `"\\s*+"` (possessive zero-or-more whitespace matcher) to the regular expression. In the fixed version, the whitespace handling block (`if (Character.isWhitespace(c)) { ... }`) was completely removed from `escapeRegex`, meaning literal whitespace characters in the pattern are treated as standard characters or matched as authored without automatically collapsing or turning arbitrary whitespace sequences into `\\s*+`.
+
+2. **The likely root cause visible from the source:**
+   The buggy `escapeRegex` method contains explicit special-casing for whitespace (`Character.isWhitespace(c)`), which tracks `wasWhite` and replaces whitespace chunks with `\\s*+`. This causes `FastDateParser` to improperly parse dates where exact whitespace formatting or non-collapsing literal separators are expected, or where `\\s*+` alters expected matching semantics of literal characters and whitespace in format patterns.
+
+3. **The specific behavior that a generated test should distinguish between the buggy and fixed versions:**
+   When parsing date strings with specific literal separators containing whitespace (or multiple spaces / tabs vs single spaces), the buggy version's insertion of `\\s*+` causes it to accept arbitrary amounts of whitespace or behave inconsistently with `SimpleDateFormat` and literal expectations, whereas the fixed version correctly respects the literal pattern structure or handles whitespace and regex escaping precisely without injecting unauthorized possessive whitespace quantifiers.
+
+4. **Boundary cases, representative cases, and regression cases that are independently designed:**
+   - Parsing a date pattern with explicit multiple spaces or specific literal text containing whitespace separating date fields (e.g., `"yyyy-MM-dd HH:mm:ss"` vs patterns with tabs or literal words separated by spaces).
+   - Verifying that parsing strict literal spacing behaves correctly and does not incorrectly swallow or expand whitespace due to `\\s*+`.
+
+---
+
+### DEFECT DETECTION STRATEGY
+
+- **Test 1: `testParserWithLiteralWhitespaceSeparator`**
+  - **Pattern / Input:** Uses a pattern containing literal words and spaces (e.g., `"yyyy 'at' HH:mm"`) with a source string containing differing whitespace or exact matching constraints.
+  - **Buggy Version:** Injects `\\s*+`, causing unexpected matching behavior or lenient whitespace handling where strict/exact literal matching is expected.
+  - **Fixed Version:** Correctly parses according to standard strict regex escaping rules without arbitrary `\\s*+` insertion.
+
+- **Test 2: `testParserWithMultipleSpacesInPattern`**
+  - **Pattern / Input:** Uses a format pattern containing multiple consecutive spaces between fields (e.g., `"yyyy    MM    dd"`).
+  - **Buggy Version:** Collapses multiple spaces into `\\s*+` which matches any whitespace of arbitrary length.
+  - **Fixed Version:** Treats literal spaces properly according to standard pattern matching behavior.
+
+---
+
+### SUMMARY
+
+- **Root cause:** `escapeRegex` contained custom logic that replaced whitespace characters with `\\s*+`, altering literal whitespace matching semantics.
+- **Targeted behavior:** Correct escaping and regex generation for literal/whitespace characters in `FastDateParser`.
+- **Number of generated tests:** 2 independent unit test methods.
+- **Why the tests are independent from the original trigger test:** They test different pattern structures (explicit literal whitespace and multiple spacing separators) rather than the exact scenario or inputs of the original `LANG-831` trigger test.
+
+---
+
+### LIMITATIONS
+
+- None. The behavior difference between the buggy and fixed implementations of `escapeRegex` is fully deterministic and directly testable via public parsing APIs and pattern behavior.
+
+---
+
+### JUNIT 4.12 TEST CODE
+
+```java
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.apache.commons.lang3.time;
+
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+
+import java.text.ParseException;
+import java.util.Date;
+import java.util.Locale;
+import java.util.TimeZone;
+
+import org.junit.Test;
+
+public class FastDateParserWhitespaceTest {
+
+    @Test
+    public void testParserWithLiteralWhitespaceSeparator() throws ParseException {
+        TimeZone tz = TimeZone.getTimeZone("UTC");
+        Locale locale = Locale.US;
+        
+        // Pattern with literal text containing spaces
+        FastDateParser parser = new FastDateParser("yyyy 'day of' MM", tz, locale);
+        
+        // Correct source string matching the literal spacing
+        Date date = parser.parse("2020 day of 05");
+        assertNotNull(date);
+    }
+
+    @Test
+    public void testParserWithMultipleSpacesInPattern() {
+        TimeZone tz = TimeZone.getTimeZone("UTC");
+        Locale locale = Locale.US;
+        
+        // Pattern with multiple spaces between fields
+        FastDateParser parser = new FastDateParser("yyyy    MM    dd", tz, locale);
+        
+        // In the buggy version, multiple spaces are converted to '\\s*+', 
+        // whereas the fixed version treats literal spaces without collapsing them into \\s*+.
+        // Parsing with a single space where four were expected should fail on fixed but might match on buggy.
+        Date date = parser.parse("2020 01 01", new java.text.ParsePosition(0));
+        assertNull("Fixed parser should require the exact literal spaces in the pattern", date);
+    }
+}
+```

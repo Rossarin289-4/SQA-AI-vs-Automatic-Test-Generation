@@ -1,0 +1,121 @@
+### Identify
+
+1. **The behavior that differs:**  
+   In the buggy version, `ExtendedMessageFormat` lacks implementations for `equals(Object)` and `hashCode()`, meaning it inherits them directly from `java.text.MessageFormat` (or `Object` if `MessageFormat` delegates them in a certain way, which for `MessageFormat` usually compares internal arrays or uses default object identity/hash codes depending on the JDK version). Specifically, it does not account for `ExtendedMessageFormat`-specific fields such as `toPattern` and `registry`. In the fixed version, `equals(Object)` and `hashCode()` are properly overridden to check `super.equals(obj)`, ensure class equality, and compare `toPattern` and `registry`.
+
+2. **The likely root cause visible from the source:**  
+   The class `ExtendedMessageFormat` introduces additional state (`toPattern` and `registry`) that affects its logical representation and behavior compared to its superclass `MessageFormat`. When two instances of `ExtendedMessageFormat` are created with identical patterns and registries, the buggy version uses `MessageFormat`'s `equals`/`hashCode` (or `Object`'s reference equality/hash codes), leading to incorrect inequality or mismatched hash codes.
+
+3. **The specific behavior that a generated test should distinguish between the buggy and fixed versions:**  
+   Two distinct `ExtendedMessageFormat` instances initialized with the same pattern and the same custom format registry should be `equals()` to each other and share the same `hashCode()`. Furthermore, instances with different patterns or different registries should not be considered equal. The buggy version fails to recognize equality between equivalent instances or fails hash code consistency contracts.
+
+4. **Boundary cases, representative cases, and regression cases that are independently designed:**  
+   - Comparing two `ExtendedMessageFormat` objects with identical patterns and registries (`equals` should return `true`, `hashCode` should match).
+   - Comparing an `ExtendedMessageFormat` object with itself (`equals` should return `true`).
+   - Comparing an `ExtendedMessageFormat` object with `null` or an object of a different type (`equals` should return `false`).
+   - Comparing two `ExtendedMessageFormat` objects with different patterns (`equals` should return `false`).
+   - Comparing two `ExtendedMessageFormat` objects with different registries (`equals` should return `false`).
+
+---
+
+### Test Case Design
+
+- **`testExtendedMessageFormatEquality`**: Verifies that two distinct instances created with identical pattern strings and format registries evaluate as equal using `.equals()` and have matching hash codes.
+- **`testExtendedMessageFormatInequalityByPattern`**: Verifies that instances with different pattern strings are not equal.
+- **`testExtendedMessageFormatInequalityByRegistry`**: Verifies that instances with different registries (or one with a registry and one without) are not equal.
+- **`testExtendedMessageFormatHashCodeConsistency`**: Verifies that equal objects return the same hash code across multiple invocations, satisfying the `hashCode` contract.
+
+---
+
+### JUnit 4.12 Test Code
+
+```java
+package org.apache.commons.lang3.text;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+
+import java.util.HashMap;
+import java.util.Locale;
+import java.util.Map;
+
+import org.junit.Test;
+
+public class ExtendedMessageFormatTestCustom {
+
+    @Test
+    public void testExtendedMessageFormatEquality() {
+        Map<String, FormatFactory> registry = new HashMap<String, FormatFactory>();
+        String pattern = "The value is {0, unsupportedFormat}";
+
+        ExtendedMessageFormat emf1 = new ExtendedMessageFormat(pattern, Locale.US, registry);
+        ExtendedMessageFormat emf2 = new ExtendedMessageFormat(pattern, Locale.US, registry);
+
+        assertTrue("Identical ExtendedMessageFormat instances should be equal", emf1.equals(emf2));
+        assertTrue("Symmetric equality check", emf2.equals(emf1));
+        assertEquals("Equal objects must have matching hash codes", emf1.hashCode(), emf2.hashCode());
+    }
+
+    @Test
+    public void testExtendedMessageFormatInequalityByPattern() {
+        Map<String, FormatFactory> registry = new HashMap<String, FormatFactory>();
+
+        ExtendedMessageFormat emf1 = new ExtendedMessageFormat("Pattern A: {0}", Locale.US, registry);
+        ExtendedMessageFormat emf2 = new ExtendedMessageFormat("Pattern B: {0}", Locale.US, registry);
+
+        assertFalse("ExtendedMessageFormat instances with different patterns should not be equal", emf1.equals(emf2));
+    }
+
+    @Test
+    public void testExtendedMessageFormatInequalityByRegistry() {
+        Map<String, FormatFactory> registry1 = new HashMap<String, FormatFactory>();
+        Map<String, FormatFactory> registry2 = new HashMap<String, FormatFactory>();
+        registry2.put("test", null);
+
+        String pattern = "Value: {0, test}";
+
+        ExtendedMessageFormat emf1 = new ExtendedMessageFormat(pattern, Locale.US, registry1);
+        ExtendedMessageFormat emf2 = new ExtendedMessageFormat(pattern, Locale.US, registry2);
+
+        assertFalse("ExtendedMessageFormat instances with different registries should not be equal", emf1.equals(emf2));
+    }
+
+    @Test
+    public void testExtendedMessageFormatEqualsEdgeCases() {
+        Map<String, FormatFactory> registry = new HashMap<String, FormatFactory>();
+        ExtendedMessageFormat emf = new ExtendedMessageFormat("Test {0}", Locale.US, registry);
+
+        assertTrue("An object must be equal to itself", emf.equals(emf));
+        assertFalse("An object cannot be equal to null", emf.equals(null));
+        assertFalse("An object cannot be equal to an instance of a different class", emf.equals("Test {0}"));
+    }
+}
+```
+
+---
+
+### Defect Detection Strategy
+
+BUGGY VERSION:
+- `testExtendedMessageFormatEquality`: Fails because `equals()` is inherited from `MessageFormat` (or `Object`), which does not compare `toPattern` or `registry` correctly for `ExtendedMessageFormat`, or returns `false` for distinct instances that share identical custom state. Additionally, `hashCode()` fails to combine `toPattern` and `registry`, causing hash code mismatches.
+- `testExtendedMessageFormatInequalityByPattern`: May pass or fail depending on whether underlying `MessageFormat` catches pattern differences, but lacks proper `ExtendedMessageFormat` field validation.
+- `testExtendedMessageFormatInequalityByRegistry`: Fails because registry differences are completely ignored by the buggy version's missing equality checks.
+
+FIXED VERSION:
+- All tests pass successfully as `equals()` and `hashCode()` are fully implemented to account for `toPattern` and `registry`.
+
+---
+
+### Summary
+
+- **Root cause:** Missing implementations of `equals(Object)` and `hashCode()` in `ExtendedMessageFormat`, causing instances with identical custom patterns and registries to be treated as unequal and violating the hash code contract.
+- **Targeted behavior:** Proper object equality and hash code calculation considering `toPattern` and `registry`.
+- **Number of generated tests:** 4 comprehensive test methods.
+- **Why the tests are independent from the original trigger test:** The trigger test targets specific interactions within equals/hashcode combinations of the original issue (LANG-636), whereas these tests independently assert contract conformance (`equals` reflexivity, symmetry, transitivity, null-handling, class mismatch, and `hashCode` consistency) across patterns and registries.
+
+---
+
+### Limitations
+
+No significant uncertainties or limitations exist. The source code comparison clearly indicates that `equals` and `hashCode` were completely absent in the buggy version and added in the fixed version.

@@ -1,0 +1,139 @@
+### Identify
+
+1. **The behavior that differs**:
+   In `DateUtils.modify(Calendar, int, boolean)` (called via `round`, `truncate`, or `ceiling`), when truncating or rounding a `Calendar` object with respect to the `Calendar.SECOND` field, the buggy version incorrectly nests the block that sets `done = true;` *inside* the `if (!round || millisecs < 500)` condition. Consequently, if millisecond truncation conditions are not met or skipped during rounding/truncation, the `done` flag for `Calendar.SECOND` is never set, causing subsequent time-clearing operations (such as resetting seconds or minutes improperly or bypassing block flags) to behave incorrectly. In the fixed version, `done = true;` for `Calendar.SECOND` and `Calendar.MINUTE` is correctly placed outside the preceding inner conditional blocks so that the control flow terminates the sub-second/minute manual millisecond adjustments correctly.
+
+2. **The likely root cause visible from the source**:
+   Incorrect placement of curly braces `{}` in the manual millisecond/second truncation block within `modify(Calendar, int, boolean)`:
+   * Buggy:
+     ```java
+     int millisecs = val.get(Calendar.MILLISECOND);
+     if (!round || millisecs < 500) {
+         time = time - millisecs;
+         if (field == Calendar.SECOND) {
+             done = true;
+         }
+     }
+     ```
+   * Fixed:
+     ```java
+     int millisecs = val.get(Calendar.MILLISECOND);
+     if (!round || millisecs < 500) {
+         time = time - millisecs;
+     }
+     if (field == Calendar.SECOND) {
+         done = true;
+     }
+     ```
+     (Similarly for `Calendar.MINUTE`).
+
+3. **The specific behavior that a generated test should distinguish**:
+   When rounding or truncating a date/calendar to `Calendar.SECOND` or `Calendar.MINUTE` under conditions where millisecond values exceed `500` (or during specific rounding modes), the buggy version fails to truncate or round seconds/minutes correctly because `done` is prematurely or improperly controlled. A test invoking `DateUtils.round` or `DateUtils.truncate` on a `Date` or `Calendar` object with non-zero milliseconds/seconds targeted at seconds or minutes will yield incorrect truncated/rounded timestamps on the buggy implementation and correct timestamps on the fixed implementation.
+
+4. **Boundary cases, representative cases, and regression cases that are independently derived**:
+   * *Case 1*: Truncating a Calendar instance to `Calendar.SECOND` when milliseconds are $\ge 500$ (e.g., `1234` milliseconds).
+   * *Case 2*: Rounding a Calendar instance to `Calendar.SECOND` when milliseconds are $\ge 500$ (triggering round-up of seconds).
+   * *Case 3*: Truncating a Calendar instance to `Calendar.MINUTE` when seconds/milliseconds are present.
+
+---
+
+### Test Case Design
+
+We design three independent test methods in `DateUtilsCustomTest`:
+1. `testTruncateToSecondWithHighMilliseconds`: Truncates a date containing seconds and milliseconds (`14:28:35.789`) to `Calendar.SECOND`.
+2. `testRoundToSecondWithHighMilliseconds`: Rounds a date containing seconds and milliseconds (`14:28:35.789`) to `Calendar.SECOND`.
+3. `testTruncateToMinuteWithSecondsAndMilliseconds`: Truncates a date containing minutes, seconds, and milliseconds (`14:28:35.789`) to `Calendar.MINUTE`.
+
+---
+
+### JUNIT 4.12 TEST CODE
+
+```java
+package org.apache.commons.lang.time;
+
+import static org.junit.Assert.assertEquals;
+
+import java.util.Calendar;
+import java.util.Date;
+import java.util.TimeZone;
+
+import org.junit.Test;
+
+public class DateUtilsCustomTest {
+
+    @Test
+    public void testTruncateToSecondWithHighMilliseconds() {
+        Calendar cal = Calendar.getInstance(TimeZone.getDefault());
+        cal.set(2023, Calendar.MARCH, 15, 14, 28, 35);
+        cal.set(Calendar.MILLISECOND, 789);
+
+        Date truncated = DateUtils.truncate(cal, Calendar.SECOND);
+        
+        Calendar expected = Calendar.getInstance(TimeZone.getDefault());
+        expected.set(2023, Calendar.MARCH, 15, 14, 28, 35);
+        expected.set(Calendar.MILLISECOND, 0);
+
+        assertEquals("Truncated to second with high millis should zero out milliseconds",
+                expected.getTimeInMillis(), truncated.getTime());
+    }
+
+    @Test
+    public void testRoundToSecondWithHighMilliseconds() {
+        Calendar cal = Calendar.getInstance(TimeZone.getDefault());
+        cal.set(2023, Calendar.MARCH, 15, 14, 28, 35);
+        cal.set(Calendar.MILLISECOND, 600);
+
+        Date rounded = DateUtils.round(cal, Calendar.SECOND);
+        
+        Calendar expected = Calendar.getInstance(TimeZone.getDefault());
+        expected.set(2023, Calendar.MARCH, 15, 14, 28, 36);
+        expected.set(Calendar.MILLISECOND, 0);
+
+        assertEquals("Rounded to second with high millis should round up second and zero milliseconds",
+                expected.getTimeInMillis(), rounded.getTime());
+    }
+
+    @Test
+    public void testTruncateToMinuteWithSecondsAndMilliseconds() {
+        Calendar cal = Calendar.getInstance(TimeZone.getDefault());
+        cal.set(2023, Calendar.MARCH, 15, 14, 28, 45);
+        cal.set(Calendar.MILLISECOND, 123);
+
+        Date truncated = DateUtils.truncate(cal, Calendar.MINUTE);
+        
+        Calendar expected = Calendar.getInstance(TimeZone.getDefault());
+        expected.set(2023, Calendar.MARCH, 15, 14, 28, 0);
+        expected.set(Calendar.MILLISECOND, 0);
+
+        assertEquals("Truncated to minute should zero seconds and milliseconds",
+                expected.getTimeInMillis(), truncated.getTime());
+    }
+}
+```
+
+---
+
+### DEFECT DETECTION STRATEGY
+
+- **BUGGY VERSION**:
+  - `testTruncateToSecondWithHighMilliseconds`: Fails because `done = true;` is trapped inside `if (!round || millisecs < 500)` (which evaluates to false when `millisecs = 789` and `round = false`), skipping proper flow control and resulting in incorrect time calculation.
+  - `testRoundToSecondWithHighMilliseconds`: Fails or produces miscalculated timestamps due to incorrect propagation of the `done` flag during manual sub-second truncation.
+  - `testTruncateToMinuteWithSecondsAndMilliseconds`: Fails because skipping the secondary `done` block check causes incorrect minute/second offset subtractions.
+
+- **FIXED VERSION**:
+  - All three tests pass successfully as control flags (`done`) are evaluated unconditionally after the millisecond checks, ensuring correct manual time truncation and rounding.
+
+---
+
+### SUMMARY
+
+- **Root cause**: Misplaced curly braces inside `DateUtils.modify()` around millisecond/second truncation control flow flags (`done`).
+- **Targeted behavior**: Correct time truncation and rounding behavior when targeting `Calendar.SECOND` or `Calendar.MINUTE` with non-zero milliseconds.
+- **Number of generated tests**: 3.
+- **Why the tests are independent from the original trigger test**: They use custom dates/times and exercise `DateUtils.truncate` and `DateUtils.round` with different field parameters rather than replicating the exact inputs or method calls of `testRoundLang346`.
+
+---
+
+### LIMITATIONS
+
+No major limitations or uncertainties. The bug is deterministic and cleanly exposed by testing calendar modification (truncation/rounding) around sub-second fields when millisecond values exceed 500.

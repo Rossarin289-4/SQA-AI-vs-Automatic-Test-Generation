@@ -1,0 +1,129 @@
+### 1. Behavior That Differs
+
+- **Buggy Version (`escapeJava` / `escapeJavaScript`)**: 
+  - `escapeJava(String)` and `escapeJava(Writer, String)` call `escapeJavaStyleString(str, false)` without a flag indicating whether forward slashes (`/`) should be escaped.
+  - `escapeJavaScript(String)` and `escapeJavaScript(Writer, String)` call `escapeJavaStyleString(str, true)` which also defaults to not escaping forward slashes.
+  - In the switch-case handling for `'/'` in the buggy version, it unconditionally escapes forward slashes:
+    ```java
+    case '/' :
+        out.write('\\');
+        out.write('/');
+        break;
+    ```
+    This means **both** Java and JavaScript escaping methods improperly escape forward slashes as `\/`. In standard Java string escaping, forward slashes do not need to be escaped (and are not escaped by Java standards), whereas in JavaScript they can be escaped (e.g. for HTML embedding inside script tags).
+- **Fixed Version**:
+  - Introduces an `escapeForwardSlash` boolean parameter to `escapeJavaStyleString`.
+  - `escapeJava` passes `false` for `escapeForwardSlash`, leaving forward slashes (`/`) unescaped (outputting `/`).
+  - `escapeJavaScript` passes `true` for `escapeForwardSlash`, escaping forward slashes as `\/`.
+
+---
+
+### 2. Likely Root Cause Visible from the Source
+
+The developer accidentally added code inside `escapeJavaStyleString` that escapes forward slashes (`/` $\rightarrow$ `\/`) for all Java-style string escaping routines. According to Java specification and expected behavior of Java string escaping, forward slashes should remain literal unless specifically required for JavaScript contexts (such as avoiding premature closing of HTML `<script>` tags). The shared helper method conflated Java and JavaScript requirements by forcing forward slash escaping globally.
+
+---
+
+### 3. Specific Behavior That a Generated Test Should Distinguish
+
+A test should verify the output of `StringEscapeUtils.escapeJava(String)` and `StringEscapeUtils.escapeJavaScript(String)` when the input string contains a forward slash (`/`).
+- Specifically, `escapeJava("http://example.com")` should return `"http://example.com"` (unmodified forward slashes) rather than `"http:\/\/example.com"`.
+- Conversely, `escapeJavaScript("http://example.com")` should escape the forward slashes to `"http:\/\/example.com"`.
+
+---
+
+### 4. Boundary Cases, Representative Cases, and Regression Cases
+
+1. **Java Escape Forward Slash Case**: Test `escapeJava` with a URL or file path containing forward slashes to ensure they are *not* escaped.
+2. **JavaScript Escape Forward Slash Case**: Test `escapeJavaScript` with a URL or file path containing forward slashes to ensure they *are* escaped.
+3. **Writer-based Java Escape Case**: Test `escapeJava(Writer, String)` with forward slashes to verify stream-based output matches string-based behavior.
+4. **Mixed Content Case**: Test `escapeJava` with a combination of standard special characters (like quotes, tabs, newlines) and forward slashes.
+
+---
+
+### JUNIT 4.12 TEST CODE
+
+```java
+package org.apache.commons.lang;
+
+import java.io.StringWriter;
+import java.io.IOException;
+
+import org.junit.Test;
+import static org.junit.Assert.assertEquals;
+
+public class StringEscapeUtilsDefectTest {
+
+    @Test
+    public void testEscapeJavaDoesNotEscapeForwardSlash() {
+        String input = "http://apache.org/commons/lang";
+        String expected = "http://apache.org/commons/lang";
+        String actual = StringEscapeUtils.escapeJava(input);
+        assertEquals("Java escaping should not escape forward slashes", expected, actual);
+    }
+
+    @Test
+    public void testEscapeJavaScriptDoesEscapeForwardSlash() {
+        String input = "http://apache.org/commons/lang";
+        String expected = "http:\\/\\/apache.org\\/commons\\/lang";
+        String actual = StringEscapeUtils.escapeJavaScript(input);
+        assertEquals("JavaScript escaping should escape forward slashes", expected, actual);
+    }
+
+    @Test
+    public void testEscapeJavaWriterDoesNotEscapeForwardSlash() throws IOException {
+        String input = "path/to/resource";
+        String expected = "path/to/resource";
+        StringWriter writer = new StringWriter();
+        StringEscapeUtils.escapeJava(writer, input);
+        assertEquals("Java writer escaping should not escape forward slashes", expected, writer.toString());
+    }
+
+    @Test
+    public void testEscapeJavaScriptWriterDoesEscapeForwardSlash() throws IOException {
+        String input = "path/to/resource";
+        String expected = "path\\/to\\/resource";
+        StringWriter writer = new StringWriter();
+        StringEscapeUtils.escapeJavaScript(writer, input);
+        assertEquals("JavaScript writer escaping should escape forward slashes", expected, writer.toString());
+    }
+
+    @Test
+    public void testEscapeJavaMixedCharactersWithSlash() {
+        String input = "Line1\nPath: /usr/bin 'quotes'";
+        // In Java escape: '\n' becomes "\\n", '/' remains '/', "'" is unescaped in escapeJava
+        String expected = "Line1\\nPath: /usr/bin 'quotes'";
+        String actual = StringEscapeUtils.escapeJava(input);
+        assertEquals("Java escape with mixed chars and slash should not escape slash", expected, actual);
+    }
+}
+```
+
+---
+
+### DEFECT DETECTION STRATEGY
+
+- **`testEscapeJavaDoesNotEscapeForwardSlash`**:
+  - *Buggy Version*: Returns `"http:\/\/apache.org\/commons\/lang"` because the buggy code unconditionally escapes `/`. (Fails)
+  - *Fixed Version*: Returns `"http://apache.org/commons/lang"` because `escapeJava` passes `false` for `escapeForwardSlash`. (Passes)
+- **`testEscapeJavaScriptDoesEscapeForwardSlash`**:
+  - *Buggy Version*: Returns `"http:\/\/apache.org\/commons\/lang"` (accidentally matches JS expectation). (Passes)
+  - *Fixed Version*: Returns `"http:\/\/apache.org\/commons/lang"` because `escapeJavaScript` passes `true` for `escapeForwardSlash`. (Passes)
+- **`testEscapeJavaWriterDoesNotEscapeForwardSlash`**:
+  - *Buggy Version*: Writes escaped slashes to the writer. (Fails)
+  - *Fixed Version*: Writes unescaped slashes to the writer. (Passes)
+
+---
+
+### SUMMARY
+
+- **Root Cause**: Unconditional escaping of the forward slash (`/`) character inside the shared `escapeJavaStyleString` utility method, violating Java string literal rules.
+- **Targeted Behavior**: Ensuring `escapeJava` leaves forward slashes unescaped, while `escapeJavaScript` escapes them.
+- **Number of Generated Tests**: 5 independent test methods.
+- **Independence from Trigger Test**: The generated tests use distinct inputs (`http://apache.org/commons/lang`, `path/to/resource`, mixed newline/quote/slash strings) and test both `String` and `Writer` overloads across both `escapeJava` and `escapeJavaScript`, avoiding duplication of the developer's trigger test.
+
+---
+
+### LIMITATIONS
+
+No significant limitations. The bug is deterministic, fully localized to `StringEscapeUtils.escapeJavaStyleString` and its callers, and easily exposed via simple string inputs containing forward slashes.

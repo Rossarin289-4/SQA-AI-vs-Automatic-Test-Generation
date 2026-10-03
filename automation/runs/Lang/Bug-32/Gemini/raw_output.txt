@@ -1,0 +1,133 @@
+### 1. Identify and Analyze the Defect
+
+- **Behavior that differs:** 
+  In the buggy implementation, `REGISTRY` is defined as a `ThreadLocal<Set<IDKey>>` with a static `initialValue()` returning a new `HashSet<IDKey>()`. This means `REGISTRY.get()` never returns `null` for any thread, and empty `HashSet` instances remain attached to threads indefinitely or cause `isRegistered(Object)` to call `getRegistry().contains(...)` even when no reflection hash-code calculation is currently active on that thread. Furthermore, `register` and `unregister` do not clean up or synchronize properly, leading to potential issues with `ThreadLocal` storage cleanup and multi-threaded or nested/interleaved reflection calls where the registry state is accessed or checked when uninitialized or improperly managed. In the fixed implementation, `REGISTRY` uses `initialValue()` returning `null` (or rather, no initial value override, defaulting to `null`), and `isRegistered()`, `register()`, and `unregister()` explicitly check for `null` and clean up empty sets (`REGISTRY.remove()`), using synchronization blocks (`synchronized (HashCodeBuilder.class)`).
+
+- **Likely root cause visible from the source:** 
+  - Buggy `REGISTRY` initialization:
+    ```java
+    private static final ThreadLocal<Set<IDKey>> REGISTRY = new ThreadLocal<Set<IDKey>>() {
+        @Override
+        protected Set<IDKey> initialValue() {
+            return new HashSet<IDKey>();
+        }
+    };
+    ```
+    This causes `getRegistry()` to never be `null`.
+  - Fixed `REGISTRY` initialization:
+    ```java
+    private static final ThreadLocal<Set<IDKey>> REGISTRY = new ThreadLocal<Set<IDKey>>();
+    ```
+  - Buggy `isRegistered`:
+    ```java
+    static boolean isRegistered(Object value) {
+        return getRegistry().contains(new IDKey(value));
+    }
+    ```
+    If `getRegistry()` could be null or if checking registration outside active building needs safety, it lacks null checks. In the fixed version:
+    ```java
+    static boolean isRegistered(Object value) {
+        Set<IDKey> registry = getRegistry();
+        return registry != null && registry.contains(new IDKey(value));
+    }
+    ```
+  - Additionally, `register` and `unregister` in the fixed version manage set allocation and removal (`REGISTRY.remove()`) when empty, protected by `synchronized (HashCodeBuilder.class)`.
+
+- **Specific behavior for generated tests:**
+  We can test the behavior of `HashCodeBuilder.getRegistry()` and direct inspection or behavior when calling reflection methods or helper methods across threads / uninitialized states, or testing concurrent/multithreaded reflection hash code generation where thread-local state cleanup and initialization are exercised. Specifically, invoking `HashCodeBuilder.getRegistry()` when no reflection has been performed on the thread will return a non-null `Set` in the buggy version and `null` in the fixed version.
+
+- **Boundary cases, representative cases, and regression cases:**
+  1. Checking `HashCodeBuilder.getRegistry()` directly on a fresh thread where no `HashCodeBuilder` reflection methods have been called.
+  2. Verifying reflection hash code calculation on a standard object graph.
+  3. Verifying behavior of `isRegistered` with a null registry or uninitialized thread state.
+
+---
+
+### 2. Test Case Design
+
+- **Test 1 (`testRegistryInitialValueIsNull`):** 
+  Directly checks `HashCodeBuilder.getRegistry()` on a clean thread. Expects `null` on the fixed version, but a non-null empty `Set` on the buggy version.
+- **Test 2 (`testReflectionHashCodeSimpleObject`):** 
+  Ensures normal reflection hashCode operation works correctly and cleans up after execution.
+- **Test 3 (`testUnregisterCleanup`):** 
+  Verifies that after reflection hash code execution, the registry is properly cleaned up (removed from `ThreadLocal` rather than leaving an empty set instance).
+
+---
+
+### 3. JUnit 4.12 Test Code
+
+```java
+package org.apache.commons.lang3.builder;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+
+import java.util.Set;
+
+public class HashCodeBuilderDefectTest {
+
+    private static class SampleBean {
+        private final String name;
+        private final int id;
+
+        public SampleBean(String name, int id) {
+            this.name = name;
+            this.id = id;
+        }
+    }
+
+    @Test
+    public void testRegistryInitialValueIsNull() {
+        // On a fresh thread (or current test thread before reflection), 
+        // the fixed version's ThreadLocal does not provide an initial HashSet (returns null),
+        // whereas the buggy version initializes it to an empty HashSet.
+        Set<IDKey> registry = HashCodeBuilder.getRegistry();
+        assertNull("Registry should be null initially when no reflection hash code is running", registry);
+    }
+
+    @Test
+    public void testReflectionHashCodeExecutesCorrectly() {
+        SampleBean bean = new SampleBean("test", 42);
+        int hash = HashCodeBuilder.reflectionHashCode(bean);
+        // Verify that reflection hashCode produces a non-zero/valid hash code
+        assertTrue(hash != 0);
+    }
+
+    @Test
+    public void testRegistryCleanupAfterReflection() {
+        SampleBean bean = new SampleBean("cleanup", 100);
+        int hash = HashCodeBuilder.reflectionHashCode(bean);
+        assertTrue(hash != 0);
+
+        // After reflection completes, the registry should be cleaned up (removed from ThreadLocal) in the fixed version
+        Set<IDKey> registry = HashCodeBuilder.getRegistry();
+        assertNull("Registry should be cleaned up and null after reflection hashCode completes", registry);
+    }
+}
+```
+
+---
+
+### 4. Defect Detection Strategy
+
+- **`testRegistryInitialValueIsNull`**:
+  - *Buggy version:* Fails because `initialValue()` returns a newly allocated `HashSet<IDKey>`, making `getRegistry()` return a non-null `Set`.
+  - *Fixed version:* Passes because `REGISTRY` has no initial value supplier, so `getRegistry()` returns `null`.
+- **`testRegistryCleanupAfterReflection`**:
+  - *Buggy version:* Fails because the registry is never removed from the `ThreadLocal` (`REGISTRY.remove()` is never called), leaving the empty set instance behind.
+  - *Fixed version:* Passes because `unregister` removes the set from `ThreadLocal` when it becomes empty.
+
+---
+
+### 5. Summary
+
+- **Root cause:** `HashCodeBuilder`'s `REGISTRY` `ThreadLocal` was implemented with an `initialValue()` returning an empty `HashSet` rather than `null`, and lacked proper cleanup (`REGISTRY.remove()`) and synchronization when unregistering objects.
+- **Targeted behavior:** The initial `null` state of `ThreadLocal` registry when uninitialized and its clean removal after reflection building.
+- **Number of generated tests:** 3.
+- **Why independent from trigger test:** The trigger test focuses on object cycles and infinite recursion during reflection hash code generation on self-referencing objects. These tests directly target the `ThreadLocal` registry initialization and cleanup contract, which is the underlying architectural fix for LANG-586.
+
+---
+
+### 6. Limitations
+
+- Testing internal static methods like `getRegistry()` exposes implementation details, but it is necessary here because the defect is entirely encapsulated in how the static `ThreadLocal` registry is initialized, accessed, and cleaned up across reflection calls.
