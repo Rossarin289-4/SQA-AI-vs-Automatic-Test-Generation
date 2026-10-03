@@ -1,0 +1,201 @@
+### 1. SOURCE CODE ANALYSIS
+
+In `org.apache.commons.lang3.text.translate.LookupTranslator`:
+
+* **Buggy Implementation (`Lang-4b`)**:
+* Key Field: `private final HashMap<CharSequence, CharSequence> lookupMap;`
+* Map Insertion: `lookupMap.put(seq[0], seq[1]);`
+* Map Retrieval: `lookupMap.get(subSeq);` where `subSeq = input.subSequence(index, index + i);`
+
+
+* **Fixed Implementation (`Lang-4f`)**:
+* Key Field: `private final HashMap<String, CharSequence> lookupMap;`
+* Map Insertion: `lookupMap.put(seq[0].toString(), seq[1]);`
+* Map Retrieval: `lookupMap.get(subSeq.toString());`
+
+
+
+#### Root Cause Mechanics
+
+In Java, `CharSequence` is an interface implemented by classes like `String`, `StringBuilder`, `StringBuffer`, `CharBuffer`, and custom implementations. `CharSequence` does **not** declare or contract `equals(Object)` or `hashCode()` to operate across different concrete implementations based on sequence content.
+
+1. **SubSequence Object Types**: Calling `input.subSequence(start, end)` on a `String` returns a `String` (or `CharSequence` slice). However, calling `subSequence(...)` on custom or non-`String` `CharSequence` implementations (e.g., `StringBuilder` or `CharBuffer`) yields objects whose `equals`/`hashCode` implementations do not match `String` or each other unless explicitly normalized.
+2. **Key Storage with Non-String CharSequence**: When a key is added as a `CharSequence` (e.g., `StringBuilder` or `CharBuffer`), `HashMap.put()` uses that specific instance's `hashCode()` and `equals()`. When `translate()` slices the `input` via `input.subSequence()`, it queries `lookupMap.get(subSeq)`.
+3. **Lookup Failure in Buggy Code**: Even if `key.toString().equals(subSeq.toString())` evaluates to `true`, `HashMap.get()` fails to find the entry if the key object stored in `lookupMap` and the `subSeq` key object used during lookup differ in concrete class or do not share identical `hashCode()` and `equals()` logic.
+4. **Correction in Fixed Code**: The fixed version calls `.toString()` on both key insertion (`seq[0].toString()`) and lookup (`subSeq.toString()`). Since Java `String` guarantees value-based equality and hash code calculation across all instances with identical character content, lookup succeeds regardless of the underlying `CharSequence` implementations used to instantiate the translator or pass as input.
+
+---
+
+### 2. TEST CASE DESIGN
+
+To cover diverse scenarios where `CharSequence` equality breaks in `Lang-4b` but succeeds in `Lang-4f`, four distinct test cases are designed:
+
+#### Test 1: `testTranslateWithStringBuilderKeyAndStringInput`
+
+* **Lookup Key**: `StringBuilder` instance (`new StringBuilder("alpha")`).
+* **Input**: `String` (`"alpha"`).
+* **Rationale**: `StringBuilder` inherits `Object.equals()` and `Object.hashCode()`, which rely on identity reference rather than character equality. In `Lang-4b`, inserting a `StringBuilder` into `HashMap<CharSequence, CharSequence>` and querying with a `String` sub-sequence causes `HashMap.get()` to return `null`. In `Lang-4f`, both are converted to `String`, resulting in a match.
+
+#### Test 2: `testTranslateWithCharBufferInput`
+
+* **Lookup Key**: `String` instance (`"beta"`).
+* **Input**: `CharBuffer` (`CharBuffer.wrap("beta")`).
+* **Rationale**: `CharBuffer.subSequence()` returns a `CharBuffer` slice. `CharBuffer.equals()` evaluates content, but `String.equals(CharBuffer)` evaluates to `false` because `String.equals()` strictly checks `instanceof String`. In `Lang-4b`, `lookupMap.get(subSeq)` compares `String` to `CharBuffer` and fails. In `Lang-4f`, `subSeq.toString()` produces a `String`, enabling `lookupMap.get("beta")` to match.
+
+#### Test 3: `testTranslateWithCustomCharSequenceKey`
+
+* **Lookup Key**: Custom `CharSequence` wrapper implementation (`CustomCharSequence("gamma")`).
+* **Input**: `StringBuilder` (`new StringBuilder("gamma")`).
+* **Rationale**: Both key and input use non-`String` `CharSequence` types with default reference-based equality. In `Lang-4b`, two distinct objects with identical content fail lookup. In `Lang-4f`, both are normalized via `.toString()`, restoring value-based matching.
+
+#### Test 4: `testTranslateWithMultipleKeysAndNonZeroIndex`
+
+* **Lookup Key**: Array containing `StringBuilder("ONE")` $\rightarrow$ `"1"` and `CharBuffer.wrap("TWO")` $\rightarrow$ `"2"`.
+* **Input**: `String` (`"PREFIX_TWO_SUFFIX"`), queried at `index = 7`.
+* **Rationale**: Verifies that non-zero translation offsets and greedy matching work correctly across multiple non-`String` key representations.
+
+---
+
+### 3. JUNIT 4.12 TEST CODE
+
+```java
+package org.apache.commons.lang3.text.translate;
+
+import org.junit.Test;
+
+import java.io.IOException;
+import java.io.StringWriter;
+import java.nio.CharBuffer;
+
+import static org.junit.Assert.assertEquals;
+
+/**
+ * Independent defect-oriented tests targeting LANG-882 / Lang-4.
+ * Verifies that LookupTranslator correctly translates text when lookup keys
+ * or input sequences are represented by non-String CharSequence implementations.
+ */
+public class LookupTranslatorTest {
+
+    /**
+     * Custom CharSequence implementation that mimics basic text wrapping
+     * without overriding Object.equals or Object.hashCode to return String-compatible values.
+     */
+    private static final class CustomCharSequence implements CharSequence {
+        private final String data;
+
+        public CustomCharSequence(final String data) {
+            this.data = data;
+        }
+
+        @Override
+        public int length() {
+            return data.length();
+        }
+
+        @Override
+        public char charAt(final int index) {
+            return data.charAt(index);
+        }
+
+        @Override
+        public CharSequence subSequence(final int start, final int end) {
+            return new CustomCharSequence(data.substring(start, end));
+        }
+
+        @Override
+        public String toString() {
+            return data;
+        }
+    }
+
+    @Test
+    public void testTranslateWithStringBuilderKeyAndStringInput() throws IOException {
+        final CharSequence key = new StringBuilder("alpha");
+        final CharSequence value = "123";
+        final LookupTranslator translator = new LookupTranslator(new CharSequence[][]{{key, value}});
+
+        final StringWriter writer = new StringWriter();
+        final String input = "alpha";
+        final int consumed = translator.translate(input, 0, writer);
+
+        assertEquals("Should consume all 5 characters of 'alpha'", 5, consumed);
+        assertEquals("Should write translated value '123'", "123", writer.toString());
+    }
+
+    @Test
+    public void testTranslateWithCharBufferInput() throws IOException {
+        final CharSequence key = "beta";
+        final CharSequence value = "456";
+        final LookupTranslator translator = new LookupTranslator(new CharSequence[][]{{key, value}});
+
+        final StringWriter writer = new StringWriter();
+        final CharSequence input = CharBuffer.wrap("beta");
+        final int consumed = translator.translate(input, 0, writer);
+
+        assertEquals("Should consume all 4 characters of 'beta'", 4, consumed);
+        assertEquals("Should write translated value '456'", "456", writer.toString());
+    }
+
+    @Test
+    public void testTranslateWithCustomCharSequenceKey() throws IOException {
+        final CharSequence key = new CustomCharSequence("gamma");
+        final CharSequence value = "789";
+        final LookupTranslator translator = new LookupTranslator(new CharSequence[][]{{key, value}});
+
+        final StringWriter writer = new StringWriter();
+        final CharSequence input = new StringBuilder("gamma");
+        final int consumed = translator.translate(input, 0, writer);
+
+        assertEquals("Should consume all 5 characters of 'gamma'", 5, consumed);
+        assertEquals("Should write translated value '789'", "789", writer.toString());
+    }
+
+    @Test
+    public void testTranslateWithMultipleKeysAndNonZeroIndex() throws IOException {
+        final CharSequence key1 = new StringBuilder("ONE");
+        final CharSequence value1 = "1";
+        final CharSequence key2 = CharBuffer.wrap("TWO");
+        final CharSequence value2 = "2";
+
+        final LookupTranslator translator = new LookupTranslator(
+                new CharSequence[][]{{key1, value1}, {key2, value2}}
+        );
+
+        final StringWriter writer = new StringWriter();
+        final String input = "PREFIX_TWO_SUFFIX";
+        final int consumed = translator.translate(input, 7, writer);
+
+        assertEquals("Should consume 3 characters starting at index 7 ('TWO')", 3, consumed);
+        assertEquals("Should write translated value '2'", "2", writer.toString());
+    }
+}
+
+```
+
+---
+
+### 4. DEFECT DETECTION STRATEGY
+
+| Test Method | Key Representation | Input Representation | Buggy Behavior (`Lang-4b`) | Fixed Behavior (`Lang-4f`) | Detection Outcome |
+| --- | --- | --- | --- | --- | --- |
+| `testTranslateWithStringBuilderKeyAndStringInput` | `StringBuilder("alpha")` | `String("alpha")` | **FAIL**: `StringBuilder.equals(String)` is `false`. `HashMap.get()` returns `null`. Consumed = 0, Output = `""`. | **PASS**: Key normalized to `String("alpha")`. Consumed = 5, Output = `"123"`. | **DETECTED** |
+| `testTranslateWithCharBufferInput` | `String("beta")` | `CharBuffer.wrap("beta")` | **FAIL**: `input.subSequence()` returns `CharBuffer`. `String.equals(CharBuffer)` is `false`. Consumed = 0, Output = `""`. | **PASS**: `subSeq.toString()` returns `String("beta")`. Consumed = 4, Output = `"456"`. | **DETECTED** |
+| `testTranslateWithCustomCharSequenceKey` | `CustomCharSequence("gamma")` | `StringBuilder("gamma")` | **FAIL**: Custom key uses reference equality. Key and input `subSeq` fail `equals()`. Consumed = 0, Output = `""`. | **PASS**: Both key and `subSeq` normalize via `.toString()`. Consumed = 5, Output = `"789"`. | **DETECTED** |
+| `testTranslateWithMultipleKeysAndNonZeroIndex` | `StringBuilder("ONE")`, `CharBuffer("TWO")` | `String("PREFIX_TWO_SUFFIX")` at index 7 | **FAIL**: Key `"TWO"` stored as `CharBuffer`. `String.subSequence()` returns `String`. Match fails. Consumed = 0, Output = `""`. | **PASS**: `CharBuffer` key normalized to `String("TWO")`. Consumed = 3, Output = `"2"`. | **DETECTED** |
+
+---
+
+### 5. SUMMARY
+
+* **Bug Identified**: `Lang-4` / `LANG-882` in `LookupTranslator`.
+* **Root Cause**: `HashMap<CharSequence, CharSequence>` uses `CharSequence` reference types as map keys. Due to differences in `equals()` and `hashCode()` implementations across `String`, `StringBuilder`, `CharBuffer`, and custom `CharSequence` types, lookups fail even when sequence content matches.
+* **Fix Applied in `Lang-4f**`: Both keys and lookup sub-sequences are converted to `String` (`seq[0].toString()` and `subSeq.toString()`), forcing value-based character comparison.
+* **Test Design**: Created 4 tests covering diverse `CharSequence` key and input combinations (`StringBuilder`, `CharBuffer`, `CustomCharSequence`, non-zero offsets).
+* **Expected Result**: All 4 tests fail on `Lang-4b` and pass on `Lang-4f`.
+
+---
+
+### 6. LIMITATIONS
+
+1. **Memory Allocation Overheads**: Converting every `subSequence` to a `String` via `toString()` during translation allocation creates new heap objects. While this resolves correctness issues, high-throughput translation pipelines may observe elevated garbage collection pressure.
+2. **`CharSequence` Substring Side-Effects**: For `CharBuffer` inputs, calling `subSequence()` does not mutate buffer position, but custom mutable `CharSequence` implementations modified concurrently during `translate()` execution could yield race conditions or indeterminate results.
