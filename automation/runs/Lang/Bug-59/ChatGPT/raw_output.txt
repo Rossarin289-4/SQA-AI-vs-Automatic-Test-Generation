@@ -1,0 +1,502 @@
+## 1. SOURCE CODE ANALYSIS
+
+### 1.1 Behavior that differs
+
+The defect is in `StrBuilder.appendFixedWidthPadRight(Object, int, char)`. Apache Commons Lang documents LANG-299 as an `ArrayIndexOutOfBoundsException` in this method. ([Apache Commons][1])
+
+The important invariant for this method is:
+
+> Before writing `width` characters starting at the current `size`, the internal buffer must have capacity for `size + width`.
+
+The corrected implementation explicitly performs:
+
+```java
+ensureCapacity(size + width);
+```
+
+before writing into `buffer[size ... size + width)`. The corresponding implementation then copies up to `width` characters and pads the remaining positions. ([SciJava Javadoc][2])
+
+Conceptually, the fixed algorithm is:
+
+```text
+if width > 0:
+    ensure capacity for current size + width
+    convert object to string
+    if string is at least width:
+        copy first width characters
+    else:
+        copy whole string
+        fill remaining positions with padChar
+    increase size by width
+```
+
+### 1.2 Likely root cause
+
+The root cause is an **insufficient capacity check before writing the fixed-width field**.
+
+The failure is particularly exposed when:
+
+```text
+current size > 0
+AND
+current capacity is only large enough for the existing content
+AND
+the requested width extends beyond that capacity
+```
+
+In that situation, the method writes at positions beginning at `buffer[size]`. If the buffer has not been expanded to at least `size + width`, the write can go beyond the end of the array and produce `ArrayIndexOutOfBoundsException`.
+
+This explains why a newly created builder with a small initial capacity is an important test condition. The public issue description specifically identifies the failure as an `ArrayIndexOutOfBoundsException`. ([Apache Commons][1])
+
+### 1.3 Specific behavior the tests should distinguish
+
+The tests should distinguish:
+
+**BUGGY**
+
+```text
+existing content + appendFixedWidthPadRight(...)
+→ ArrayIndexOutOfBoundsException
+```
+
+when the append requires more capacity than currently exists.
+
+**FIXED**
+
+```text
+existing content + appendFixedWidthPadRight(...)
+→ successful append
+→ resulting field has exactly the requested width
+→ existing content remains unchanged
+```
+
+The defect is therefore not simply "does the method produce the correct padding?" It is specifically whether it can safely append a fixed-width field **when the append crosses the current buffer capacity**.
+
+### 1.4 Boundary and representative cases
+
+I would target these cases:
+
+| Case | Existing content                                      |                               Width | Purpose                     |
+| ---- | ----------------------------------------------------- | ----------------------------------: | --------------------------- |
+| A    | non-empty                                             |               extends past capacity | Primary defect              |
+| B    | non-empty                                             |             exact capacity boundary | Boundary                    |
+| C    | non-empty                                             | much larger than remaining capacity | Strong capacity-growth case |
+| D    | empty builder                                         |                      positive width | Regression/control          |
+| E    | positive existing content + object longer than width  |                 truncation + growth |                             |
+| F    | positive existing content + object shorter than width |       copy + right padding + growth |                             |
+
+The key is that the primary tests should use a **small initial capacity and pre-existing content**. That is independently derived from the array-write/capacity defect rather than copied from the trigger.
+
+The official API contract also says that the method appends an object to a fixed width, truncating the right side when the object is longer and padding on the right otherwise. ([Apache Commons][3])
+
+---
+
+## 2. TEST CASE DESIGN
+
+### Test 1 — Existing content followed by a fixed-width append
+
+Create a builder with a very small initial capacity, put some content into it, then append a field whose width requires the buffer to grow.
+
+Example concept:
+
+```text
+initial capacity = 4
+existing = "ABCD"
+append "xy" with width 3
+expected = "ABCDxy-"
+```
+
+The important property is not the particular strings; it is:
+
+```text
+size == capacity
+width > 0
+append requires additional capacity
+```
+
+**BUGGY:** expected to throw `ArrayIndexOutOfBoundsException`.
+
+**FIXED:** expected `"ABCDxy-"`.
+
+---
+
+### Test 2 — Growth with a string longer than the requested width
+
+This exercises the branch where the source string must be truncated.
+
+The resulting appended field must contain exactly `width` characters.
+
+For example:
+
+```text
+existing = "1234"
+object = "abcdef"
+width = 3
+pad = '.'
+```
+
+Expected:
+
+```text
+"1234abc"
+```
+
+No padding should be added because the source is already longer than the requested width.
+
+This complements Test 1 because it checks the **truncation branch** while simultaneously forcing capacity growth.
+
+---
+
+### Test 3 — Growth with a string shorter than the requested width
+
+This exercises the other branch:
+
+```text
+existing content
++ source string
++ right padding
+```
+
+The expected final length increases by exactly `width`.
+
+This verifies that the capacity fix works when the method has to write both the source string and padding characters.
+
+---
+
+### Test 4 — Integer overload
+
+`appendFixedWidthPadRight(int, int, char)` delegates to the object/string implementation.
+
+Testing it provides a small API-level regression check that the capacity-safe behavior is also preserved for primitive integer input.
+
+---
+
+### Test 5 — Zero/negative width boundary
+
+A non-positive width should have no effect.
+
+This is a control case: the fix should not accidentally make `appendFixedWidthPadRight` modify the builder when `width <= 0`.
+
+---
+
+## 3. JUNIT 4.12 TEST CODE
+
+```java
+package org.apache.commons.lang.text;
+
+import static org.junit.Assert.assertEquals;
+
+import org.junit.Test;
+
+public class StrBuilderLang59Test {
+
+    /**
+     * Primary defect test.
+     *
+     * The builder is completely filled before the fixed-width append.
+     * The append therefore requires capacity beyond the original buffer.
+     */
+    @Test
+    public void testAppendFixedWidthPadRightGrowsBufferAfterExistingContent() {
+        StrBuilder builder = new StrBuilder(4);
+        builder.append("ABCD");
+
+        builder.appendFixedWidthPadRight("xy", 3, '-');
+
+        assertEquals("ABCDxy-", builder.toString());
+        assertEquals(7, builder.length());
+    }
+
+    /**
+     * Exercises the branch where the supplied value is longer than
+     * the requested fixed width. The result must contain exactly
+     * the requested number of characters for the appended field.
+     */
+    @Test
+    public void testAppendFixedWidthPadRightTruncatesWhenGrowthIsRequired() {
+        StrBuilder builder = new StrBuilder(5);
+        builder.append("12345");
+
+        builder.appendFixedWidthPadRight("abcdef", 3, '.');
+
+        assertEquals("12345abc", builder.toString());
+        assertEquals(8, builder.length());
+    }
+
+    /**
+     * Exercises the branch where the supplied value is shorter than
+     * the requested width, requiring both copying and right padding.
+     */
+    @Test
+    public void testAppendFixedWidthPadRightPadsAfterGrowth() {
+        StrBuilder builder = new StrBuilder(3);
+        builder.append("XYZ");
+
+        builder.appendFixedWidthPadRight("go", 5, '_');
+
+        assertEquals("XYZgo___", builder.toString());
+        assertEquals(8, builder.length());
+    }
+
+    /**
+     * Verifies the integer overload, which delegates to the
+     * fixed-width string implementation.
+     */
+    @Test
+    public void testAppendFixedWidthPadRightIntegerAfterExistingContent() {
+        StrBuilder builder = new StrBuilder(4);
+        builder.append("base");
+
+        builder.appendFixedWidthPadRight(27, 4, '0');
+
+        assertEquals("base2700", builder.toString());
+        assertEquals(8, builder.length());
+    }
+
+    /**
+     * Boundary case: non-positive width must not modify the builder.
+     */
+    @Test
+    public void testAppendFixedWidthPadRightIgnoresNonPositiveWidth() {
+        StrBuilder builder = new StrBuilder(2);
+        builder.append("OK");
+
+        builder.appendFixedWidthPadRight("abcdef", 0, '-');
+        assertEquals("OK", builder.toString());
+
+        builder.appendFixedWidthPadRight("abcdef", -3, '-');
+        assertEquals("OK", builder.toString());
+    }
+}
+```
+
+---
+
+## 4. DEFECT DETECTION STRATEGY
+
+### Test 1 — `testAppendFixedWidthPadRightGrowsBufferAfterExistingContent`
+
+**BUGGY VERSION:**
+
+The builder has:
+
+```text
+capacity = 4
+size = 4
+```
+
+The method needs to append a field of width `3`, so it needs capacity of at least:
+
+```text
+size + width = 7
+```
+
+Without the necessary capacity expansion, writing at `buffer[4]` and beyond can exceed the original array.
+
+**Expected:** `ArrayIndexOutOfBoundsException` → **test fails**.
+
+**FIXED VERSION:**
+
+The buffer is expanded to accommodate `size + width`.
+
+Result:
+
+```text
+ABCDxy-
+```
+
+**Expected:** test passes.
+
+**Status:** **Primary defect-detecting test.**
+
+---
+
+### Test 2 — `testAppendFixedWidthPadRightTruncatesWhenGrowthIsRequired`
+
+The existing content consumes the initial capacity. The requested width is smaller than the source string.
+
+Expected fixed-width operation:
+
+```text
+"abcdef"
+→ first 3 characters
+→ "abc"
+```
+
+Final:
+
+```text
+"12345abc"
+```
+
+**BUGGY VERSION:** capacity-related write can produce `ArrayIndexOutOfBoundsException`.
+
+**FIXED VERSION:** buffer grows and `"abc"` is copied successfully.
+
+**Expected:** BUGGY fails, FIXED passes.
+
+---
+
+### Test 3 — `testAppendFixedWidthPadRightPadsAfterGrowth`
+
+Here:
+
+```text
+"XYZ" + "go" + "___"
+```
+
+produces:
+
+```text
+"XYZgo___"
+```
+
+The test exercises the branch that writes the source string followed by padding.
+
+**BUGGY VERSION:** can exceed the original buffer while writing the appended field → `ArrayIndexOutOfBoundsException`.
+
+**FIXED VERSION:** capacity is sufficient and the complete fixed-width field is produced.
+
+**Expected:** BUGGY fails, FIXED passes.
+
+---
+
+### Test 4 — `testAppendFixedWidthPadRightIntegerAfterExistingContent`
+
+The integer overload converts the integer to a string and delegates to the object/string implementation.
+
+For:
+
+```text
+27, width = 4, pad = '0'
+```
+
+the appended field is:
+
+```text
+2700
+```
+
+so the final result is:
+
+```text
+base2700
+```
+
+**BUGGY VERSION:** capacity-growth defect can still occur.
+
+**FIXED VERSION:** successful append.
+
+**Expected:** BUGGY fails, FIXED passes.
+
+---
+
+### Test 5 — `testAppendFixedWidthPadRightIgnoresNonPositiveWidth`
+
+The method only performs the fixed-width operation when:
+
+```java
+width > 0
+```
+
+Therefore both zero and negative widths should leave the builder unchanged.
+
+**BUGGY VERSION:** passes this test.
+
+**FIXED VERSION:** passes this test.
+
+This is intentionally a **regression/control test**, not a defect-detecting test. It checks that the repair does not alter the documented boundary behavior.
+
+---
+
+### Overall detection
+
+The strongest defect signature is:
+
+```text
+small initial capacity
+        +
+existing content consuming that capacity
+        +
+positive fixed width
+        +
+appendFixedWidthPadRight()
+        ↓
+BUGGY: ArrayIndexOutOfBoundsException
+FIXED: successful append
+```
+
+That directly targets the defect documented for LANG-299, which was specifically an `ArrayIndexOutOfBoundsException` in `appendFixedWidthPadRight`. ([Apache Commons][1])
+
+---
+
+## 5. SUMMARY
+
+### Root cause
+
+The defect is a **buffer-capacity error** in `appendFixedWidthPadRight`.
+
+The method writes a fixed-width field beginning at the current `size`. The buffer therefore needs capacity for:
+
+```text
+size + width
+```
+
+The corrected implementation explicitly ensures this capacity before performing the writes. ([SciJava Javadoc][2])
+
+### Targeted behavior
+
+The tests target successful fixed-width appending when the operation requires the internal buffer to grow.
+
+They cover:
+
+* existing content + growth;
+* truncation branch;
+* padding branch;
+* integer overload;
+* non-positive-width boundary.
+
+### Number of generated tests
+
+**5 tests**
+
+| Test                                                          | Purpose              | BUGGY | FIXED |
+| ------------------------------------------------------------- | -------------------- | ----- | ----- |
+| `testAppendFixedWidthPadRightGrowsBufferAfterExistingContent` | Main capacity defect | ❌     | ✅     |
+| `testAppendFixedWidthPadRightTruncatesWhenGrowthIsRequired`   | Truncation + growth  | ❌     | ✅     |
+| `testAppendFixedWidthPadRightPadsAfterGrowth`                 | Padding + growth     | ❌     | ✅     |
+| `testAppendFixedWidthPadRightIntegerAfterExistingContent`     | Integer overload     | ❌     | ✅     |
+| `testAppendFixedWidthPadRightIgnoresNonPositiveWidth`         | Boundary regression  | ✅     | ✅     |
+
+### Independence from the trigger
+
+The tests do **not** reproduce the supplied trigger test.
+
+In particular, the supplied trigger uses a newly created builder with a particular capacity/input combination. The generated suite instead derives its inputs from the underlying invariant:
+
+> the append must work when `size + width` exceeds the current buffer capacity.
+
+The cases deliberately use different existing contents, widths, and source values while exercising both internal branches of the method.
+
+---
+
+## 6. LIMITATIONS
+
+1. **The prompt's source excerpt is truncated around the target method.**
+   Therefore the exact buggy method body is not visible in the supplied text. The defect analysis is based on the stated modified method, the LANG-299 description, and the corrected implementation pattern.
+
+2. **The historical Apache documentation confirms the defect description.**
+   Apache's 2.3 release notes explicitly identify LANG-299 as an `ArrayIndexOutOfBoundsException` in `StrBuilder.appendFixedWidthPadRight`. ([Apache Commons][1])
+
+3. **Tests 1–4 depend on the capacity-growth defect.**
+   If the actual buggy implementation differs from the historical implementation inferred here in some additional way, the exact failing boundary could differ.
+
+4. **Test 5 is intentionally not defect-detecting.**
+   It is included as a regression/control case for the `width <= 0` boundary.
+
+5. **The primary tests intentionally use capacity-sensitive builders.**
+   A test using the default `new StrBuilder()` may not expose this defect because the default internal capacity is relatively large. The important condition is that the append crosses the current capacity boundary.
+
+[1]: https://commons.apache.org/proper/commons-lang/upgradeto2_3.html?utm_source=chatgpt.com "2.3 Release Notes – Apache Commons Lang"
+[2]: https://javadoc.scijava.org/Apache-Commons-Text/src-html/org/apache/commons/text/StrBuilder.html?utm_source=chatgpt.com "Source code"
+[3]: https://commons.apache.org/proper/commons-lang/javadocs/api-2.3/org/apache/commons/lang/text/StrBuilder.html?utm_source=chatgpt.com "StrBuilder (Lang 2.3 API)"

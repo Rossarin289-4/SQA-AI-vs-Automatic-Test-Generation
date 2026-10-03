@@ -1,0 +1,227 @@
+## 1. Behavior that differs
+
+The defect is in `DateUtils.isSameLocalTime(Calendar, Calendar)`.
+
+The buggy implementation compares:
+
+```java
+cal1.get(Calendar.HOUR) == cal2.get(Calendar.HOUR)
+```
+
+while the fixed implementation compares:
+
+```java
+cal1.get(Calendar.HOUR_OF_DAY) == cal2.get(Calendar.HOUR_OF_DAY)
+```
+
+This is significant because:
+
+* `Calendar.HOUR` is the **12-hour clock field**, ranging from 0–11.
+* `Calendar.HOUR_OF_DAY` is the **24-hour clock field**, ranging from 0–23.
+* The buggy implementation does **not compare `Calendar.AM_PM`**.
+
+Therefore, times such as **03:xx and 15:xx** have the same `Calendar.HOUR` value (`3`) even though they are different local times. The fixed implementation distinguishes them using `HOUR_OF_DAY`.
+
+The API documentation states that `isSameLocalTime` compares the calendar field values and requires the calendars to be of the same type. ([Apache Commons][1])
+
+The existing Apache test history also identifies LANG-677 specifically around `isSameLocalTime`, with the problematic distinction involving different 24-hour times. ([GitHub][2])
+
+---
+
+## 2. Likely root cause visible from the source
+
+The root cause is a **12-hour vs. 24-hour field comparison**.
+
+### Buggy
+
+```java
+cal1.get(Calendar.HOUR) == cal2.get(Calendar.HOUR)
+```
+
+`Calendar.HOUR` cannot distinguish:
+
+```text
+03:00
+15:00
+```
+
+because both have `HOUR == 3`.
+
+### Fixed
+
+```java
+cal1.get(Calendar.HOUR_OF_DAY) == cal2.get(Calendar.HOUR_OF_DAY)
+```
+
+Now:
+
+```text
+03:00 -> HOUR_OF_DAY = 3
+15:00 -> HOUR_OF_DAY = 15
+```
+
+so the method correctly returns `false`.
+
+This also explains why simply checking `AM_PM` would have been another possible correction, but the actual fixed implementation changes the comparison to `HOUR_OF_DAY`.
+
+---
+
+## 3. Specific behavior the generated test should distinguish
+
+The generated tests should verify:
+
+> Two calendars with identical year, day, minute, second, millisecond, and calendar class, but with times exactly 12 hours apart, must **not** be considered the same local time.
+
+The strongest defect-oriented inputs are therefore pairs such as:
+
+| Case                   | Calendar 1 | Calendar 2 | Expected |
+| ---------------------- | ---------- | ---------- | -------- |
+| Midnight/noon boundary | 00:xx      | 12:xx      | `false`  |
+| Morning/afternoon      | 05:xx      | 17:xx      | `false`  |
+| Late morning/night     | 11:xx      | 23:xx      | `false`  |
+| Normal equal control   | 08:xx      | 08:xx      | `true`   |
+
+The first three directly target the 12-hour collision in the buggy implementation.
+
+---
+
+## 4. Boundary, representative, and regression cases
+
+### Boundary case 1 — 00:00 vs 12:00
+
+This is a strong boundary because `Calendar.HOUR` represents both as `0`.
+
+* **BUGGY:** `true`
+* **FIXED:** `false`
+
+### Boundary case 2 — 11:xx vs 23:xx
+
+This tests the upper end of the 12-hour representation.
+
+* **BUGGY:** `true`
+* **FIXED:** `false`
+
+### Representative case — 05:xx vs 17:xx
+
+This avoids relying only on hour boundaries and demonstrates the general 12-hour collision.
+
+* **BUGGY:** `true`
+* **FIXED:** `false`
+
+### Regression/control case — identical local time
+
+For example, 08:xx vs 08:xx.
+
+* **BUGGY:** `true`
+* **FIXED:** `true`
+
+This is useful to ensure the test suite is not simply expecting every pair to be different.
+
+The cases are independently derived from the source-level distinction between `HOUR` and `HOUR_OF_DAY`; they do not need the original trigger inputs.
+
+---
+
+## 5. Complete JUnit 4.12 test class
+
+```java
+package org.apache.commons.lang3.time;
+
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+
+import java.util.Calendar;
+import java.util.GregorianCalendar;
+
+import org.junit.Test;
+
+public class DateUtilsLang21Test {
+
+    @Test
+    public void testIsSameLocalTimeMidnightAndNoonAreDifferent() {
+        Calendar midnight = new GregorianCalendar();
+        midnight.set(2020, Calendar.MARCH, 10, 0, 15, 20);
+        midnight.set(Calendar.MILLISECOND, 0);
+
+        Calendar noon = new GregorianCalendar();
+        noon.set(2020, Calendar.MARCH, 10, 12, 15, 20);
+        noon.set(Calendar.MILLISECOND, 0);
+
+        assertFalse(DateUtils.isSameLocalTime(midnight, noon));
+    }
+
+    @Test
+    public void testIsSameLocalTimeMorningAndAfternoonAreDifferent() {
+        Calendar morning = new GregorianCalendar();
+        morning.set(2020, Calendar.JUNE, 15, 5, 30, 45);
+        morning.set(Calendar.MILLISECOND, 0);
+
+        Calendar afternoon = new GregorianCalendar();
+        afternoon.set(2020, Calendar.JUNE, 15, 17, 30, 45);
+        afternoon.set(Calendar.MILLISECOND, 0);
+
+        assertFalse(DateUtils.isSameLocalTime(morning, afternoon));
+    }
+
+    @Test
+    public void testIsSameLocalTimeLateMorningAndNightAreDifferent() {
+        Calendar lateMorning = new GregorianCalendar();
+        lateMorning.set(2020, Calendar.SEPTEMBER, 20, 11, 40, 50);
+        lateMorning.set(Calendar.MILLISECOND, 0);
+
+        Calendar night = new GregorianCalendar();
+        night.set(2020, Calendar.SEPTEMBER, 20, 23, 40, 50);
+        night.set(Calendar.MILLISECOND, 0);
+
+        assertFalse(DateUtils.isSameLocalTime(lateMorning, night));
+    }
+
+    @Test
+    public void testIsSameLocalTimeIdenticalLocalTimeIsEqual() {
+        Calendar first = new GregorianCalendar();
+        first.set(2020, Calendar.NOVEMBER, 5, 8, 25, 35);
+        first.set(Calendar.MILLISECOND, 0);
+
+        Calendar second = new GregorianCalendar();
+        second.set(2020, Calendar.NOVEMBER, 5, 8, 25, 35);
+        second.set(Calendar.MILLISECOND, 0);
+
+        assertTrue(DateUtils.isSameLocalTime(first, second));
+    }
+}
+```
+
+---
+
+## 6. Defect detection strategy and summary
+
+### Expected behavior
+
+| Test                                                 | BUGGY version            | FIXED version    | Detects defect? |
+| ---------------------------------------------------- | ------------------------ | ---------------- | --------------- |
+| `testIsSameLocalTimeMidnightAndNoonAreDifferent`     | `true` → assertion fails | `false` → passes | **Yes**         |
+| `testIsSameLocalTimeMorningAndAfternoonAreDifferent` | `true` → assertion fails | `false` → passes | **Yes**         |
+| `testIsSameLocalTimeLateMorningAndNightAreDifferent` | `true` → assertion fails | `false` → passes | **Yes**         |
+| `testIsSameLocalTimeIdenticalLocalTimeIsEqual`       | `true` → passes          | `true` → passes  | No, control     |
+
+The first three are defect-detecting because the buggy implementation collapses the two times to the same `Calendar.HOUR` value, whereas the fixed implementation compares their distinct `HOUR_OF_DAY` values.
+
+### Summary
+
+* **Root cause:** `Calendar.HOUR` was used instead of `Calendar.HOUR_OF_DAY`.
+* **Targeted behavior:** 12-hour-distinct times must not be treated as the same local time.
+* **Generated tests:** **4**
+
+  * 3 defect-detection tests
+  * 1 regression/control test
+* **Independent from the original trigger:** the tests use independently selected dates and time pairs based on the semantic boundary of the `HOUR`/`HOUR_OF_DAY` defect rather than reproducing the trigger implementation or its exact inputs.
+
+The public API contract describes `isSameLocalTime` as comparing calendar fields, which makes the choice of the correct hour field central to the defect. ([Apache Commons][1])
+
+### Limitations
+
+The supplied source is sufficient to identify the actual production difference: `HOUR` in the buggy version versus `HOUR_OF_DAY` in the fixed version. The surrounding source was truncated, but that does not affect analysis of `isSameLocalTime`.
+
+One environmental consideration is timezone/DST behavior. These tests deliberately use the same `GregorianCalendar` type and the same calendar date, while differing only in the hour, so they target the modified comparison directly rather than relying on timezone conversions.
+
+[1]: https://commons.apache.org/proper/commons-lang/javadocs/api-3.5/org/apache/commons/lang3/time/DateUtils.html?utm_source=chatgpt.com "DateUtils (Apache Commons Lang 3.5 API)"
+[2]: https://github.com/apache/commons-lang/blob/master/src/test/java/org/apache/commons/lang3/time/DateUtilsTest.java?utm_source=chatgpt.com "commons-lang/src/test/java/org/apache/commons/lang3/time/DateUtilsTest.java at master · apache/commons-lang · GitHub"

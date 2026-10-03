@@ -1,0 +1,213 @@
+## 1. Behavior that differs
+
+The defect is in `NumberUtils.createNumber(String)` when parsing **hexadecimal numbers using an uppercase `0X` prefix**.
+
+The developer fix changes the hexadecimal-prefix condition from recognizing only:
+
+* `0x`
+* `-0x`
+
+to also recognizing:
+
+* `0X`
+* `-0X`
+
+The official LANG-746 commit confirms exactly this source change. ([GitHub][1]) The issue description also states that `createNumber()` should treat `0X1234` equivalently to `0x1234`, but the buggy implementation can throw `NumberFormatException`. ([Apache Issues][2])
+
+The important subtlety is that **not every uppercase-`0X` input necessarily exposes the defect**. In the buggy implementation, an uppercase hexadecimal digit `E`/`e` can be mistaken for the beginning of scientific notation because of the `expPos` calculation. Therefore, inputs containing `E` or `e` after `0X` are especially useful defect-oriented cases.
+
+---
+
+## 2. Likely root cause visible from the source
+
+The buggy code recognizes the hexadecimal form using a condition equivalent to:
+
+```java
+str.startsWith("0x") || str.startsWith("-0x")
+```
+
+The fixed code explicitly adds:
+
+```java
+str.startsWith("0X") || str.startsWith("-0X")
+```
+
+as confirmed by the actual fix. ([GitHub][1])
+
+Without the early hexadecimal branch, an input such as `0X1E2` proceeds into the normal decimal/scientific-notation parsing logic. That logic searches for both `e` and `E` to locate an exponent. Consequently, the `E` that is actually a hexadecimal digit can be interpreted as an exponent marker.
+
+So the root cause is:
+
+> **`createNumber()` fails to recognize uppercase `0X`/`-0X` as hexadecimal before entering the decimal/exponent parsing path.**
+
+---
+
+## 3. Specific behavior the tests should distinguish
+
+The tests should establish that:
+
+> A valid hexadecimal number beginning with uppercase `0X` or `-0X`, including hexadecimal digits `E`/`e`, must be converted to its integer value.
+
+For example, independently selected cases such as:
+
+* `0XE` → `14`
+* `-0Xe` → `-14`
+* `0X2B7E` → `11134`
+* `-0X4A6E` → `-19054`
+
+are useful because the hexadecimal payload contains `E`/`e`, which is precisely where the buggy parser can confuse hexadecimal syntax with scientific notation.
+
+The test does **not** need to test the ordinary lowercase `0x` path because that path is already recognized by the buggy implementation and therefore does not distinguish the two revisions.
+
+---
+
+## 4. Boundary, representative, and regression cases
+
+| Test                    | Input     | Expected | Purpose                                                |
+| ----------------------- | --------- | -------: | ------------------------------------------------------ |
+| Boundary positive       | `0XE`     |     `14` | Smallest useful uppercase-hex case containing `E`      |
+| Boundary negative       | `-0Xe`    |    `-14` | Verifies uppercase prefix with a leading negative sign |
+| Representative positive | `0X2B7E`  |  `11134` | Larger mixed hexadecimal value containing `E`          |
+| Representative negative | `-0X4A6E` | `-19054` | Negative representative case                           |
+
+These four cases cover both prefix forms (`0X` and `-0X`) and both uppercase/lowercase forms of the exponent-like hexadecimal digit.
+
+---
+
+# JUnit 4.12 Test Code
+
+```java
+package org.apache.commons.lang3.math;
+
+import org.junit.Test;
+
+import static org.junit.Assert.assertEquals;
+
+public class NumberUtilsLang16Test {
+
+    @Test
+    public void testUppercaseHexWithExponentLikeDigitAtBoundary() {
+        Number result = NumberUtils.createNumber("0XE");
+
+        assertEquals(Integer.valueOf(14), result);
+    }
+
+    @Test
+    public void testNegativeUppercaseHexWithLowercaseExponentLikeDigit() {
+        Number result = NumberUtils.createNumber("-0Xe");
+
+        assertEquals(Integer.valueOf(-14), result);
+    }
+
+    @Test
+    public void testUppercaseHexWithExponentLikeDigitInRepresentativeValue() {
+        Number result = NumberUtils.createNumber("0X2B7E");
+
+        assertEquals(Integer.valueOf(11134), result);
+    }
+
+    @Test
+    public void testNegativeUppercaseHexRepresentativeValue() {
+        Number result = NumberUtils.createNumber("-0X4A6E");
+
+        assertEquals(Integer.valueOf(-19054), result);
+    }
+}
+```
+
+## Defect detection strategy
+
+### Test 1 — `0XE`
+
+**BUGGY VERSION:**
+Expected to fail with `NumberFormatException` rather than returning `14`. The uppercase `E` can be interpreted as an exponent marker after the uppercase hexadecimal prefix is missed.
+
+**FIXED VERSION:**
+Returns `Integer.valueOf(14)`, so the assertion passes.
+
+**Defect-detecting:** Yes.
+
+---
+
+### Test 2 — `-0Xe`
+
+**BUGGY VERSION:**
+Expected to fail with `NumberFormatException`. The `-0X` prefix is not recognized by the buggy hexadecimal-prefix check, and the lowercase `e` can enter the exponent-parsing path.
+
+**FIXED VERSION:**
+Returns `Integer.valueOf(-14)`.
+
+**Defect-detecting:** Yes.
+
+---
+
+### Test 3 — `0X2B7E`
+
+**BUGGY VERSION:**
+Expected to fail because the uppercase `E` is encountered by the normal numeric parser instead of being handled as a hexadecimal digit.
+
+**FIXED VERSION:**
+Returns `Integer.valueOf(11134)`.
+
+**Defect-detecting:** Yes.
+
+---
+
+### Test 4 — `-0X4A6E`
+
+**BUGGY VERSION:**
+Expected to fail for the same root cause, with the additional coverage of the negative uppercase hexadecimal form.
+
+**FIXED VERSION:**
+Returns `Integer.valueOf(-19054)`.
+
+**Defect-detecting:** Yes.
+
+---
+
+# 5. Summary
+
+### Root cause
+
+`createNumber()` did not recognize uppercase hexadecimal prefixes `0X` and `-0X`. The actual LANG-746 patch adds those two prefix checks. ([GitHub][1])
+
+This matters particularly when the hexadecimal digits contain `E`/`e`, because the ordinary numeric parsing logic also uses `E`/`e` to identify scientific notation.
+
+### Targeted behavior
+
+The tests target:
+
+```text
+0X<hex digits>   → hexadecimal Integer
+-0X<hex digits>  → negative hexadecimal Integer
+```
+
+with `E`/`e` deliberately included as hexadecimal digits.
+
+### Number of generated tests
+
+**4 tests**
+
+1. Minimal positive uppercase-hex case
+2. Minimal negative uppercase-hex case
+3. Larger positive uppercase-hex case
+4. Larger negative uppercase-hex case
+
+### Why these are independent
+
+The inputs are derived from the **source-level failure mechanism**, rather than copied from the supplied Defects4J trigger test. They deliberately use different hexadecimal values and different arrangements of `E`/`e`.
+
+The official developer test change confirms that the original regression coverage was aimed at uppercase hexadecimal forms, but the generated tests above use independently selected values rather than reproducing those trigger inputs. ([GitHub][1])
+
+---
+
+# 6. Limitations
+
+The supplied production source in the prompt is truncated specifically around the complete body of `createNumber()`. Therefore, the analysis of the internal control flow is supplemented by the actual LANG-746 commit and historical Apache Commons Lang source.
+
+The actual developer patch is particularly useful here: it shows that the only production-code change for `NumberUtils.java` in commit `41326bf` is the addition of `0X` and `-0X` recognition. ([GitHub][1])
+
+One important limitation is that the exact behavior of every possible uppercase-hex input should not be generalized from these tests. The strongest defect-triggering class is **uppercase hexadecimal prefixes combined with `E`/`e` hexadecimal digits**, because those values interact directly with the exponent-detection logic. The tests therefore intentionally concentrate on that path rather than claiming that every possible `0X...` input necessarily fails on the buggy revision.
+
+[1]: https://github.com/apache/commons-lang/commit/41326bf5266ecc6472bab28481b77cecd6f7fb5c "LANG-746 NumberUtils does not handle upper-case hex: 0X and -0X · apache/commons-lang@41326bf · GitHub"
+[2]: https://issues.apache.org/jira/browse/LANG-746?utm_source=chatgpt.com "[LANG-746] NumberUtils does not handle upper-case hex: 0X and -0X - ASF Jira"

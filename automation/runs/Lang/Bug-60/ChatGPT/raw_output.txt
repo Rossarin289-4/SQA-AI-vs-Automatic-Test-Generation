@@ -1,0 +1,448 @@
+## 1. SOURCE CODE ANALYSIS
+
+### 1.1 Behavior that differs
+
+The defect is in `StrBuilder.contains(char ch)`.
+
+The bug report describes that `StrBuilder` uses `thisBuf.length` where it should use the logical builder `size`. Apache Commons Lang's release notes explicitly identify LANG-295 as:
+
+> “StrBuilder contains usages of thisBuf.length when they should use size.” ([Apache Commons][1])
+
+The relevant buggy implementation is effectively:
+
+```java
+public boolean contains(char ch) {
+    char[] thisBuf = buffer;
+    for (int i = 0; i < thisBuf.length; i++) {
+        if (thisBuf[i] == ch) {
+            return true;
+        }
+    }
+    return false;
+}
+```
+
+The corrected implementation limits the search to the **logical contents** of the builder:
+
+```java
+public boolean contains(char ch) {
+    char[] thisBuf = buffer;
+    for (int i = 0; i < this.size; i++) {
+        if (thisBuf[i] == ch) {
+            return true;
+        }
+    }
+    return false;
+}
+```
+
+This is also consistent with the documented behavior of `contains(char)`: it should report whether the **string builder** contains the character, not whether the unused capacity of its internal buffer contains it. ([Apache Commons][2])
+
+### 1.2 Root cause
+
+The root cause is confusing:
+
+* `buffer.length` = allocated capacity
+* `size` = number of characters that actually belong to the builder
+
+These values can be different.
+
+For example:
+
+```text
+buffer capacity = 35
+logical size    = 3
+
+contents:
+[a][b][c][x][x][x]...
+ ^-------^
+   valid
+
+             ^----------^
+               unused
+```
+
+If the builder is shortened after previously containing characters, the old characters can remain in the unused part of `buffer`.
+
+The buggy loop scans those characters as if they were part of the builder.
+
+This is particularly important because methods such as `clear()` and `setLength()` can reduce the logical size without necessarily reducing the internal buffer capacity.
+
+### 1.3 Behavior the test must distinguish
+
+A good defect-oriented test should:
+
+1. Put a character into the builder.
+2. Reduce the logical length so that the character is no longer part of the builder.
+3. Call `contains(char)` for that removed character.
+4. Expect `false`.
+
+Expected behavior:
+
+```text
+BUGGY:
+searches buffer.length
+→ sees stale character outside size
+→ returns true
+→ test fails
+
+FIXED:
+searches only size characters
+→ ignores stale character
+→ returns false
+→ test passes
+```
+
+This is a particularly strong test because it directly exposes the semantic difference between **capacity** and **logical content**.
+
+### 1.4 Boundary and regression cases
+
+I would use the following complementary cases:
+
+| Test | Scenario                                              | Expected |
+| ---- | ----------------------------------------------------- | -------- |
+| 1    | Character exists in active contents                   | `true`   |
+| 2    | Character existed but was removed by shrinking        | `false`  |
+| 3    | Builder completely cleared after containing character | `false`  |
+| 4    | Character exists at the last logical position         | `true`   |
+| 5    | Character does not exist anywhere in logical contents | `false`  |
+
+The defect-detecting cases are #2 and #3. The others provide regression coverage and make sure the test suite is not simply asserting `false` everywhere.
+
+---
+
+## 2. TEST CASE DESIGN
+
+### Test 1 — Character still inside logical contents
+
+```text
+Builder = "cat"
+contains('a')
+Expected = true
+```
+
+This confirms normal positive behavior.
+
+### Test 2 — Removed character remains in backing buffer
+
+Construct:
+
+```text
+StrBuilder("abc")
+setLength(1)
+```
+
+The logical content is now:
+
+```text
+"a"
+```
+
+but the backing array can still contain the previous `'b'` and `'c'`.
+
+Therefore:
+
+```java
+contains('b')
+```
+
+must return `false`.
+
+This is the **primary defect-detecting test**.
+
+### Test 3 — Clear builder after content existed
+
+Construct:
+
+```text
+StrBuilder("xyz")
+clear()
+```
+
+Logical size becomes zero, while the backing buffer remains allocated.
+
+Therefore:
+
+```java
+contains('y')
+```
+
+must return `false`.
+
+The buggy implementation can find the stale `'y'` in the backing array.
+
+### Test 4 — Character at logical boundary
+
+Use:
+
+```text
+StrBuilder("dog")
+contains('g')
+```
+
+The character is at index `size - 1`, so it must still be searched.
+
+Expected:
+
+```text
+true
+```
+
+This guards against an incorrect fix that accidentally searches only up to `size - 1`.
+
+### Test 5 — Character absent from logical content
+
+Use:
+
+```text
+StrBuilder("hello")
+contains('z')
+```
+
+Expected:
+
+```text
+false
+```
+
+This is a normal negative regression test.
+
+---
+
+## 3. JUNIT 4.12 TEST CODE
+
+```java
+package org.apache.commons.lang.text;
+
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+
+import org.junit.Test;
+
+public class StrBuilderLang60Test {
+
+    @Test
+    public void testContainsCharacterPresentInLogicalContent() {
+        StrBuilder builder = new StrBuilder("cat");
+
+        assertTrue(builder.contains('a'));
+    }
+
+    @Test
+    public void testContainsIgnoresCharacterRemovedByShrinking() {
+        StrBuilder builder = new StrBuilder("abc");
+        builder.setLength(1);
+
+        assertFalse(builder.contains('b'));
+    }
+
+    @Test
+    public void testContainsIgnoresStaleCharacterAfterClear() {
+        StrBuilder builder = new StrBuilder("xyz");
+        builder.clear();
+
+        assertFalse(builder.contains('y'));
+    }
+
+    @Test
+    public void testContainsCharacterAtLastLogicalPosition() {
+        StrBuilder builder = new StrBuilder("dog");
+
+        assertTrue(builder.contains('g'));
+    }
+
+    @Test
+    public void testContainsReturnsFalseForAbsentCharacter() {
+        StrBuilder builder = new StrBuilder("hello");
+
+        assertFalse(builder.contains('z'));
+    }
+}
+```
+
+---
+
+## 4. DEFECT DETECTION STRATEGY
+
+### Test 1 — `testContainsCharacterPresentInLogicalContent`
+
+**Input**
+
+```text
+"cat"
+contains('a')
+```
+
+| Version | Expected          |
+| ------- | ----------------- |
+| BUGGY   | `true` → **PASS** |
+| FIXED   | `true` → **PASS** |
+
+This is a regression/control test, not a defect-detecting test by itself.
+
+---
+
+### Test 2 — `testContainsIgnoresCharacterRemovedByShrinking`
+
+**Setup**
+
+```java
+StrBuilder builder = new StrBuilder("abc");
+builder.setLength(1);
+```
+
+Logical content:
+
+```text
+"a"
+```
+
+The old `'b'` can remain in the backing buffer.
+
+| Version | Expected           |
+| ------- | ------------------ |
+| BUGGY   | `true` → **FAIL**  |
+| FIXED   | `false` → **PASS** |
+
+**This is the strongest defect-detecting test.**
+
+The buggy loop uses the entire backing-array length, so it can inspect the stale `'b'`. The fixed loop uses `size`, so index `1` and beyond are ignored.
+
+---
+
+### Test 3 — `testContainsIgnoresStaleCharacterAfterClear`
+
+**Setup**
+
+```java
+StrBuilder builder = new StrBuilder("xyz");
+builder.clear();
+```
+
+Logical content:
+
+```text
+""
+```
+
+| Version | Expected           |
+| ------- | ------------------ |
+| BUGGY   | `true` → **FAIL**  |
+| FIXED   | `false` → **PASS** |
+
+This independently exercises the same capacity-vs-size defect through `clear()` rather than `setLength()`.
+
+---
+
+### Test 4 — `testContainsCharacterAtLastLogicalPosition`
+
+**Input**
+
+```text
+"dog"
+contains('g')
+```
+
+| Version | Expected          |
+| ------- | ----------------- |
+| BUGGY   | `true` → **PASS** |
+| FIXED   | `true` → **PASS** |
+
+This is a boundary regression test ensuring the last valid logical character is included.
+
+---
+
+### Test 5 — `testContainsReturnsFalseForAbsentCharacter`
+
+**Input**
+
+```text
+"hello"
+contains('z')
+```
+
+| Version | Expected           |
+| ------- | ------------------ |
+| BUGGY   | `false` → **PASS** |
+| FIXED   | `false` → **PASS** |
+
+This verifies ordinary negative behavior.
+
+### Overall detection
+
+The important distinction is:
+
+```text
+BUGGY
+StrBuilder("abc")
+        ↓
+setLength(1)
+        ↓
+logical content = "a"
+buffer still has old "b"
+        ↓
+contains('b')
+        ↓
+scans buffer.length
+        ↓
+true  ❌
+```
+
+versus:
+
+```text
+FIXED
+StrBuilder("abc")
+        ↓
+setLength(1)
+        ↓
+logical content = "a"
+        ↓
+contains('b')
+        ↓
+scans only size == 1
+        ↓
+false  ✓
+```
+
+This directly targets the source-level change from `thisBuf.length` to `this.size`, rather than trying to reproduce the original trigger.
+
+---
+
+## 5. SUMMARY
+
+* **Root cause:** `contains(char)` iterates over the entire internal `buffer.length` instead of the builder's logical `size`.
+* **Targeted behavior:** characters outside the logical contents of a `StrBuilder` must not be considered contained.
+* **Number of generated tests:** **5**.
+* **Primary defect-detecting tests:** Tests 2 and 3.
+* **Regression/boundary tests:** Tests 1, 4, and 5.
+* **Independence:** The tests derive their inputs from the source-level capacity-vs-size defect. They do not invoke `testLang295`, reproduce its implementation, or depend on the original trigger inputs.
+
+The external project documentation independently confirms that LANG-295 specifically fixed `StrBuilder` usages of `thisBuf.length` that should have used `size`. ([Apache Commons][1])
+
+---
+
+## 6. LIMITATIONS
+
+The supplied source in the prompt is truncated around several methods, so the complete original `contains` implementation is not visible directly in the prompt. However, the defect description identifies the changed behavior, and independent Apache/Defects4J-related sources identify the faulty `contains(char)` implementation as the loop using `thisBuf.length` instead of `this.size`. ([ResearchGate][3])
+
+```
+
+and
+
+```text
+/Users/fangfang/Documents/SQA_Project_2026/workspaces/Lang-60-fixed
+```
+
+The expected decisive result is:
+
+```text
+Lang-60-buggy:
+  testContainsIgnoresCharacterRemovedByShrinking  FAIL
+  testContainsIgnoresStaleCharacterAfterClear     FAIL
+
+Lang-60-fixed:
+  all 5 tests PASS
+```
+
+Defects4J itself defines a real defect as having a buggy/fixed revision pair where the triggering behavior fails before the fix and passes after it, which is the verification criterion being applied here. ([github.com][4])

@@ -8,7 +8,7 @@ import java.io.Writer;
 
 import org.junit.Test;
 
-public class LookupTranslatorLang882ChatGPTTest {
+public class LookupTranslatorTest {
 
     /**
      * CharSequence used for lookup keys.

@@ -1,0 +1,229 @@
+## 1. SOURCE CODE ANALYSIS
+
+จาก source ในไฟล์ จุดที่แตกต่างกันอยู่ใน `LocaleUtils.toLocale()` โดยเฉพาะกรณีที่ String **ขึ้นต้นด้วย `_`**. 
+
+### 1.1 Behavior ที่แตกต่าง
+
+**BUGGY version**
+
+โค้ดเริ่มตรวจว่า character ตัวแรกต้องเป็น lowercase:
+
+```java
+final char ch0 = str.charAt(0);
+...
+if (!Character.isLowerCase(ch0) || !Character.isLowerCase(ch1)) {
+    throw new IllegalArgumentException(...);
+}
+```
+
+ดังนั้น input ที่ขึ้นต้นด้วย `_` จะถูกมองว่า invalid ทันที เพราะ `_` ไม่ใช่ lowercase letter. 
+
+**FIXED version**
+
+เพิ่ม branch สำหรับกรณี `ch0 == '_'` โดยเฉพาะ:
+
+```java
+if (ch0 == '_') {
+    ...
+    if (len == 3) {
+        return new Locale("", str.substring(1, 3));
+    }
+    ...
+    return new Locale("", str.substring(1, 3), str.substring(4));
+}
+```
+
+จึงรองรับ locale ที่ไม่มี language แต่มี country เช่น `_TH` และ locale ที่มี variant เช่น `_TH_CUSTOM`. 
+
+### 1.2 Likely root cause
+
+Root cause คือ **BUGGY implementation ไม่มี logic สำหรับ locale ที่ language เป็น empty string** และบังคับให้ character 2 ตัวแรกเป็น lowercase language code เสมอ
+
+ส่วน FIXED version เพิ่มการตรวจ `_` ก่อนตรวจ language code และสร้าง `Locale("", country)` หรือ `Locale("", country, variant)` ตามรูปแบบ input. 
+
+### 1.3 Behavior ที่ test ต้องแยกให้ได้
+
+Test ควรตรวจ 2 รูปแบบหลัก:
+
+1. `_CC` → Locale ที่มี **empty language + country**
+2. `_CC_VARIANT` → Locale ที่มี **empty language + country + variant**
+
+ตัวอย่างที่เลือกใช้คือ `_TH` และ `_TH_CUSTOM` ซึ่งไม่ได้ใช้ exact input จาก trigger test ตามข้อกำหนดใน prompt
+
+---
+
+## 2. TEST CASE DESIGN
+
+เลือกทั้งหมด **2 tests** โดยแบ่งตาม behavior ที่ fixed code เพิ่มเข้ามา
+
+| Test | Input        | Expected result                  |
+| ---- | ------------ | -------------------------------- |
+| 1    | `_TH`        | `new Locale("", "TH")`           |
+| 2    | `_TH_CUSTOM` | `new Locale("", "TH", "CUSTOM")` |
+
+### Test 1 — Country-only locale
+
+`_TH` มีความยาว 3:
+
+```text
+_ T H
+```
+
+Fixed code เข้า branch `_` และคืน:
+
+```java
+new Locale("", "TH")
+```
+
+นี่เป็น boundary case สำคัญ เพราะ fixed source มีเงื่อนไข `len == 3` โดยตรง. 
+
+### Test 2 — Country + variant
+
+`_TH_CUSTOM` มีรูปแบบ:
+
+```text
+_ TH _ CUSTOM
+```
+
+Fixed code จะคืน:
+
+```java
+new Locale("", "TH", "CUSTOM")
+```
+
+ซึ่งครอบคลุมอีก branch หนึ่งของ fix. 
+
+---
+
+## 3. JUNIT 4.12 TEST CODE
+
+```java
+package org.apache.commons.lang3;
+
+import static org.junit.Assert.assertEquals;
+
+import java.util.Locale;
+
+import org.junit.Test;
+
+public class LocaleUtilsTest {
+
+    @Test
+    public void testToLocaleCountryOnlyWithEmptyLanguage() {
+        Locale result = LocaleUtils.toLocale("_TH");
+
+        assertEquals("", result.getLanguage());
+        assertEquals("TH", result.getCountry());
+        assertEquals("", result.getVariant());
+    }
+
+    @Test
+    public void testToLocaleCountryAndVariantWithEmptyLanguage() {
+        Locale result = LocaleUtils.toLocale("_TH_CUSTOM");
+
+        assertEquals("", result.getLanguage());
+        assertEquals("TH", result.getCountry());
+        assertEquals("CUSTOM", result.getVariant());
+    }
+}
+```
+
+---
+
+## 4. DEFECT DETECTION STRATEGY
+
+### Test 1: `_TH`
+
+**BUGGY VERSION**
+
+Expected behavior when executing:
+
+```java
+LocaleUtils.toLocale("_TH")
+```
+
+คือ **throw `IllegalArgumentException`** เพราะ `_` ไม่ผ่านการตรวจ `Character.isLowerCase(ch0)`. 
+
+ดังนั้น assertion ใน test จะไม่ถูก execute → **test fails**
+
+**FIXED VERSION**
+
+จะเข้า:
+
+```java
+if (ch0 == '_')
+```
+
+และเนื่องจาก `len == 3` จะคืน:
+
+```java
+new Locale("", "TH")
+```
+
+ดังนั้น assertions ผ่าน → **test passes**. 
+
+---
+
+### Test 2: `_TH_CUSTOM`
+
+**BUGGY VERSION**
+
+เช่นเดียวกัน `_` ไม่ผ่าน language validation และเกิด:
+
+```text
+IllegalArgumentException
+```
+
+ดังนั้น test → **fails**
+
+**FIXED VERSION**
+
+จะเข้า `_` branch และเมื่อมี `_` ตัวที่สอง จะคืน:
+
+```java
+new Locale("", "TH", "CUSTOM")
+```
+
+ดังนั้น:
+
+```java
+result.getLanguage() == ""
+result.getCountry() == "TH"
+result.getVariant() == "CUSTOM"
+```
+
+ทั้งหมดผ่าน → **test passes**. 
+
+### Expected summary
+
+| Test         | BUGGY | FIXED | Defect-detecting |
+| ------------ | ----- | ----- | ---------------- |
+| `_TH`        | FAIL  | PASS  | ✅                |
+| `_TH_CUSTOM` | FAIL  | PASS  | ✅                |
+
+ตามเกณฑ์ของ experiment การจะยืนยันว่า test ตรวจจับ defect ได้จริง ต้องนำไป run กับ **BUGGY และ FIXED workspace จริง**; จาก source analysis เพียงอย่างเดียวยังไม่ควรอ้างว่า execution จริงผ่าน/ไม่ผ่าน
+
+---
+
+## 5. SUMMARY
+
+* **Root cause:** BUGGY `toLocale()` ไม่มี handling สำหรับ locale ที่ language เป็น empty string และจึง reject input ที่ขึ้นต้นด้วย `_`. 
+* **Fixed behavior:** เพิ่มการรองรับ `_CC` และ `_CC_VARIANT` โดยสร้าง `Locale` ที่มี empty language. 
+* **Generated tests:** 2 tests
+
+  * `_TH`
+  * `_TH_CUSTOM`
+* ทั้งสอง test มุ่งทดสอบ behavior ที่ถูกเพิ่มใน fixed implementation โดยตรง
+* ไม่ได้เรียก `testLang865`
+* ไม่ได้ใช้ exact input ที่ระบุว่าเป็น trigger test
+* ไม่ใช้ reflection และไม่แก้ production code
+
+---
+
+## 6. LIMITATIONS
+
+การวิเคราะห์นี้อ้างอิงจาก BUGGY และ FIXED source ที่อยู่ในไฟล์ที่ให้มา ซึ่งแสดง implementation ของ `toLocale()` ทั้งสองเวอร์ชันอย่างชัดเจน. 
+
+อย่างไรก็ตาม ในข้อมูลที่ให้มา **ไม่ได้แสดง implementation ของ `testLang865`** ดังนั้นไม่สามารถตรวจสอบได้โดยตรงว่า `_TH` หรือ `_TH_CUSTOM` เป็น input ที่แตกต่างจาก exact trigger input จริงหรือไม่
+
+ดังนั้นชุดนี้ถูกออกแบบจาก **source-level defect** และเลือก input ใหม่ที่แตกต่างจากตัวอย่างใน source โดยตรง แต่ควรตรวจสอบ trigger test ก่อนรันจริงอีกครั้งเพื่อยืนยันว่าไม่ได้ใช้ exact trigger input.

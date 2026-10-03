@@ -1,0 +1,291 @@
+## 1. Behavior that differs
+
+The defect is in how `Entities.escape(Writer, String)` handles **Unicode characters outside the Basic Multilingual Plane (BMP)**.
+
+In the buggy version, the method processes the Java `String` **one `char` at a time**:
+
+```java
+char c = str.charAt(i);
+```
+
+A supplementary Unicode character such as U+1F642 is represented in Java as a **surrogate pair** (two `char` values). Therefore, the buggy implementation treats the two halves as two separate characters and produces two numeric entities.
+
+The fixed version instead uses:
+
+```java
+int c = Character.codePointAt(str, i);
+```
+
+so a surrogate pair is interpreted as **one Unicode code point**. It then advances over the second `char` when necessary. This matches the LANG-480 issue description: characters above U+00FFFF were incorrectly converted into two escaped characters instead of one numeric code point. ([Apache Issues][1])
+
+For example, conceptually:
+
+```text
+Supplementary character
+        ↓
+Java UTF-16 surrogate pair
+        ↓
+BUGGY: two separate numeric entities
+FIXED: one numeric entity for the complete code point
+```
+
+The bug report specifically identifies the problem as Unicode characters represented internally by two Java characters being incorrectly converted into two entities. ([Apache Issues][1])
+
+---
+
+## 2. Likely root cause visible from the source
+
+The root cause is the difference between:
+
+```java
+// BUGGY
+char c = str.charAt(i);
+```
+
+and:
+
+```java
+// FIXED
+int c = Character.codePointAt(str, i);
+```
+
+The buggy implementation assumes one Java `char` corresponds to one Unicode character.
+
+That assumption is incorrect for supplementary Unicode characters, whose code points are represented by two UTF-16 `char` values.
+
+The fixed implementation:
+
+1. Reads the complete code point.
+2. Checks whether it is above `0xFFFF`.
+3. Writes the decimal value of the complete code point.
+4. Advances `i` so the low surrogate is not processed again.
+
+Therefore, the important behavioral distinction is:
+
+```text
+U+FFFF and below       → one Java char → both versions behave similarly
+U+10000 and above      → surrogate pair → versions differ
+```
+
+---
+
+## 3. Specific behavior the generated tests should distinguish
+
+The tests should verify that:
+
+* A supplementary code point is escaped as **one numeric entity**.
+* Two supplementary characters next to each other become **two complete numeric entities**, not four surrogate entities.
+* A supplementary character surrounded by ordinary ASCII text does not disturb the surrounding text.
+* The maximum Unicode code point is handled as one code point.
+* A BMP character still follows the existing behavior, providing a regression/control case.
+
+I deliberately construct supplementary characters using `Character.toChars(...)` rather than putting the exact Unicode character from the original trigger into the test. This makes the tests independently derived from the source-level defect and avoids reproducing the trigger.
+
+---
+
+## 4. Boundary, representative, and regression cases
+
+| Test | Input idea                                        | Expected BUGGY                                | Expected FIXED                                  |
+| ---- | ------------------------------------------------- | --------------------------------------------- | ----------------------------------------------- |
+| 1    | Minimum supplementary code point U+10000          | Two numeric entities for the surrogate values | `&#65536;`                                      |
+| 2    | Another supplementary code point embedded in text | Two entities instead of one                   | One complete numeric entity with text preserved |
+| 3    | Two consecutive supplementary code points         | Four surrogate entities                       | Two complete numeric entities                   |
+| 4    | Maximum Unicode code point U+10FFFF               | Two surrogate entities                        | `&#1114111;`                                    |
+| 5    | BMP boundary U+FFFF                               | Correct single entity                         | Same single entity                              |
+
+Tests 1–4 specifically target the defect. Test 5 is a regression/control test because U+FFFF is still represented by one Java `char` and should not require the supplementary-code-point handling.
+
+---
+
+## 5. JUnit 4.12 test class
+
+```java
+package org.apache.commons.lang;
+
+import org.junit.Test;
+
+import static org.junit.Assert.assertEquals;
+
+public class Lang42EntitiesEscapeTest {
+
+    @Test
+    public void testMinimumSupplementaryCodePointIsEscapedAsOneEntity() {
+        String input = new String(Character.toChars(0x10000));
+
+        Entities entities = new Entities();
+
+        assertEquals("&#65536;", entities.escape(input));
+    }
+
+    @Test
+    public void testSupplementaryCodePointInsideTextIsEscapedAsOneEntity() {
+        String input = "A" + new String(Character.toChars(0x1F642)) + "B";
+
+        Entities entities = new Entities();
+
+        assertEquals("A&#128578;B", entities.escape(input));
+    }
+
+    @Test
+    public void testTwoConsecutiveSupplementaryCodePointsRemainTwoCodePoints() {
+        String input =
+                new String(Character.toChars(0x1F680)) +
+                new String(Character.toChars(0x1F4A9));
+
+        Entities entities = new Entities();
+
+        assertEquals("&#128640;&#128169;", entities.escape(input));
+    }
+
+    @Test
+    public void testMaximumUnicodeCodePointIsEscapedAsOneEntity() {
+        String input = new String(Character.toChars(0x10FFFF));
+
+        Entities entities = new Entities();
+
+        assertEquals("&#1114111;", entities.escape(input));
+    }
+
+    @Test
+    public void testBmpBoundaryCharacterRetainsExistingBehavior() {
+        String input = new String(new char[] { '\uFFFF' });
+
+        Entities entities = new Entities();
+
+        assertEquals("&#65535;", entities.escape(input));
+    }
+}
+```
+
+---
+
+## 6. Defect detection strategy
+
+### `testMinimumSupplementaryCodePointIsEscapedAsOneEntity`
+
+The input is U+10000, the **first Unicode code point that requires a surrogate pair**.
+
+**BUGGY:**
+
+The high and low surrogates are processed independently, producing two numeric entities rather than one.
+
+**FIXED:**
+
+`Character.codePointAt()` obtains U+10000 and produces:
+
+```text
+&#65536;
+```
+
+**Result:** defect-detecting.
+
+---
+
+### `testSupplementaryCodePointInsideTextIsEscapedAsOneEntity`
+
+The supplementary character is placed between ordinary ASCII characters.
+
+**BUGGY:**
+
+The surrounding `"A"` and `"B"` remain intact, but the supplementary character is split into two escaped surrogate values.
+
+**FIXED:**
+
+The result is:
+
+```text
+A&#128578;B
+```
+
+**Result:** defect-detecting.
+
+---
+
+### `testTwoConsecutiveSupplementaryCodePointsRemainTwoCodePoints`
+
+This checks an important iteration behavior in addition to simply testing one supplementary character.
+
+**BUGGY:**
+
+Each supplementary character consists of two Java `char` values, so four separate surrogate values are processed.
+
+**FIXED:**
+
+The first pair becomes one code point and `i` is advanced over the low surrogate. The second pair is then processed normally.
+
+Expected:
+
+```text
+&#128640;&#128169;
+```
+
+**Result:** defect-detecting.
+
+---
+
+### `testMaximumUnicodeCodePointIsEscapedAsOneEntity`
+
+This tests the upper boundary of the Unicode range.
+
+**BUGGY:**
+
+The surrogate pair is split into two numeric entities.
+
+**FIXED:**
+
+The complete code point U+10FFFF is converted to decimal:
+
+```text
+1114111
+```
+
+so the result is:
+
+```text
+&#1114111;
+```
+
+**Result:** defect-detecting.
+
+---
+
+### `testBmpBoundaryCharacterRetainsExistingBehavior`
+
+U+FFFF is deliberately chosen because it is the highest code point that fits in one Java `char`.
+
+**BUGGY:**
+
+Produces:
+
+```text
+&#65535;
+```
+
+**FIXED:**
+
+Also produces:
+
+```text
+&#65535;
+```
+
+This is a regression/control test rather than a defect-detecting test.
+
+---
+
+### Expected overall result
+
+| Version   | Expected result      |
+| --------- | -------------------- |
+| **BUGGY** | 4 failures, 1 pass   |
+| **FIXED** | 0 failures, 5 passes |
+
+The four failing tests on BUGGY establish that the defect is specifically associated with **supplementary Unicode code points**, while the BMP test confirms that ordinary non-supplementary escaping remains unchanged.
+
+The test suite is independent of the supplied trigger because it does not use the trigger's exact Unicode input, expected output, or test implementation. Instead, the cases are derived directly from the source difference: `charAt()` versus `Character.codePointAt()` and the handling of UTF-16 surrogate pairs. The LANG-480 report independently confirms that the underlying defect concerns characters above U+00FFFF being converted into two characters instead of one code point. ([Apache Issues][1])
+
+### Limitations
+
+The supplied source is sufficient to identify the defect and construct the tests. The main limitation is that the complete surrounding Defects4J build configuration and original test suite were not provided here, so the exact command/classpath used to compile the generated test is not verified. The test itself uses only JUnit 4.12 and the supplied `Entities` API, with no reflection or production-code modification.
+
+[1]: https://issues.apache.org/jira/browse/LANG-480?utm_source=chatgpt.com "[LANG-480] StringEscapeUtils.escapeHtml incorrectly converts unicode characters above U+00FFFF into 2 characters - ASF Jira"

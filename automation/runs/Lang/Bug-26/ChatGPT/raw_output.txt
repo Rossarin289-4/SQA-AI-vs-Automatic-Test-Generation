@@ -1,0 +1,256 @@
+## 1. Behavior Difference
+
+The defect is in `FastDateFormat.format(Date)`.
+
+The buggy implementation creates the calendar as:
+
+```java
+Calendar c = new GregorianCalendar(mTimeZone);
+```
+
+This means the calendar uses the **JVM's default locale**, rather than the locale configured in the `FastDateFormat` instance.
+
+The fixed implementation changes this to:
+
+```java
+Calendar c = new GregorianCalendar(mTimeZone, mLocale);
+```
+
+so week-related calendar fields are calculated using the formatter's requested locale. The historical LANG-645 commit confirms that this is the only production-code change for the defect. ([GitHub][1])
+
+This matters particularly for patterns involving `w` (week of year) and `Y` (week-based year), because different locales can define the first day of the week and the minimum number of days in the first week differently. Apache's release notes describe LANG-645 as `FastDateFormat.format()` producing an incorrect week of year because the locale was not respected. ([Apache Commons][2])
+
+---
+
+## 2. Root Cause
+
+The likely root cause is **locale information being lost when constructing the temporary `GregorianCalendar` inside `format(Date)`**.
+
+### Buggy
+
+```java
+Calendar c = new GregorianCalendar(mTimeZone);
+```
+
+The formatter may have been created with a specific locale, but that locale is not passed to the calendar.
+
+### Fixed
+
+```java
+Calendar c = new GregorianCalendar(mTimeZone, mLocale);
+```
+
+The calendar therefore uses the same locale as the `FastDateFormat`.
+
+The important point is that the bug is not primarily in the formatting rule for `w` or `Y`. The problem occurs earlier: the `Calendar` contains locale-dependent week information calculated according to the wrong locale.
+
+---
+
+## 3. Targeted Behavior and Boundary / Representative / Regression Cases
+
+The generated tests should distinguish:
+
+> **When `FastDateFormat` is configured with locale L, `format(Date)` must calculate locale-sensitive week information according to L, regardless of the JVM's default locale.**
+
+I would use two complementary tests.
+
+### Test 1 — German locale while default locale is US
+
+Use a date close to a year boundary where US and German week conventions differ.
+
+* JVM default locale: `Locale.US`
+* formatter locale: `Locale.GERMANY`
+* pattern: `YYYY-'W'ww EEEE`
+* date: January 2, 2011
+* expected value is generated independently using `SimpleDateFormat` configured with the **same pattern, timezone, and target locale**.
+
+This is deliberately different from the original trigger's Swedish locale and date.
+
+### Test 2 — US locale while default locale is Germany
+
+Reverse the locale relationship:
+
+* JVM default locale: `Locale.GERMANY`
+* formatter locale: `Locale.US`
+* same boundary date
+* compare against a locale-configured `SimpleDateFormat`.
+
+This checks that the implementation does not merely happen to work when the formatter locale agrees with the JVM default locale.
+
+### Boundary / regression considerations
+
+Relevant cases include:
+
+* week/year boundary dates
+* formatter locale different from JVM default locale
+* locale-dependent `ww`
+* locale-dependent `YYYY`
+* ordinary weekday text (`EEEE`) together with week fields
+* timezone explicitly supplied
+* formatter locale equal to default locale — a regression/invariance case, although it is not useful for detecting this particular defect
+
+The key defect-detecting condition is **formatter locale ≠ JVM default locale + a date whose week classification differs between those locales**.
+
+---
+
+## 4. Complete JUnit 4.12 Test Class
+
+The tests use only the public `FastDateFormat` API. The expected result is independently obtained from Java's `SimpleDateFormat` using the requested locale rather than copying the original trigger's expected string.
+
+```java
+package org.apache.commons.lang3.time;
+
+import static org.junit.Assert.assertEquals;
+
+import java.text.SimpleDateFormat;
+import java.util.Calendar;
+import java.util.Date;
+import java.util.GregorianCalendar;
+import java.util.Locale;
+import java.util.TimeZone;
+
+import org.junit.Test;
+
+public class FastDateFormatLang26Test {
+
+    private static final TimeZone UTC = TimeZone.getTimeZone("UTC");
+
+    private static Date createBoundaryDate() {
+        Calendar calendar = new GregorianCalendar(UTC);
+        calendar.clear();
+        calendar.set(2011, Calendar.JANUARY, 2, 12, 0, 0);
+        return calendar.getTime();
+    }
+
+    private static String formatWithReference(
+            String pattern, Date date, TimeZone timeZone, Locale locale) {
+
+        SimpleDateFormat reference =
+                new SimpleDateFormat(pattern, locale);
+        reference.setTimeZone(timeZone);
+        return reference.format(date);
+    }
+
+    @Test
+    public void testFormatDateUsesConfiguredLocaleForWeekFields() {
+        Locale originalDefault = Locale.getDefault();
+
+        try {
+            Locale.setDefault(Locale.US);
+
+            Locale formatterLocale = Locale.GERMANY;
+            String pattern = "YYYY-'W'ww EEEE";
+            Date date = createBoundaryDate();
+
+            FastDateFormat format =
+                    FastDateFormat.getInstance(
+                            pattern, UTC, formatterLocale);
+
+            String expected =
+                    formatWithReference(
+                            pattern, date, UTC, formatterLocale);
+
+            assertEquals(expected, format.format(date));
+        } finally {
+            Locale.setDefault(originalDefault);
+        }
+    }
+
+    @Test
+    public void testFormatDateDoesNotDependOnOppositeDefaultLocale() {
+        Locale originalDefault = Locale.getDefault();
+
+        try {
+            Locale.setDefault(Locale.GERMANY);
+
+            Locale formatterLocale = Locale.US;
+            String pattern = "YYYY-'W'ww EEEE";
+            Date date = createBoundaryDate();
+
+            FastDateFormat format =
+                    FastDateFormat.getInstance(
+                            pattern, UTC, formatterLocale);
+
+            String expected =
+                    formatWithReference(
+                            pattern, date, UTC, formatterLocale);
+
+            assertEquals(expected, format.format(date));
+        } finally {
+            Locale.setDefault(originalDefault);
+        }
+    }
+}
+```
+
+---
+
+## 5. BUGGY / FIXED Detection Strategy
+
+### Test 1 — `testFormatDateUsesConfiguredLocaleForWeekFields`
+
+**BUGGY VERSION:**
+Fails when the JVM default locale is US and the formatter is configured for Germany. The internal `GregorianCalendar` uses US locale, so the week-based fields can differ from the locale-correct reference result.
+
+**FIXED VERSION:**
+Passes. `GregorianCalendar(mTimeZone, mLocale)` uses `Locale.GERMANY`, so the week fields agree with the reference formatter.
+
+### Test 2 — `testFormatDateDoesNotDependOnOppositeDefaultLocale`
+
+**BUGGY VERSION:**
+Fails when the JVM default locale is Germany but the formatter requests US. The buggy implementation again obtains week information using the wrong locale.
+
+**FIXED VERSION:**
+Passes because the calendar is constructed with `mLocale`, which is `Locale.US`.
+
+### Why use a reference formatter?
+
+The test does not hard-code the original trigger's expected output. Instead, it defines the expected behavior independently:
+
+```java
+SimpleDateFormat reference =
+    new SimpleDateFormat(pattern, formatterLocale);
+```
+
+Both formatters are given the same:
+
+* pattern
+* date
+* timezone
+* requested locale
+
+Therefore the assertion asks whether `FastDateFormat` honors its own documented locale configuration.
+
+The two tests also intentionally reverse the relationship between the JVM default locale and formatter locale, making it less likely that a test passes accidentally simply because both happen to use the same locale.
+
+---
+
+## 6. Summary and Limitations
+
+### Summary
+
+| Item                                | Result                                                           |
+| ----------------------------------- | ---------------------------------------------------------------- |
+| **Root cause**                      | `format(Date)` creates `GregorianCalendar` without `mLocale`     |
+| **Buggy behavior**                  | Week-dependent formatting can use the JVM default locale         |
+| **Fixed behavior**                  | Calendar uses the locale configured in `FastDateFormat`          |
+| **Targeted behavior**               | Locale-sensitive `YYYY` / `ww` formatting through `format(Date)` |
+| **Generated tests**                 | **2**                                                            |
+| **Main distinction**                | Formatter locale differs from JVM default locale                 |
+| **Original trigger reused?**        | No                                                               |
+| **Original trigger inputs reused?** | No                                                               |
+| **Reflection used?**                | No                                                               |
+| **Production code modified?**       | No                                                               |
+
+The historical patch confirms the production change from `new GregorianCalendar(mTimeZone)` to `new GregorianCalendar(mTimeZone, mLocale)`, and the Apache release documentation explicitly identifies LANG-645 as the locale/week-of-year defect. ([GitHub][1])
+
+### Limitations
+
+The exact supplied Defects4J source is truncated in the prompt, but the relevant `format(Date)` diff is directly confirmed by the historical fixed commit. ([GitHub][1])
+
+The tests rely on `SimpleDateFormat` as an independent behavioral oracle. This is appropriate here because the defect concerns locale-sensitive calendar semantics, but it means the test assumes the JDK's `SimpleDateFormat` and `FastDateFormat` should agree for this standard pattern.
+
+Also, the tests intentionally manipulate the JVM default locale temporarily. They restore it in `finally`, so each test leaves the global locale unchanged after completion.
+
+[1]: https://github.com/apache/commons-lang/commit/14a0cc2a9baf84a97348263975082ef3857daf97 "Applying my fix to LANG-645, and Mikael's test case; fixing the FastD… · apache/commons-lang@14a0cc2 · GitHub"
+[2]: https://commons.apache.org/proper/commons-lang/changes.html?utm_source=chatgpt.com "Apache Commons Lang Release Notes – Apache Commons Lang"

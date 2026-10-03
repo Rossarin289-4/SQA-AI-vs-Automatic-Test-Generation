@@ -1,0 +1,503 @@
+## 1. Behavior Difference
+
+The defect is in the handling of a **non-null `chars` array when `start == 0` and `end == 0`**.
+
+In the **buggy version**, the special case:
+
+```java
+if (start == 0 && end == 0) {
+    if (!letters && !numbers) {
+        end = Integer.MAX_VALUE;
+    } else {
+        end = 'z' + 1;
+        start = ' ';
+    }
+}
+```
+
+does not consider whether `chars` is supplied.
+
+Therefore, with:
+
+* `chars != null`
+* `start == 0`
+* `end == 0`
+
+the code reaches:
+
+```java
+int gap = end - start;
+```
+
+so:
+
+```text
+gap = 0
+```
+
+and then attempts:
+
+```java
+chars[random.nextInt(gap) + start]
+```
+
+which calls `random.nextInt(0)`.
+
+The fixed version changes the special-case handling:
+
+```java
+if (start == 0 && end == 0) {
+    if (chars != null) {
+        end = chars.length;
+    } else {
+        ...
+    }
+}
+```
+
+So a supplied character array now means the valid range is automatically the whole array.
+
+This matches the Apache issue description: LANG-805 specifically reports that `random(count, 0, 0, false, false, universe, random)` fails when a character array is supplied, and the discussion identifies the need to use `chars.length` and separately reject an empty array. ([Apache Issues][1])
+
+There is also a second related behavioral difference: the fixed version explicitly rejects an empty `chars` array:
+
+```java
+if (chars != null && chars.length == 0) {
+    throw new IllegalArgumentException("The chars array must not be empty");
+}
+```
+
+The buggy version has no such validation.
+
+---
+
+## 2. Likely Root Cause
+
+The likely root cause is that the buggy implementation treats `(start == 0 && end == 0)` as meaning only:
+
+```text
+use all characters
+```
+
+or the printable ASCII range, based on `letters`/`numbers`.
+
+It **does not distinguish between**:
+
+```text
+chars == null
+```
+
+and:
+
+```text
+chars != null
+```
+
+When `chars` is supplied, `start = 0` and `end = 0` should be interpreted as the full supplied array:
+
+```text
+start = 0
+end = chars.length
+```
+
+Instead, the buggy implementation leaves both values at zero.
+
+That produces:
+
+```text
+gap = end - start = 0
+```
+
+and consequently an invalid call to:
+
+```java
+random.nextInt(0)
+```
+
+The fixed implementation addresses both related cases:
+
+1. `chars != null` → set `end = chars.length`
+2. `chars.length == 0` → explicitly throw `IllegalArgumentException`
+
+The source-level difference therefore gives a direct defect-oriented testing target without needing to reproduce the trigger test.
+
+---
+
+## 3. Target Behavior and Independent Test Design
+
+The important distinction is **not simply "does an exception occur?"** because some invalid cases throw exceptions in both versions.
+
+The primary defect-detecting behavior should be:
+
+> When a non-empty `chars` array is supplied and `start == 0` and `end == 0`, the method should successfully generate characters from that array.
+
+### Test cases
+
+| Test | Input idea                                 | Expected behavior                                                  | Purpose                                     |
+| ---- | ------------------------------------------ | ------------------------------------------------------------------ | ------------------------------------------- |
+| 1    | Non-empty custom array, `start=0`, `end=0` | Return requested-length string containing only supplied characters | **Main defect test**                        |
+| 2    | Empty custom array                         | `IllegalArgumentException` with explicit empty-array message       | Tests newly added validation                |
+| 3    | Non-zero valid subrange of custom array    | Generate characters from requested subrange                        | Regression test for normal `chars` behavior |
+
+### Test 1 — non-empty array with zero boundaries
+
+Use an independently selected array such as:
+
+```text
+{'A', 'B', 'C', 'D'}
+```
+
+with:
+
+```text
+start = 0
+end = 0
+```
+
+and request several characters.
+
+**Buggy:**
+
+```text
+gap = 0
+random.nextInt(0)
+→ IllegalArgumentException
+```
+
+**Fixed:**
+
+```text
+end = chars.length
+end = 4
+gap = 4
+→ successfully selects from A/B/C/D
+```
+
+This is the primary defect-detecting test.
+
+### Test 2 — empty array
+
+The fixed implementation explicitly specifies:
+
+```text
+"The chars array must not be empty"
+```
+
+The test can therefore distinguish the new validation from the old accidental failure.
+
+### Test 3 — normal non-zero range
+
+For example, with:
+
+```text
+chars = {'a', 'b', 'c', 'd', 'e'}
+start = 1
+end = 4
+```
+
+the valid range is:
+
+```text
+b, c, d
+```
+
+This test is not expected to kill the bug by itself. It is a regression test showing that the defect-oriented test suite does not only exercise the special `(0,0)` case.
+
+---
+
+## 4. JUnit 4.12 Test Code
+
+The following is one complete independent JUnit 4.12 test class. The first two tests are intended to distinguish the buggy and fixed implementations.
+
+```java
+package org.apache.commons.lang3;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
+
+import java.util.Random;
+
+import org.junit.Test;
+
+public class RandomStringUtilsLang12Test {
+
+    /**
+     * Defect test:
+     * When a non-empty custom character array is supplied and
+     * start/end are both zero, the whole character array should
+     * be used as the generation range.
+     */
+    @Test
+    public void testUsesEntireCustomCharacterArrayWhenRangeIsZero() {
+        char[] chars = {'A', 'B', 'C', 'D'};
+
+        String result = RandomStringUtils.random(
+                20,
+                0,
+                0,
+                false,
+                false,
+                chars,
+                new Random(12345));
+
+        assertEquals(20, result.length());
+
+        for (int i = 0; i < result.length(); i++) {
+            char generated = result.charAt(i);
+
+            assertTrue(
+                    generated == 'A'
+                    || generated == 'B'
+                    || generated == 'C'
+                    || generated == 'D');
+        }
+    }
+
+    /**
+     * Defect-related validation test:
+     * An empty custom character array should be rejected explicitly.
+     */
+    @Test
+    public void testRejectsEmptyCustomCharacterArray() {
+        char[] chars = new char[0];
+
+        try {
+            RandomStringUtils.random(
+                    1,
+                    0,
+                    0,
+                    false,
+                    false,
+                    chars,
+                    new Random(12345));
+
+            fail("Expected IllegalArgumentException for an empty chars array");
+        } catch (IllegalArgumentException e) {
+            assertEquals(
+                    "The chars array must not be empty",
+                    e.getMessage());
+        }
+    }
+
+    /**
+     * Regression test:
+     * A normal non-zero range over a custom character array should
+     * continue to select characters only from that requested range.
+     */
+    @Test
+    public void testGeneratesCharactersFromExplicitCustomRange() {
+        char[] chars = {'a', 'b', 'c', 'd', 'e'};
+
+        String result = RandomStringUtils.random(
+                20,
+                1,
+                4,
+                false,
+                false,
+                chars,
+                new Random(12345));
+
+        assertEquals(20, result.length());
+
+        for (int i = 0; i < result.length(); i++) {
+            char generated = result.charAt(i);
+
+            assertTrue(
+                    generated == 'b'
+                    || generated == 'c'
+                    || generated == 'd');
+        }
+    }
+}
+```
+
+---
+
+## 5. Defect Detection Strategy
+
+### Test 1: `testUsesEntireCustomCharacterArrayWhenRangeIsZero`
+
+**BUGGY VERSION**
+
+The supplied array is non-null, but the buggy code does not change `end` when `start == 0 && end == 0`.
+
+Therefore:
+
+```text
+start = 0
+end = 0
+gap = 0
+```
+
+and:
+
+```java
+random.nextInt(0)
+```
+
+throws `IllegalArgumentException`.
+
+Therefore the test **fails**.
+
+**FIXED VERSION**
+
+The fixed implementation detects:
+
+```java
+chars != null
+```
+
+and performs:
+
+```java
+end = chars.length;
+```
+
+For the four-character array:
+
+```text
+end = 4
+gap = 4
+```
+
+The generated string has length 20 and every character comes from:
+
+```text
+A, B, C, D
+```
+
+Therefore the test **passes**.
+
+**Result: defect-detecting.**
+
+---
+
+### Test 2: `testRejectsEmptyCustomCharacterArray`
+
+**BUGGY VERSION**
+
+There is no explicit empty-array validation.
+
+The method eventually reaches the random-selection logic with:
+
+```text
+gap = 0
+```
+
+and fails through `Random.nextInt(0)`.
+
+The exception message is not the explicit message expected by the test.
+
+Therefore:
+
+```java
+assertEquals(
+    "The chars array must not be empty",
+    e.getMessage());
+```
+
+fails.
+
+**FIXED VERSION**
+
+The fixed code executes:
+
+```java
+if (chars != null && chars.length == 0) {
+    throw new IllegalArgumentException(
+        "The chars array must not be empty");
+}
+```
+
+The expected message is therefore produced.
+
+The test **passes**.
+
+**Result: defect-detecting.**
+
+---
+
+### Test 3: `testGeneratesCharactersFromExplicitCustomRange`
+
+**BUGGY VERSION**
+
+Because:
+
+```text
+start = 1
+end = 4
+```
+
+the special `(0,0)` handling is not involved.
+
+The method calculates:
+
+```text
+gap = 3
+```
+
+and selects indexes:
+
+```text
+1, 2, 3
+```
+
+which correspond to:
+
+```text
+b, c, d
+```
+
+The test passes.
+
+**FIXED VERSION**
+
+The same normal range logic is used, so the generated characters are also restricted to:
+
+```text
+b, c, d
+```
+
+The test passes.
+
+**Result: regression test, not defect-detecting by itself.**
+
+### Overall
+
+The expected experiment outcome is:
+
+| Test                                                | BUGGY    | FIXED    | Detects defect? |
+| --------------------------------------------------- | -------- | -------- | --------------- |
+| `testUsesEntireCustomCharacterArrayWhenRangeIsZero` | **FAIL** | **PASS** | **Yes**         |
+| `testRejectsEmptyCustomCharacterArray`              | **FAIL** | **PASS** | **Yes**         |
+| `testGeneratesCharactersFromExplicitCustomRange`    | PASS     | PASS     | No, regression  |
+
+The first test is the clearest direct test of the core LANG-805 behavior.
+
+---
+
+## 6. Summary and Limitations
+
+### Summary
+
+* **Root cause:** the buggy implementation does not handle `chars != null` inside the `start == 0 && end == 0` special case.
+* This leaves `gap == 0`, causing `Random.nextInt(0)` instead of using the supplied character array.
+* The fixed implementation changes this to `end = chars.length`.
+* The fixed version also explicitly rejects an empty `chars` array.
+* **Generated tests:** 3.
+* **Defect-detecting tests:** 2.
+* **Regression test:** 1.
+* The tests are independently derived from the production-source difference and do not invoke, reproduce, or depend on the supplied Defects4J trigger test.
+
+The Apache Jira record independently describes the same core failure mode: supplying a character array with `end = 0` can lead to `Random.nextInt(gap)` with a zero gap, and the discussion explicitly identifies using `chars.length` and handling an empty array as the fix. ([Apache Issues][1])
+
+### Limitations
+
+1. The exact original trigger inputs and expected values were intentionally not used.
+2. The first test checks the **set of generated characters** rather than one exact random string, making it independent of a particular random sequence.
+3. The second test checks the exact fixed error message because the source explicitly defines that message. This is more implementation-specific than simply checking the exception type.
+4. The third test is a regression test and is not expected to distinguish the two revisions by itself.
+5. The analysis is based on the supplied buggy/fixed source and the public LANG-805 issue information; no assumption is made that the provided trigger is the only way to expose the defect.
+
+[1]: https://issues.apache.org/jira/browse/LANG-805?utm_source=chatgpt.com "[LANG-805] RandomStringUtils.random(count, 0, 0, false, false, universe, random) always throws java.lang.ArrayIndexOutOfBoundsException - ASF Jira"

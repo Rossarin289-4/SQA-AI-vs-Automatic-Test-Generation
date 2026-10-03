@@ -1,0 +1,341 @@
+## 1. SOURCE CODE ANALYSIS
+
+The defect is in `DateUtils.modify(Calendar val, int field, boolean round)`.
+
+The important difference is the placement of the `done` assignments.
+
+### BUGGY version
+
+For milliseconds:
+
+```java
+if (!round || millisecs < 500) {
+    time = time - millisecs;
+    if (field == Calendar.SECOND) {
+        done = true;
+    }
+}
+```
+
+For seconds:
+
+```java
+if (!done && (!round || seconds < 30)) {
+    time = time - (seconds * 1000L);
+    if (field == Calendar.MINUTE) {
+        done = true;
+    }
+}
+```
+
+The `done = true` statements are incorrectly **inside the rounding/truncation condition**.
+
+Therefore, when rounding and the lower field is already at or above its half-way boundary:
+
+* milliseconds `>= 500`
+* seconds `>= 30`
+
+the corresponding `done` flag is not set.
+
+### FIXED version
+
+The fixed version moves those assignments outside the conditions:
+
+```java
+if (!round || millisecs < 500) {
+    time = time - millisecs;
+}
+if (field == Calendar.SECOND) {
+    done = true;
+}
+```
+
+and:
+
+```java
+if (!done && (!round || seconds < 30)) {
+    time = time - (seconds * 1000L);
+}
+if (field == Calendar.MINUTE) {
+    done = true;
+}
+```
+
+This means that once the requested field has been reached, lower-order fields are handled correctly regardless of whether their value is above the rounding threshold.
+
+### Behavior that differs
+
+The defect can cause `round()` and `truncate()` to process lower-order fields when they should already have been excluded.
+
+The clearest observable cases are:
+
+1. **Rounding to seconds** with milliseconds `>= 500` and seconds `< 30`.
+2. **Truncating to minutes** when seconds `>= 30` and milliseconds `>= 500`.
+
+These can produce results that retain or remove the wrong time components.
+
+---
+
+## 2. TEST CASE DESIGN
+
+The tests are derived from the control-flow defect rather than from the trigger test.
+
+### Test group A — round to second
+
+The important boundary is:
+
+```text
+milliseconds = 500
+```
+
+When rounding to `Calendar.SECOND`, milliseconds should affect whether the second rounds up, but they should **not cause the implementation to continue processing seconds as though the requested field had not been reached**.
+
+A representative case is a time such as:
+
+```text
+10:20:10.800
+```
+
+Since the seconds value is below 30, rounding to the nearest second should produce:
+
+```text
+10:20:11.000
+```
+
+The buggy implementation can instead clear the seconds and return:
+
+```text
+10:20:00.000
+```
+
+because it incorrectly continues into the seconds processing.
+
+I use more than one millisecond value around the `500` boundary to test the actual control-flow condition.
+
+### Test group B — truncate to minute
+
+For truncation, all lower-order components should be removed.
+
+For example:
+
+```text
+10:20:45.800
+```
+
+truncated to minute should become:
+
+```text
+10:20:00.000
+```
+
+The buggy implementation can retain seconds and milliseconds when seconds are `>= 30`, because `done` is not set at the correct point.
+
+### Test group C — regression/control cases
+
+I also include cases where:
+
+* milliseconds are below 500,
+* seconds are below 30,
+* normal rounding should occur.
+
+These help ensure the test suite does not only exercise the exceptional control-flow path.
+
+---
+
+## 3. JUNIT 4.12 TEST CODE
+
+The following class directly uses the public `DateUtils.round()` and `DateUtils.truncate()` APIs. It does not invoke the original trigger test or use reflection.
+
+```java
+package org.apache.commons.lang.time;
+
+import static org.junit.Assert.assertEquals;
+
+import java.util.Calendar;
+import java.util.Date;
+
+import org.junit.Test;
+
+public class DateUtilsLang53Test {
+
+    @Test
+    public void testRoundToSecondWithMillisecondsAboveHalfAndSecondsBelowHalf() {
+        Calendar input = Calendar.getInstance();
+        input.set(2010, Calendar.JUNE, 15, 10, 20, 10);
+        input.set(Calendar.MILLISECOND, 800);
+
+        Date result = DateUtils.round(input.getTime(), Calendar.SECOND);
+
+        Calendar expected = Calendar.getInstance();
+        expected.set(2010, Calendar.JUNE, 15, 10, 20, 11);
+        expected.set(Calendar.MILLISECOND, 0);
+
+        assertEquals(expected.getTime(), result);
+    }
+
+    @Test
+    public void testRoundToSecondAtMillisecondBoundaryWithSecondsBelowHalf() {
+        Calendar input = Calendar.getInstance();
+        input.set(2011, Calendar.MARCH, 8, 14, 35, 12);
+        input.set(Calendar.MILLISECOND, 500);
+
+        Date result = DateUtils.round(input.getTime(), Calendar.SECOND);
+
+        Calendar expected = Calendar.getInstance();
+        expected.set(2011, Calendar.MARCH, 8, 14, 35, 13);
+        expected.set(Calendar.MILLISECOND, 0);
+
+        assertEquals(expected.getTime(), result);
+    }
+
+    @Test
+    public void testTruncateToMinuteWithSecondsAboveHalfAndMillisecondsPresent() {
+        Calendar input = Calendar.getInstance();
+        input.set(2012, Calendar.AUGUST, 21, 9, 40, 45);
+        input.set(Calendar.MILLISECOND, 800);
+
+        Date result = DateUtils.truncate(input.getTime(), Calendar.MINUTE);
+
+        Calendar expected = Calendar.getInstance();
+        expected.set(2012, Calendar.AUGUST, 21, 9, 40, 0);
+        expected.set(Calendar.MILLISECOND, 0);
+
+        assertEquals(expected.getTime(), result);
+    }
+
+    @Test
+    public void testTruncateToMinuteWithSecondsExactlyThirty() {
+        Calendar input = Calendar.getInstance();
+        input.set(2013, Calendar.FEBRUARY, 10, 16, 25, 30);
+        input.set(Calendar.MILLISECOND, 750);
+
+        Date result = DateUtils.truncate(input.getTime(), Calendar.MINUTE);
+
+        Calendar expected = Calendar.getInstance();
+        expected.set(2013, Calendar.FEBRUARY, 10, 16, 25, 0);
+        expected.set(Calendar.MILLISECOND, 0);
+
+        assertEquals(expected.getTime(), result);
+    }
+
+    @Test
+    public void testRoundToSecondWithMillisecondsBelowHalf() {
+        Calendar input = Calendar.getInstance();
+        input.set(2014, Calendar.SEPTEMBER, 3, 8, 15, 27);
+        input.set(Calendar.MILLISECOND, 200);
+
+        Date result = DateUtils.round(input.getTime(), Calendar.SECOND);
+
+        Calendar expected = Calendar.getInstance();
+        expected.set(2014, Calendar.SEPTEMBER, 3, 8, 15, 27);
+        expected.set(Calendar.MILLISECOND, 0);
+
+        assertEquals(expected.getTime(), result);
+    }
+
+    @Test
+    public void testRoundToMinuteWithSecondsBelowHalf() {
+        Calendar input = Calendar.getInstance();
+        input.set(2015, Calendar.NOVEMBER, 12, 18, 42, 20);
+        input.set(Calendar.MILLISECOND, 300);
+
+        Date result = DateUtils.round(input.getTime(), Calendar.MINUTE);
+
+        Calendar expected = Calendar.getInstance();
+        expected.set(2015, Calendar.NOVEMBER, 12, 18, 42, 0);
+        expected.set(Calendar.MILLISECOND, 0);
+
+        assertEquals(expected.getTime(), result);
+    }
+}
+```
+
+---
+
+## 4. DEFECT DETECTION STRATEGY
+
+| Test                                                             | Intended behavior                                    | BUGGY version                                       | FIXED version                | Detects defect?    |
+| ---------------------------------------------------------------- | ---------------------------------------------------- | --------------------------------------------------- | ---------------------------- | ------------------ |
+| `testRoundToSecondWithMillisecondsAboveHalfAndSecondsBelowHalf`  | `10:20:10.800 → 10:20:11.000`                        | Produces an incorrect rounded value                 | Produces expected value      | **Yes**            |
+| `testRoundToSecondAtMillisecondBoundaryWithSecondsBelowHalf`     | `.500` should round the second up                    | Incorrect control flow can clear the second instead | Correct result               | **Yes**            |
+| `testTruncateToMinuteWithSecondsAboveHalfAndMillisecondsPresent` | `10:40:45.800 → 10:40:00.000`                        | Can retain lower-order time fields                  | Removes seconds/milliseconds | **Yes**            |
+| `testTruncateToMinuteWithSecondsExactlyThirty`                   | Seconds and milliseconds must become zero            | Can retain lower-order fields                       | Correctly truncates          | **Yes**            |
+| `testRoundToSecondWithMillisecondsBelowHalf`                     | `27.200 → 27.000`                                    | Expected behavior                                   | Expected behavior            | Regression/control |
+| `testRoundToMinuteWithSecondsBelowHalf`                          | Seconds should be removed without rounding minute up | Expected behavior                                   | Expected behavior            | Regression/control |
+
+### Why the first four are important
+
+The first four deliberately exercise the conditions that expose the misplaced `done` assignments:
+
+```text
+round == true
+milliseconds >= 500
+```
+
+and:
+
+```text
+round == false
+seconds >= 30
+```
+
+These are the paths where the buggy implementation does not establish the correct stopping condition.
+
+### Expected BUGGY/FIXED behavior
+
+For the principal defect case:
+
+```text
+Input:  10:20:10.800
+Target: SECOND
+Expected: 10:20:11.000
+```
+
+**BUGGY:** the implementation can incorrectly process the seconds field after the millisecond condition and produce an incorrect result.
+
+**FIXED:** the `done` flag is established at the correct point, so the result is `10:20:11.000`.
+
+For truncation:
+
+```text
+Input: 09:40:45.800
+Target: MINUTE
+Expected: 09:40:00.000
+```
+
+**BUGGY:** lower-order seconds/milliseconds can remain, producing a value different from the expected minute truncation.
+
+**FIXED:** seconds and milliseconds are correctly removed.
+
+---
+
+## 5. SUMMARY
+
+* **Root cause:** `done = true` was placed inside conditional blocks that only execute when the lower-order value is below the rounding threshold.
+* **Targeted behavior:** `DateUtils.modify()` must stop processing lower-order fields once the requested field has been reached.
+* **Generated tests:** **6 tests**.
+* **Defect-focused tests:** 4 tests target the problematic boundary/control-flow paths.
+* **Regression/control tests:** 2 tests cover ordinary rounding/truncation behavior.
+* **Independence:** the tests derive inputs from the source-level conditions (`millisecs >= 500`, `seconds >= 30`) rather than reproducing the supplied trigger test or its exact values.
+
+The central distinction is:
+
+```text
+BUGGY:
+lower-order condition may prevent done from being set
+
+FIXED:
+done is set whenever the requested field is reached
+```
+
+---
+
+## 6. LIMITATIONS
+
+The supplied source excerpt contains the relevant `modify()` implementation but does not include the complete public `round()`/`truncate()` methods or the original trigger implementation.
+
+Therefore, the analysis is based on the visible `modify()` source and the documented behavior implied by its callers.
+
+One additional limitation is that `Calendar` retains the JVM's default time zone and locale characteristics. The tests intentionally compare `Date` values created using calendars configured in the same test, so they do not depend on a particular machine time zone.
+
+The strongest defect-oriented cases are the ones exercising the misplaced `done` logic at the `500 ms` and `30 second` boundaries.

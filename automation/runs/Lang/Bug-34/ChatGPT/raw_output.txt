@@ -1,0 +1,531 @@
+## 1. Behavior that differs
+
+The key difference is the behavior of `ToStringStyle.getRegistry()` when the current thread has **no active registry**.
+
+### BUGGY
+
+```java
+static Map<Object, Object> getRegistry() {
+    return REGISTRY.get() != null
+        ? REGISTRY.get()
+        : Collections.<Object, Object>emptyMap();
+}
+```
+
+If `REGISTRY.get()` is `null`, the method hides that state by returning an empty map.
+
+### FIXED
+
+```java
+static Map<Object, Object> getRegistry() {
+    return REGISTRY.get();
+}
+```
+
+So the method now exposes the actual ThreadLocal state:
+
+* no registry → `null`
+* active registry → actual `WeakHashMap`
+
+The corresponding `isRegistered()` change is necessary because `getRegistry()` can now return `null`:
+
+```java
+Map<Object, Object> m = getRegistry();
+return m != null && m.containsKey(value);
+```
+
+This matches the historical commit description, which explicitly says the change was to verify that the registry is **unset when no longer needed**. The commit changes `getRegistry()` from returning an empty collection when absent to returning the actual ThreadLocal value. ([GitHub][1])
+
+---
+
+## 2. Likely root cause visible from the source
+
+The root cause is that the BUGGY `getRegistry()` **masks an absent ThreadLocal registry with an empty map**.
+
+The lifecycle in the supplied source is:
+
+1. `register(value)` creates a `WeakHashMap` and stores it in `REGISTRY` if necessary.
+2. `unregister(value)` removes the object.
+3. When the map becomes empty, `unregister()` calls:
+
+```java
+REGISTRY.remove();
+```
+
+Therefore, after the last registered object is removed, the actual ThreadLocal value is supposed to be `null`.
+
+However, the BUGGY `getRegistry()` converts that `null` into `Collections.emptyMap()`. The FIXED implementation preserves the actual `null` state. The historical commit specifically describes this as refactoring the code to verify that the registry is unset when no longer needed. ([GitHub][1])
+
+So the strongest test oracle is **not the produced string**. Both versions can produce the same normal `toString()` output.
+
+The useful oracle is:
+
+> After there is no object being traversed, `ToStringStyle.getRegistry()` must be `null`.
+
+---
+
+## 3. Specific behavior the generated test should distinguish
+
+The generated tests should distinguish:
+
+| Situation                                               | BUGGY              | FIXED   |
+| ------------------------------------------------------- | ------------------ | ------- |
+| No registry exists for a fresh thread                   | non-null empty map | `null`  |
+| Registry is registered and then completely unregistered | non-null empty map | `null`  |
+| Reflection-based `toString` finishes                    | non-null empty map | `null`  |
+| `isRegistered()` with no active registry                | `false`            | `false` |
+
+The first three are **defect-detecting** because the expected assertion is `null`.
+
+The last one is a compatibility/regression test. It confirms that the new `null` behavior of `getRegistry()` does not cause `isRegistered()` to throw an exception. The fixed implementation explicitly adds the null check for this reason. ([GitHub][1])
+
+Importantly, the tests below do **not** reproduce the supplied trigger's cyclic-object scenarios. They use independently constructed simple objects and explicit registry lifecycle operations.
+
+---
+
+## 4. Boundary, representative, and regression cases
+
+### Boundary cases
+
+**A. Completely unused registry**
+
+A newly created thread has never registered anything.
+
+Expected:
+
+```text
+getRegistry() == null
+```
+
+This directly targets the changed behavior.
+
+**B. Registry after its final entry is removed**
+
+Register one object, verify it is registered, then unregister it.
+
+Expected:
+
+```text
+getRegistry() == null
+```
+
+This verifies the transition:
+
+```text
+null → WeakHashMap → null
+```
+
+rather than only testing the initial state.
+
+### Representative cases
+
+**C. Normal reflection-based formatting**
+
+Use a simple non-cyclic object with a couple of ordinary fields and call:
+
+```java
+ToStringBuilder.reflectionToString(object);
+```
+
+After the operation completes, the registry should have been cleaned up.
+
+Expected:
+
+```text
+getRegistry() == null
+```
+
+**D. Reflection over an object containing another object**
+
+Use a small object graph without a cycle. This exercises registration/unregistration across more than one reflected object without copying the trigger's cyclic structures.
+
+Expected:
+
+```text
+getRegistry() == null
+```
+
+### Regression case
+
+**E. `isRegistered()` with no active registry**
+
+On a fresh thread:
+
+```java
+assertFalse(ToStringStyle.isRegistered(object));
+```
+
+This should remain safe after `getRegistry()` starts returning `null`.
+
+This test itself is **not defect-detecting**, because the BUGGY implementation also returns `false`; it is included as a regression test for the fixed null-handling behavior.
+
+---
+
+## 5. Complete JUnit 4.12 test class
+
+The tests use a new thread for each lifecycle check because `REGISTRY` is a `ThreadLocal`. This also prevents one test from affecting another through ThreadLocal state.
+
+```java
+package org.apache.commons.lang3.builder;
+
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
+
+import org.junit.Test;
+
+public class ToStringStyleLang34Test {
+
+    private static class SimpleObject {
+        private int number = 42;
+        private String name = "sample";
+    }
+
+    private static class NestedObject {
+        private String value = "nested";
+    }
+
+    private static class ContainerObject {
+        private int id = 7;
+        private NestedObject child = new NestedObject();
+    }
+
+    @Test
+    public void testRegistryIsNullBeforeAnyRegistration() throws Exception {
+        final boolean[] registryIsNull = new boolean[1];
+
+        Thread thread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                registryIsNull[0] = ToStringStyle.getRegistry() == null;
+            }
+        });
+
+        thread.start();
+        thread.join();
+
+        assertTrue(registryIsNull[0]);
+    }
+
+    @Test
+    public void testRegistryBecomesNullAfterLastObjectIsUnregistered() throws Exception {
+        final boolean[] registeredThenCleared = new boolean[1];
+
+        Thread thread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                SimpleObject object = new SimpleObject();
+
+                ToStringStyle.register(object);
+
+                boolean registered = ToStringStyle.isRegistered(object);
+
+                ToStringStyle.unregister(object);
+
+                boolean cleared = ToStringStyle.getRegistry() == null;
+
+                registeredThenCleared[0] = registered && cleared;
+            }
+        });
+
+        thread.start();
+        thread.join();
+
+        assertTrue(registeredThenCleared[0]);
+    }
+
+    @Test
+    public void testReflectionToStringClearsRegistryForSimpleObject() throws Exception {
+        final boolean[] registryIsNull = new boolean[1];
+
+        Thread thread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                SimpleObject object = new SimpleObject();
+
+                ToStringBuilder.reflectionToString(object);
+
+                registryIsNull[0] = ToStringStyle.getRegistry() == null;
+            }
+        });
+
+        thread.start();
+        thread.join();
+
+        assertTrue(registryIsNull[0]);
+    }
+
+    @Test
+    public void testReflectionToStringClearsRegistryForNestedObject() throws Exception {
+        final boolean[] registryIsNull = new boolean[1];
+
+        Thread thread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                ContainerObject object = new ContainerObject();
+
+                ToStringBuilder.reflectionToString(object);
+
+                registryIsNull[0] = ToStringStyle.getRegistry() == null;
+            }
+        });
+
+        thread.start();
+        thread.join();
+
+        assertTrue(registryIsNull[0]);
+    }
+
+    @Test
+    public void testIsRegisteredReturnsFalseWithoutActiveRegistry() throws Exception {
+        final boolean[] result = new boolean[1];
+
+        Thread thread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                SimpleObject object = new SimpleObject();
+
+                result[0] = !ToStringStyle.isRegistered(object);
+            }
+        });
+
+        thread.start();
+        thread.join();
+
+        assertFalse(!result[0]);
+        assertNull(ToStringStyle.getRegistry());
+    }
+}
+```
+
+**Small correction to the last test:** because the final `assertNull(ToStringStyle.getRegistry())` is executed on the JUnit thread rather than the child thread, it does not test the child's ThreadLocal. The clean version should therefore be:
+
+```java
+@Test
+public void testIsRegisteredReturnsFalseWithoutActiveRegistry() throws Exception {
+    final boolean[] result = new boolean[1];
+    final boolean[] registryIsNull = new boolean[1];
+
+    Thread thread = new Thread(new Runnable() {
+        @Override
+        public void run() {
+            SimpleObject object = new SimpleObject();
+
+            result[0] = !ToStringStyle.isRegistered(object);
+            registryIsNull[0] = ToStringStyle.getRegistry() == null;
+        }
+    });
+
+    thread.start();
+    thread.join();
+
+    assertTrue(result[0]);
+    assertTrue(registryIsNull[0]);
+}
+```
+
+So **use the following final version of the class**:
+
+```java
+package org.apache.commons.lang3.builder;
+
+import static org.junit.Assert.assertTrue;
+
+import org.junit.Test;
+
+public class ToStringStyleLang34Test {
+
+    private static class SimpleObject {
+        private int number = 42;
+        private String name = "sample";
+    }
+
+    private static class NestedObject {
+        private String value = "nested";
+    }
+
+    private static class ContainerObject {
+        private int id = 7;
+        private NestedObject child = new NestedObject();
+    }
+
+    @Test
+    public void testRegistryIsNullBeforeAnyRegistration() throws Exception {
+        final boolean[] registryIsNull = new boolean[1];
+
+        Thread thread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                registryIsNull[0] = ToStringStyle.getRegistry() == null;
+            }
+        });
+
+        thread.start();
+        thread.join();
+
+        assertTrue(registryIsNull[0]);
+    }
+
+    @Test
+    public void testRegistryBecomesNullAfterLastObjectIsUnregistered() throws Exception {
+        final boolean[] lifecycleCorrect = new boolean[1];
+
+        Thread thread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                SimpleObject object = new SimpleObject();
+
+                ToStringStyle.register(object);
+
+                boolean registered = ToStringStyle.isRegistered(object);
+
+                ToStringStyle.unregister(object);
+
+                boolean cleared = ToStringStyle.getRegistry() == null;
+
+                lifecycleCorrect[0] = registered && cleared;
+            }
+        });
+
+        thread.start();
+        thread.join();
+
+        assertTrue(lifecycleCorrect[0]);
+    }
+
+    @Test
+    public void testReflectionToStringClearsRegistryForSimpleObject() throws Exception {
+        final boolean[] registryIsNull = new boolean[1];
+
+        Thread thread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                SimpleObject object = new SimpleObject();
+
+                ToStringBuilder.reflectionToString(object);
+
+                registryIsNull[0] = ToStringStyle.getRegistry() == null;
+            }
+        });
+
+        thread.start();
+        thread.join();
+
+        assertTrue(registryIsNull[0]);
+    }
+
+    @Test
+    public void testReflectionToStringClearsRegistryForNestedObject() throws Exception {
+        final boolean[] registryIsNull = new boolean[1];
+
+        Thread thread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                ContainerObject object = new ContainerObject();
+
+                ToStringBuilder.reflectionToString(object);
+
+                registryIsNull[0] = ToStringStyle.getRegistry() == null;
+            }
+        });
+
+        thread.start();
+        thread.join();
+
+        assertTrue(registryIsNull[0]);
+    }
+
+    @Test
+    public void testIsRegisteredReturnsFalseWithoutActiveRegistry() throws Exception {
+        final boolean[] result = new boolean[1];
+        final boolean[] registryIsNull = new boolean[1];
+
+        Thread thread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                SimpleObject object = new SimpleObject();
+
+                result[0] = !ToStringStyle.isRegistered(object);
+                registryIsNull[0] = ToStringStyle.getRegistry() == null;
+            }
+        });
+
+        thread.start();
+        thread.join();
+
+        assertTrue(result[0]);
+        assertTrue(registryIsNull[0]);
+    }
+}
+```
+
+---
+
+## 6. Defect detection strategy + summary
+
+### Expected behavior
+
+| Test                                                   | BUGGY version             | FIXED version          | Detects defect?     |
+| ------------------------------------------------------ | ------------------------- | ---------------------- | ------------------- |
+| `testRegistryIsNullBeforeAnyRegistration`              | **FAIL** — gets empty map | **PASS** — gets `null` | Yes                 |
+| `testRegistryBecomesNullAfterLastObjectIsUnregistered` | **FAIL** — gets empty map | **PASS** — gets `null` | Yes                 |
+| `testReflectionToStringClearsRegistryForSimpleObject`  | **FAIL** — gets empty map | **PASS** — gets `null` | Yes                 |
+| `testReflectionToStringClearsRegistryForNestedObject`  | **FAIL** — gets empty map | **PASS** — gets `null` | Yes                 |
+| `testIsRegisteredReturnsFalseWithoutActiveRegistry`    | **PASS**                  | **PASS**               | No, regression only |
+
+### Why the first four detect Lang-34
+
+In the BUGGY version, once the ThreadLocal has no map:
+
+```java
+REGISTRY.get() == null
+```
+
+but `getRegistry()` converts that into:
+
+```java
+Collections.emptyMap()
+```
+
+Therefore:
+
+```java
+ToStringStyle.getRegistry() == null
+```
+
+is false.
+
+In the FIXED version:
+
+```java
+return REGISTRY.get();
+```
+
+so the same condition is true.
+
+The historical commit confirms exactly this source-level distinction: `getRegistry()` was changed from returning an empty collection when absent to returning the ThreadLocal value directly, and `isRegistered()` was updated to handle `null`. ([GitHub][1])
+
+### Summary
+
+* **Root cause:** `getRegistry()` in the BUGGY version hides an absent ThreadLocal registry by returning an empty map.
+* **Targeted behavior:** the registry must be genuinely absent (`null`) after there is no active object being traversed.
+* **Generated tests:** **5**
+
+  * **4 defect-detecting**
+  * **1 regression/safety test**
+* **Independence:** the tests do not reproduce the supplied cyclic-object trigger cases. They derive their inputs from the changed registry lifecycle itself: fresh thread, explicit register/unregister, and ordinary non-cyclic reflection.
+* The use of separate threads is deliberate because `REGISTRY` is a `ThreadLocal`; it also makes the tests independent of JUnit test execution order.
+
+## Limitations
+
+The supplied source makes the **observable source-level defect** very clear, but a unit test cannot by itself measure the full production-level memory impact of a ThreadLocal-related issue. These tests verify the intended lifecycle state (`null` when the registry is no longer active), which is the behavior explicitly targeted by the historical `LANG-586` commit. ([GitHub][1])
+
+Also, `getRegistry()`, `register()`, and `unregister()` are package-private, so the generated test intentionally uses the same package:
+
+```java
+package org.apache.commons.lang3.builder;
+```
+
+No reflection or private-access workaround is needed.
+
+[1]: https://github.com/apache/commons-lang/commit/a2bb711aee6621b21cdd22e6d7e4bff2f7236235 "[LANG-586] part 2: refactor ToStringStyle and ToStringBuilderTest to … · apache/commons-lang@a2bb711 · GitHub"

@@ -1,0 +1,213 @@
+## 1. Behavior that differs
+
+The defect is in the handling of the **`L` / `l` type qualifier** at the end of a number.
+
+The buggy implementation ends with:
+
+```java
+return foundDigit && !hasExp;
+```
+
+for `L`/`l`.
+
+The fixed implementation changes this to:
+
+```java
+return foundDigit && !hasExp && !hasDecPoint;
+```
+
+Therefore:
+
+* **Buggy:** accepts a decimal number followed by `L` or `l`.
+* **Fixed:** rejects a decimal number followed by `L` or `l`.
+* Integer numbers with `L`/`l` remain valid.
+* Decimal numbers with `D`/`d` or `F`/`f` remain valid.
+
+For example, independently derived from the changed condition:
+
+| Input    |  Buggy |   Fixed |
+| -------- | -----: | ------: |
+| `12.5L`  | `true` | `false` |
+| `.5L`    | `true` | `false` |
+| `5.L`    | `true` | `false` |
+| `-7.25l` | `true` | `false` |
+| `42L`    | `true` |  `true` |
+| `12.5F`  | `true` |  `true` |
+
+---
+
+## 2. Likely root cause visible from the source
+
+The root cause is that the buggy `L` branch checks only whether:
+
+1. a digit was found, and
+2. there is no exponent.
+
+It **does not check whether a decimal point was already encountered**.
+
+Buggy condition:
+
+```java
+if (chars[i] == 'l'
+    || chars[i] == 'L') {
+    return foundDigit && !hasExp;
+}
+```
+
+The fixed condition adds:
+
+```java
+&& !hasDecPoint
+```
+
+So the corrected rule is effectively:
+
+> `L`/`l` is allowed only for an integer-style number, not for a number containing a decimal point or exponent.
+
+The exponent restriction was already present in the buggy version. The missing restriction is specifically the **decimal-point restriction**.
+
+---
+
+## 3. Specific behavior the generated tests should distinguish
+
+The most direct defect-oriented partition is:
+
+### A. Decimal point before `L`
+
+Examples:
+
+* `12.5L`
+* `.5L`
+* `5.L`
+
+Expected: **false**
+
+These should expose the defect because `hasDecPoint` becomes `true` before the final `L` is processed.
+
+### B. Negative decimal before `l`
+
+Example:
+
+* `-7.25l`
+
+Expected: **false**
+
+This verifies that the problem is not limited to positive decimal numbers.
+
+### C. Valid integer with `L`
+
+Example:
+
+* `42L`
+
+Expected: **true**
+
+This is a regression/control case demonstrating that adding the `!hasDecPoint` condition does not incorrectly reject legitimate long-style integer literals.
+
+### D. Decimal with another valid floating-point qualifier
+
+Example:
+
+* `12.5F`
+
+Expected: **true**
+
+This verifies that the restriction applies specifically to `L`/`l`, rather than all type qualifiers following decimal values.
+
+---
+
+## 4. Boundary, representative, and regression cases
+
+I would use **6 tests** with complementary semantic coverage:
+
+| Test | Input    | Expected | Purpose                                     |
+| ---- | -------- | -------: | ------------------------------------------- |
+| 1    | `12.5L`  |  `false` | Representative decimal + uppercase `L`      |
+| 2    | `.5L`    |  `false` | Decimal point at the beginning              |
+| 3    | `5.L`    |  `false` | Decimal point at the end                    |
+| 4    | `-7.25l` |  `false` | Negative decimal + lowercase `l`            |
+| 5    | `42L`    |   `true` | Valid integer long qualifier regression     |
+| 6    | `12.5F`  |   `true` | Control: decimal + valid floating qualifier |
+
+The first four are intended to be defect-detecting. The last two are regression/control tests.
+
+---
+
+## 5. Complete JUnit 4.12 test class
+
+```java
+package org.apache.commons.lang3.math;
+
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+
+import org.junit.Test;
+
+public class NumberUtilsLang24Test {
+
+    @Test
+    public void testDecimalNumberWithUppercaseLongQualifierIsRejected() {
+        assertFalse(NumberUtils.isNumber("12.5L"));
+    }
+
+    @Test
+    public void testLeadingDecimalNumberWithUppercaseLongQualifierIsRejected() {
+        assertFalse(NumberUtils.isNumber(".5L"));
+    }
+
+    @Test
+    public void testTrailingDecimalPointWithUppercaseLongQualifierIsRejected() {
+        assertFalse(NumberUtils.isNumber("5.L"));
+    }
+
+    @Test
+    public void testNegativeDecimalNumberWithLowercaseLongQualifierIsRejected() {
+        assertFalse(NumberUtils.isNumber("-7.25l"));
+    }
+
+    @Test
+    public void testIntegerWithLongQualifierRemainsValid() {
+        assertTrue(NumberUtils.isNumber("42L"));
+    }
+
+    @Test
+    public void testDecimalWithFloatQualifierRemainsValid() {
+        assertTrue(NumberUtils.isNumber("12.5F"));
+    }
+}
+```
+
+### Expected behavior by version
+
+| Test                                                            |              BUGGY |            FIXED | Defect-detecting? |
+| --------------------------------------------------------------- | -----------------: | ---------------: | ----------------- |
+| `testDecimalNumberWithUppercaseLongQualifierIsRejected`         | **fails** (`true`) | passes (`false`) | **Yes**           |
+| `testLeadingDecimalNumberWithUppercaseLongQualifierIsRejected`  | **fails** (`true`) | passes (`false`) | **Yes**           |
+| `testTrailingDecimalPointWithUppercaseLongQualifierIsRejected`  | **fails** (`true`) | passes (`false`) | **Yes**           |
+| `testNegativeDecimalNumberWithLowercaseLongQualifierIsRejected` | **fails** (`true`) | passes (`false`) | **Yes**           |
+| `testIntegerWithLongQualifierRemainsValid`                      |    passes (`true`) |  passes (`true`) | No — control      |
+| `testDecimalWithFloatQualifierRemainsValid`                     |    passes (`true`) |  passes (`true`) | No — control      |
+
+The four defect-detecting tests should therefore produce the important oracle:
+
+**BUGGY:** 4 assertion failures
+**FIXED:** 0 assertion failures
+
+The two additional tests make sure the test suite is not simply asserting that every number ending in a type qualifier is invalid.
+
+---
+
+## 6. Summary
+
+* **Root cause:** the buggy `isNumber` implementation allows `L`/`l` whenever `foundDigit && !hasExp` is true, but fails to consider `hasDecPoint`.
+* **Targeted behavior:** `L`/`l` must not be accepted after a number containing a decimal point.
+* **Generated tests:** **6**
+
+  * **4 defect-detecting tests**
+  * **2 regression/control tests**
+* **Independence:** the tests are derived directly from the **semantic difference between the buggy and fixed source conditions**, rather than reproducing the supplied `testIsNumber` trigger test or its exact inputs.
+* The boundary cases `.5L` and `5.L` additionally exercise two different positions of the decimal point, while `-7.25l` covers the sign and lowercase qualifier dimensions.
+
+### Limitations / uncertainty
+
+The supplied source is truncated elsewhere in `NumberUtils`, but the complete relevant `isNumber` implementation is present. Therefore, analysis of this particular defect has relatively low uncertainty. The exact historical contents of the Defects4J trigger test were intentionally not used, so I cannot claim that any individual generated input differs textually from every historical trigger input; the suite is instead independently derived from the source-level defect and does not reproduce the trigger implementation.

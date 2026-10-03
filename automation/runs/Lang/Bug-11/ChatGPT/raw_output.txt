@@ -1,0 +1,317 @@
+## 1. Behavior that differs
+
+The defect is in the validation of the `start` and `end` parameters in the seven-argument `RandomStringUtils.random(...)` method.
+
+In the **buggy version**, after handling the special case where both `start` and `end` are `0`, the method immediately calculates:
+
+```java
+int gap = end - start;
+```
+
+and eventually calls:
+
+```java
+random.nextInt(gap)
+```
+
+There is no explicit validation that `end > start`.
+
+Therefore, when `end <= start`, the failure comes indirectly from `Random.nextInt(...)`.
+
+The **fixed version** adds:
+
+```java
+if (end <= start) {
+    throw new IllegalArgumentException(
+        "Parameter end (" + end + ") must be greater than start (" + start + ")");
+}
+```
+
+So the intended behavior is that invalid ranges are rejected directly by `RandomStringUtils` with an `IllegalArgumentException` identifying the invalid `start`/`end` parameters.
+
+This agrees with Apache's LANG-807 report, which describes the problem as `RandomStringUtils` producing an unhelpful exception when `end <= start`; the issue was fixed in the relevant Lang release. ([Apache Issues][1])
+
+---
+
+## 2. Likely root cause visible from the source
+
+The root cause is the missing range validation in the buggy `random(...)` implementation.
+
+### Buggy
+
+```java
+int gap = end - start;
+
+while (count-- != 0) {
+    ...
+    ch = (char) (random.nextInt(gap) + start);
+```
+
+For example:
+
+```text
+start = 7
+end   = 7
+gap   = 0
+```
+
+or:
+
+```text
+start = 9
+end   = 4
+gap   = -5
+```
+
+The invalid range is discovered only when `Random.nextInt(gap)` is called.
+
+### Fixed
+
+The fixed implementation validates the parameters before creating the buffer or generating random values:
+
+```java
+if (end <= start) {
+    throw new IllegalArgumentException(
+        "Parameter end (" + end + ") must be greater than start (" + start + ")");
+}
+```
+
+This makes the public method responsible for detecting its own invalid parameters instead of leaking the lower-level `Random.nextInt()` failure.
+
+---
+
+## 3. Specific behavior a generated test should distinguish
+
+Simply testing:
+
+```java
+try {
+    RandomStringUtils.random(...);
+} catch (IllegalArgumentException e) {
+    ...
+}
+```
+
+is **not enough**.
+
+Both versions throw `IllegalArgumentException` for an invalid range:
+
+* BUGGY → `Random.nextInt(...)` throws it.
+* FIXED → `RandomStringUtils` explicitly throws it.
+
+Therefore, the generated tests should distinguish the **source and meaning of the exception**.
+
+The fixed implementation's exception identifies the invalid parameter relationship:
+
+```text
+Parameter end (...) must be greater than start (...)
+```
+
+The buggy implementation instead produces the exception from `Random.nextInt(...)`, whose message does not identify the `start` and `end` parameters.
+
+So the defect-detecting assertion should verify that the exception message identifies the invalid range.
+
+I would use two complementary invalid-range cases:
+
+1. `start == end` — zero-width range.
+2. `end < start` — negative-width range.
+
+Then include one valid boundary case:
+
+3. `end == start + 1` — smallest valid range.
+
+The valid case is useful as a regression test but does not itself detect the defect.
+
+---
+
+## 4. Boundary, representative, and regression cases
+
+### Case A — zero-width range
+
+```text
+start = 7
+end   = 7
+```
+
+Expected:
+
+```text
+IllegalArgumentException
+"Parameter end (7) must be greater than start (7)"
+```
+
+* **BUGGY:** `Random.nextInt(0)` throws an `IllegalArgumentException` with a different message → **FAIL**
+* **FIXED:** explicit `RandomStringUtils` validation produces the expected message → **PASS**
+
+This is a strong defect-detecting test.
+
+### Case B — negative-width range
+
+```text
+start = 9
+end   = 4
+```
+
+Expected:
+
+```text
+IllegalArgumentException
+"Parameter end (4) must be greater than start (9)"
+```
+
+* **BUGGY:** `Random.nextInt(-5)` throws before `RandomStringUtils` can report the parameter problem → **FAIL**
+* **FIXED:** explicit validation → **PASS**
+
+This verifies that the defect is not limited to exactly equal boundaries.
+
+### Case C — smallest valid range
+
+```text
+start = 12
+end   = 13
+```
+
+There is exactly one possible character in the range `[12, 13)`.
+
+Expected:
+
+```text
+String containing exactly '\f'
+```
+
+* **BUGGY:** succeeds
+* **FIXED:** succeeds
+
+This confirms that the new validation does not incorrectly reject a valid positive-width range.
+
+---
+
+## 5. JUnit 4.12 test class
+
+The test below uses the public seven-argument API directly. It does not use reflection or the original trigger test.
+
+The invalid tests deliberately verify the **fixed implementation's parameter-specific exception message**, because checking only the exception type would pass on both versions.
+
+```java
+package org.apache.commons.lang3;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+
+import java.util.Random;
+
+import org.junit.Test;
+
+public class RandomStringUtilsLang11Test {
+
+    @Test
+    public void testRejectsZeroWidthCharacterRange() {
+        try {
+            RandomStringUtils.random(
+                    1, 7, 7, false, false, (char[]) null, new Random(1));
+        } catch (IllegalArgumentException e) {
+            assertEquals(
+                    "Parameter end (7) must be greater than start (7)",
+                    e.getMessage());
+            return;
+        }
+
+        org.junit.Assert.fail(
+                "Expected IllegalArgumentException for a zero-width range");
+    }
+
+    @Test
+    public void testRejectsNegativeWidthCharacterRange() {
+        try {
+            RandomStringUtils.random(
+                    1, 9, 4, false, false, (char[]) null, new Random(1));
+        } catch (IllegalArgumentException e) {
+            assertEquals(
+                    "Parameter end (4) must be greater than start (9)",
+                    e.getMessage());
+            return;
+        }
+
+        org.junit.Assert.fail(
+                "Expected IllegalArgumentException when end is less than start");
+    }
+
+    @Test
+    public void testAcceptsSmallestPositiveWidthCharacterRange() {
+        String result = RandomStringUtils.random(
+                1, 12, 13, false, false, (char[]) null, new Random(1));
+
+        assertNotNull(result);
+        assertEquals(1, result.length());
+        assertEquals((char) 12, result.charAt(0));
+    }
+}
+```
+
+---
+
+## 6. Defect detection strategy and summary
+
+### Expected execution
+
+| Test                                             | BUGGY version                                                                          | FIXED version                                 | Detects defect? |
+| ------------------------------------------------ | -------------------------------------------------------------------------------------- | --------------------------------------------- | --------------- |
+| `testRejectsZeroWidthCharacterRange`             | `IllegalArgumentException` from `Random.nextInt(0)` with different message → **FAIL**  | Correct parameter-specific message → **PASS** | **Yes**         |
+| `testRejectsNegativeWidthCharacterRange`         | `IllegalArgumentException` from `Random.nextInt(-5)` with different message → **FAIL** | Correct parameter-specific message → **PASS** | **Yes**         |
+| `testAcceptsSmallestPositiveWidthCharacterRange` | Generates the only valid character → **PASS**                                          | Generates the only valid character → **PASS** | No              |
+
+### Root cause
+
+The buggy implementation does not explicitly validate:
+
+```java
+end > start
+```
+
+before calculating:
+
+```java
+int gap = end - start;
+```
+
+Consequently, invalid ranges are passed to `Random.nextInt()`.
+
+### Targeted behavior
+
+The suite specifically tests that `RandomStringUtils.random()`:
+
+* rejects `end == start`;
+* rejects `end < start`;
+* reports the invalid `start`/`end` relationship itself;
+* still accepts the smallest valid range where `end = start + 1`.
+
+### Number of generated tests
+
+**3 tests**
+
+* 2 defect-detecting tests
+* 1 valid boundary/regression test
+
+### Why these tests are independent
+
+The supplied trigger test name was used only as ground-truth information. The tests above are derived independently from the source-level difference:
+
+```java
+if (end <= start) {
+    throw new IllegalArgumentException(...);
+}
+```
+
+They use different parameter values and do not reproduce the trigger implementation or its exact inputs/expected values.
+
+The tests also avoid a weak assertion that merely checks for `IllegalArgumentException`, because that would not distinguish the buggy and fixed implementations. The important observable difference is **which layer reports the invalid range and what information the exception provides**. This is consistent with the LANG-807 issue description. ([Apache Issues][1])
+
+### Limitations / uncertainty
+
+The supplied source makes the defect mechanism clear. One limitation is that exception-message text is being used to distinguish the two implementations because **both versions already throw `IllegalArgumentException`** for the invalid ranges.
+
+The exact message from the fixed version is directly visible in the supplied fixed source, so the assertions are based on the provided implementation rather than on the original Defects4J trigger.
+
+The valid-range test is intentionally not classified as defect-detecting because both implementations should behave identically for `end > start`.
+
+[1]: https://issues.apache.org/jira/browse/LANG-807?utm_source=chatgpt.com "[LANG-807] RandomStringUtils throws confusing IAE when end <= start - ASF Jira"

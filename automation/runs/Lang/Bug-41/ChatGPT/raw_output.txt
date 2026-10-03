@@ -1,0 +1,289 @@
+## 1. Behavior that differs
+
+The defect is in `ClassUtils.getShortClassName(String)` and therefore also affects the overloads that obtain the class name from a `Class` or `Object`.
+
+The **buggy implementation does not handle JVM array class-name encoding**. It simply searches for the last `.` and returns the substring after it.
+
+For example:
+
+* JVM name of `String[]` is `"[Ljava.lang.String;"`
+* JVM name of `int[][]` is `"[[I"`
+
+The buggy implementation therefore produces results such as:
+
+* `"[Ljava.lang.String;"` → `"String;"`
+* `"[[I"` → `"[[I"`
+
+The fixed implementation explicitly:
+
+1. removes `[` array-dimension markers,
+2. removes `L...;` object-array encoding,
+3. converts primitive abbreviations such as `I` to `int`,
+4. appends `[]` for each array dimension.
+
+This matches the documented behavior that `getShortClassName` returns the short class name and, for arrays, the array suffix rather than the JVM encoding. Apache Commons Lang's release notes identify LANG-535 specifically as adding array support to `getShortClassName` and `getPackageName`. ([Apache Commons][1])
+
+---
+
+## 2. Likely root cause visible from the source
+
+The key difference is this part.
+
+### BUGGY
+
+```java
+// Handle array encoding
+// Strip Object type encoding
+
+int lastDotIdx = className.lastIndexOf(PACKAGE_SEPARATOR_CHAR);
+```
+
+The array-handling section is effectively missing, so the method treats a JVM array name as an ordinary class name.
+
+### FIXED
+
+```java
+StringBuffer arrayPrefix = new StringBuffer();
+
+if (className.startsWith("[")) {
+    while (className.charAt(0) == '[') {
+        className = className.substring(1);
+        arrayPrefix.append("[]");
+    }
+
+    if (className.charAt(0) == 'L' && className.charAt(className.length() - 1) == ';') {
+        className = className.substring(1, className.length() - 1);
+    }
+}
+
+if (reverseAbbreviationMap.containsKey(className)) {
+    className = reverseAbbreviationMap.get(className);
+}
+```
+
+So the root cause is **failure to decode JVM array class names before extracting the short class name**.
+
+---
+
+## 3. Specific behavior the generated tests should distinguish
+
+The tests should verify that:
+
+| Case                               | Expected behavior                                                |
+| ---------------------------------- | ---------------------------------------------------------------- |
+| Normal non-array class             | Existing behavior remains unchanged                              |
+| One-dimensional reference array    | Return `ClassName[]`                                             |
+| Multi-dimensional reference array  | Return `ClassName[][]`                                           |
+| Primitive array                    | Convert JVM abbreviation to primitive name and append dimensions |
+| Array of an inner class            | Preserve `Outer.Inner` and append array suffix                   |
+| Object overload receiving an array | Same correct array result                                        |
+
+This gives several independent paths through the new array-decoding logic rather than repeatedly testing the same input shape.
+
+---
+
+## 4. Boundary, representative, and regression cases
+
+I would use **6 tests**:
+
+1. **One-dimensional reference array through `Class`**
+
+   * Tests `[L...;` decoding.
+   * BUGGY returns the encoded trailing `;`.
+   * FIXED returns `String[]`.
+
+2. **Multi-dimensional primitive array through `Class`**
+
+   * Tests repeated `[` processing and primitive abbreviation conversion.
+   * BUGGY leaves the JVM representation unchanged.
+   * FIXED returns `int[][]`.
+
+3. **Multi-dimensional reference array through String API**
+
+   * Tests the actual string-decoding implementation directly.
+   * FIXED reconstructs the dimensions.
+
+4. **Array of an inner class**
+
+   * Tests that `$` → `.` conversion still works after array decoding.
+
+5. **Array passed through Object overload**
+
+   * Ensures the overload `getShortClassName(Object, String)` also benefits from the fix.
+
+6. **Normal non-array class regression**
+
+   * Ensures the new array handling does not change ordinary class-name behavior.
+
+These are not copies of the supplied trigger. They deliberately exercise different array representations and different public overloads.
+
+---
+
+# 5. Complete JUnit 4.12 test class
+
+```java
+package org.apache.commons.lang;
+
+import org.junit.Test;
+
+import static org.junit.Assert.assertEquals;
+
+public class Lang41GetShortClassNameTest {
+
+    @Test
+    public void testShortClassNameForOneDimensionalReferenceArray() {
+        assertEquals(
+                "String[]",
+                ClassUtils.getShortClassName(String[].class)
+        );
+    }
+
+    @Test
+    public void testShortClassNameForMultiDimensionalPrimitiveArray() {
+        assertEquals(
+                "int[][]",
+                ClassUtils.getShortClassName(int[][].class)
+        );
+    }
+
+    @Test
+    public void testShortClassNameForMultiDimensionalReferenceArrayFromString() {
+        assertEquals(
+                "Integer[][][]",
+                ClassUtils.getShortClassName("[[[Ljava.lang.Integer;")
+        );
+    }
+
+    @Test
+    public void testShortClassNameForArrayOfInnerClass() {
+        assertEquals(
+                "Map.Entry[]",
+                ClassUtils.getShortClassName("[Ljava.util.Map$Entry;")
+        );
+    }
+
+    @Test
+    public void testShortClassNameForArrayObject() {
+        Object value = new Double[1];
+
+        assertEquals(
+                "Double[]",
+                ClassUtils.getShortClassName(value, "fallback")
+        );
+    }
+
+    @Test
+    public void testShortClassNameForOrdinaryClassRemainsUnchanged() {
+        assertEquals(
+                "String",
+                ClassUtils.getShortClassName("java.lang.String")
+        );
+    }
+}
+```
+
+---
+
+# 6. Defect detection strategy
+
+### Expected results
+
+| Test                                                            | BUGGY          | FIXED             | Detects defect? |
+| --------------------------------------------------------------- | -------------- | ----------------- | --------------- |
+| `testShortClassNameForOneDimensionalReferenceArray`             | `"String;"`    | `"String[]"`      | **Yes**         |
+| `testShortClassNameForMultiDimensionalPrimitiveArray`           | `"[[I"`        | `"int[][]"`       | **Yes**         |
+| `testShortClassNameForMultiDimensionalReferenceArrayFromString` | `"Integer;"`   | `"Integer[][][]"` | **Yes**         |
+| `testShortClassNameForArrayOfInnerClass`                        | `"Map.Entry;"` | `"Map.Entry[]"`   | **Yes**         |
+| `testShortClassNameForArrayObject`                              | `"Double;"`    | `"Double[]"`      | **Yes**         |
+| `testShortClassNameForOrdinaryClassRemainsUnchanged`            | `"String"`     | `"String"`        | No — regression |
+
+### Why the first five fail on BUGGY
+
+For example:
+
+```text
+[Ljava.lang.String;
+```
+
+The buggy implementation performs:
+
+```java
+lastDotIdx = 10
+substring(lastDotIdx + 1)
+```
+
+which produces:
+
+```text
+String;
+```
+
+It has no code that removes:
+
+```text
+[L
+;
+```
+
+The fixed implementation recognizes the array encoding and reconstructs:
+
+```text
+String[]
+```
+
+For:
+
+```text
+[[I
+```
+
+the buggy implementation has no `.` at all, so it returns:
+
+```text
+[[I
+```
+
+The fixed implementation interprets:
+
+```text
+[[  -> two array dimensions
+I   -> int
+```
+
+and returns:
+
+```text
+int[][]
+```
+
+Therefore, the suite should produce approximately:
+
+```text
+BUGGY : 5 failures, 1 pass
+FIXED : 0 failures, 6 passes
+```
+
+The normal-class test is intentionally included as a regression test rather than as a defect-detection test.
+
+---
+
+## Summary
+
+* **Root cause:** `getShortClassName(String)` in BUGGY does not decode JVM array class-name representations.
+* **Targeted behavior:** Correct conversion of reference arrays, primitive arrays, multidimensional arrays, and arrays of inner classes into short human-readable names.
+* **Generated tests:** **6**
+* **Defect-detecting tests:** **5**
+* **Regression test:** **1**
+* The tests use different array forms and different public overloads rather than repeating one input.
+* They do not invoke or reproduce the supplied Defects4J trigger tests.
+
+The public API documentation also describes `getShortClassName` as converting the class name obtained from `Class.getName()` into the short class name, which is important here because `Class.getName()` uses JVM-style names for arrays. ([Apache Commons][2])
+
+## Limitations
+
+The supplied source is sufficient to identify the defect because the relevant `getShortClassName` implementation is fully visible. The exact trigger inputs were intentionally not used. Therefore, the expected BUGGY outputs above are derived directly from the supplied BUGGY implementation rather than from the original Defects4J trigger.
+
+One additional point: LANG-535 also changed `getPackageName` for arrays, but the experiment explicitly identifies **`getShortClassName` as the modified production method**, so the generated suite intentionally focuses on `getShortClassName` rather than testing the separate package-name behavior. Apache's release notes confirm that LANG-535 concerned array support in both methods. ([Apache Commons][1])
+
+[1]: https://commons.apache.org/proper/commons-lang/upgradeto2_5.html?utm_source=chatgpt.com "2.5 Release Notes – Apache Commons Lang"
+[2]: https://commons.apache.org/proper/commons-lang/javadocs/api-release/org/apache/commons/lang3/ClassUtils.html?utm_source=chatgpt.com "ClassUtils (Apache Commons Lang 3.11 API)"
