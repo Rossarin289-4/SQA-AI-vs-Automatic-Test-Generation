@@ -6,51 +6,55 @@ import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
 
-public class TestBeanPropertyWriterNullColumn {
+public class TestBeanPropertyWriterNullColumnDefect {
 
     @JsonFormat(shape = JsonFormat.Shape.ARRAY)
-    public static class NullHolder {
+    public static class SingleNullBean {
         public String name = null;
+        public int id = 42;
 
-        public NullHolder() {}
-        public NullHolder(String name) {
-            this.name = name;
-        }
+        public SingleNullBean() {}
     }
 
     @JsonFormat(shape = JsonFormat.Shape.ARRAY)
-    public static class MixedHolder {
-        public String first = "hello";
-        public String second = null;
-        public Integer third = 123;
+    public static class MultipleNullsBean {
+        public Integer boxedInt = null;
+        public String text = null;
+        public Boolean active = null;
 
-        public MixedHolder() {}
+        public MultipleNullsBean() {}
+    }
+
+    @JsonFormat(shape = JsonFormat.Shape.ARRAY)
+    public static class MixedValuesBean {
+        public String first = "start";
+        public String middle = null;
+        public String last = "end";
+
+        public MixedValuesBean() {}
     }
 
     @Test
-    public void testPojoAsArrayWithNullField() throws Exception {
+    public void testSerializePojoAsArrayWithNullStringProperty() throws Exception {
         ObjectMapper mapper = new ObjectMapper();
-        NullHolder holder = new NullHolder(null);
-        String json = mapper.writeValueAsString(holder);
-        assertEquals("[null]", json);
+        SingleNullBean bean = new SingleNullBean();
+        String json = mapper.writeValueAsString(bean);
+        assertEquals("[null,42]", json);
     }
 
     @Test
-    public void testPojoAsArrayWithMixedFields() throws Exception {
+    public void testSerializePojoAsArrayWithMultipleNullProperties() throws Exception {
         ObjectMapper mapper = new ObjectMapper();
-        MixedHolder holder = new MixedHolder();
-        String json = mapper.writeValueAsString(holder);
-        assertEquals("[\"hello\",null,123]", json);
+        MultipleNullsBean bean = new MultipleNullsBean();
+        String json = mapper.writeValueAsString(bean);
+        assertEquals("[null,null,null]", json);
     }
 
     @Test
-    public void testPojoAsArrayMultipleNulls() throws Exception {
+    public void testSerializePojoAsArrayWithNullAndNonNullMixed() throws Exception {
         ObjectMapper mapper = new ObjectMapper();
-        NullHolder holder = new NullHolder(null);
-        // Serialize twice or verify consecutive null handling
-        String json1 = mapper.writeValueAsString(holder);
-        String json2 = mapper.writeValueAsString(holder);
-        assertEquals("[null]", json1);
-        assertEquals("[null]", json2);
+        MixedValuesBean bean = new MixedValuesBean();
+        String json = mapper.writeValueAsString(bean);
+        assertEquals("[\"start\",null,\"end\"]", json);
     }
 }
