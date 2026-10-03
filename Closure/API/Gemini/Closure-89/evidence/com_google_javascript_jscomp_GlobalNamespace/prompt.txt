@@ -1,0 +1,761 @@
+You are a Java unit test engineer. Generate ONE complete JUnit 4 test file
+for the production class and source context supplied.
+
+Requirements:
+- Use the exact requested package and public test class name.
+- Use JUnit 4 and Java 7 syntax. Do not use JUnit 5, Mockito, or new dependencies.
+- Write at most 3 concise test methods. Focus on useful observable behavior,
+  boundaries, and relevant branches. Avoid repetitive tests and unnecessary helpers.
+- Use only APIs shown in the supplied source context.
+- Tests must compile and pass on the supplied fixed version.
+- When supported by the available evidence, make a test fail on the buggy
+  version and pass on the fixed version. Do not invent bug behavior.
+- Do not copy or modify production code. Do not use @Ignore or weaken assertions.
+- Return the entire Java file only. No prose, no Markdown fences, and no
+  ellipses or omitted sections.
+
+Production class: com.google.javascript.jscomp.GlobalNamespace
+Required test class: com.google.javascript.jscomp.GlobalNamespaceAI89Test
+
+TARGET SOURCE: com.google.javascript.jscomp.GlobalNamespace
+/*
+ * Copyright 2006 The Closure Compiler Authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package com.google.javascript.jscomp;
+
+import com.google.common.base.Preconditions;
+import com.google.common.base.Predicate;
+import com.google.javascript.jscomp.NodeTraversal.AbstractPostOrderCallback;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.TokenStream;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+
+/**
+ * Builds a global namespace of all the objects and their properties in
+ * the global scope. Also builds an index of all the references to those names.
+ *
+ */
+class GlobalNamespace {
+
+  private AbstractCompiler compiler;
+  private final Node root;
+  private final Node externsRoot;
+  private boolean inExterns;
+  private Scope externsScope;
+  private boolean generated = false;
+
+  /** Global namespace tree */
+  private List<Name> globalNames = new ArrayList<Name>();
+
+  /** Maps names (e.g. "a.b.c") to nodes in the global namespace tree */
+  private Map<String, Name> nameMap = new HashMap<String, Name>();
+
+  /**
+   * Creates an instance that may emit warnings when building the namespace.
+   *
+   * @param compiler The AbstractCompiler, for reporting code changes
+   * @param root The root of the rest of the code to build a namespace for.
+   */
+  GlobalNamespace(AbstractCompiler compiler, Node root) {
+    this(compiler, null, root);
+  }
+
+  /**
+   * Creates an instance that may emit warnings when building the namespace.
+   *
+   * @param compiler The AbstractCompiler, for reporting code changes
+   * @param externsRoot The root of the externs to build a namespace for. If
+   *     this is null, externs and properties defined on extern types will not
+   *     be included in the global namespace.  If non-null, it allows
+   *     user-defined function on extern types to be included in the global
+   *     namespace.  E.g. String.foo.
+   * @param root The root of the rest of the code to build a namespace for.
+   */
+  GlobalNamespace(AbstractCompiler compiler, Node externsRoot, Node root) {
+    this.compiler = compiler;
+    this.externsRoot = externsRoot;
+    this.root = root;
+  }
+
+  /**
+   * Gets a list of the roots of the forest of the global names, where the
+   * roots are the top-level names.
+   */
+  List<Name> getNameForest() {
+    if (!generated) {
+      process();
+    }
+    return globalNames;
+  }
+
+  /**
+   * Gets an index of all the global names, indexed by full qualified name
+   * (as in "a", "a.b.c", etc.).
+   */
+  Map<String, Name> getNameIndex() {
+    if (!generated) {
+      process();
+    }
+    return nameMap;
+  }
+
+  /**
+   * If the client adds new nodes to the AST, scan these new nodes
+   * to see if they've added any references to the global namespace.
+   * @param scope The scope to scan.
+   * @param newNodes New nodes to check.
+   */
+  void scanNewNodes(Scope scope, Set<Node> newNodes) {
+    NodeTraversal t = new NodeTraversal(compiler,
+        new BuildGlobalNamespace(new NodeFilter(newNodes)));
+    t.traverseAtScope(scope);
+  }
+
+  /**
+   * A filter that looks for qualified names that contain one of the nodes
+   * in the given set.
+   */
+  private static class NodeFilter implements Predicate<Node> {
+    private final Set<Node> newNodes;
+
+    NodeFilter(Set<Node> newNodes) {
+      this.newNodes = newNodes;
+    }
+
+    public boolean apply(Node n) {
+      if (!n.isQualifiedName()) {
+        return false;
+      }
+
+      Node current;
+      for (current = n;
+           current.getType() == Token.GETPROP;
+           current = current.getFirstChild()) {
+        if (newNodes.contains(current)) {
+          return true;
+        }
+      }
+
+      return current.getType() == Token.NAME && newNodes.contains(current);
+    }
+  }
+
+  /**
+   * Builds the namespace lazily.
+   */
+  private void process() {
+    if (externsRoot != null) {
+      inExterns = true;
+      NodeTraversal.traverse(compiler, externsRoot, new BuildGlobalNamespace());
+    }
+    inExterns = false;
+
+    NodeTraversal.traverse(compiler, root, new BuildGlobalNamespace());
+    generated = true;
+  }
+
+  /**
+   * Determines whether a name reference in a particular scope is a global name
+   * reference.
+   *
+   * @param name A variable or property name (e.g. "a" or "a.b.c.d")
+   * @param s The scope in which the name is referenced
+   * @return Whether the name reference is a global name reference
+   */
+  private boolean isGlobalNameReference(String name, Scope s) {
+    String topVarName = getTopVarName(name);
+    return isGlobalVarReference(topVarName, s);
+  }
+
+  /**
+   * Gets the top variable name from a possibly namespaced name.
+   *
+   * @param name A variable or qualified property name (e.g. "a" or "a.b.c.d")
+   * @return The top variable name (e.g. "a")
+   */
+  private String getTopVarName(String name) {
+    int firstDotIndex = name.indexOf('.');
+    return firstDotIndex == -1 ? name : name.substring(0, firstDotIndex);
+  }
+
+  /**
+   * Determines whether a variable name reference in a particular scope is a
+   * global variable reference.
+   *
+   * @param name A variable name (e.g. "a")
+   * @param s The scope in which the name is referenced
+   * @return Whether the name reference is a global variable reference
+   */
+  private boolean isGlobalVarReference(String name, Scope s) {
+    Scope.Var v = s.getVar(name);
+  
+/* SOURCE MIDDLE OMITTED: context limit */
+ernal(Ref ref) {
+      if (refs == null) {
+        refs = new LinkedList<Ref>();
+      }
+      refs.add(ref);
+    }
+
+    boolean canEliminate() {
+      if (!canCollapseUnannotatedChildNames() || totalGets > 0) {
+        return false;
+      }
+
+      if (props != null) {
+        for (Name n : props) {
+          if (!n.canCollapse()) {
+            return false;
+          }
+        }
+      }
+      return true;
+    }
+
+    boolean canCollapse() {
+      return !inExterns && (isClassOrEnum ||
+          (parent == null || parent.canCollapseUnannotatedChildNames()) &&
+          (globalSets > 0 || localSets > 0));
+    }
+
+    boolean canCollapseUnannotatedChildNames() {
+      if (type == Type.OTHER || globalSets != 1 || localSets != 0) {
+        return false;
+      }
+
+      // Don't try to collapse if the one global set is a twin reference.
+      // We could theoretically handle this case in CollapseProperties, but
+      // it's probably not worth the effort.
+      Preconditions.checkNotNull(declaration);
+      if (declaration.getTwin() != null) {
+        return false;
+      }
+
+      if (isClassOrEnum) {
+        return true;
+      }
+
+      // If this is a key of an aliased object literal, then it will be aliased
+      // later. So we won't be able to collapse its properties.
+      if (parent != null && parent.shouldKeepKeys()) {
+        return false;
+      }
+
+      // If this is aliased, then its properties can't be collapsed either.
+      if (aliasingGets > 0) {
+        return false;
+      }
+
+      return (parent == null || parent.canCollapseUnannotatedChildNames());
+    }
+
+    /** Whether this is an object literal that needs to keep its keys. */
+    boolean shouldKeepKeys() {
+      return type == Type.OBJECTLIT && aliasingGets > 0;
+    }
+
+    boolean needsToBeStubbed() {
+      return globalSets == 0 && localSets > 0;
+    }
+
+    void setIsClassOrEnum() {
+      isClassOrEnum = true;
+      for (Name ancestor = parent; ancestor != null;
+           ancestor = ancestor.parent) {
+        ancestor.hasClassOrEnumDescendant = true;
+      }
+    }
+
+    /**
+     * Determines whether this name is a prefix of at least one class or enum
+     * name. Because classes and enums are always collapsed, the namespace will
+     * have different properties in compiled code than in uncompiled code.
+     *
+     * For example, if foo.bar.DomHelper is a class, then foo and foo.bar are
+     * considered namespaces.
+     */
+    boolean isNamespace() {
+      return hasClassOrEnumDescendant && type == Type.OBJECTLIT;
+    }
+
+    /**
+     * Determines whether this is a simple name (as opposed to a qualified
+     * name).
+     */
+    boolean isSimpleName() {
+      return parent == null;
+    }
+
+    @Override public String toString() {
+      return fullName() + " (" + type + "): globalSets=" + globalSets +
+          ", localSets=" + localSets + ", totalGets=" + totalGets +
+          ", aliasingGets=" + aliasingGets + ", callGets=" + callGets;
+    }
+
+    String fullName() {
+      return parent == null ? name : parent.fullName() + '.' + name;
+    }
+
+    /**
+     * Tries to get the doc info for a given declaration ref.
+     */
+    private static JSDocInfo getDocInfoForDeclaration(Ref ref) {
+      if (ref.node != null) {
+        Node refParent = ref.node.getParent();
+        switch (refParent.getType()) {
+          case Token.FUNCTION:
+          case Token.ASSIGN:
+            return refParent.getJSDocInfo();
+          case Token.VAR:
+            return ref.node == refParent.getFirstChild() ?
+                refParent.getJSDocInfo() : ref.node.getJSDocInfo();
+        }
+      }
+
+      return null;
+    }
+  }
+
+  // -------------------------------------------------------------------------
+
+  /**
+   * A global name reference. Contains references to the relevant parse tree
+   * node and its ancestors that may be affected.
+   */
+  static class Ref {
+    enum Type {
+      SET_FROM_GLOBAL,
+      SET_FROM_LOCAL,
+      PROTOTYPE_GET,
+      ALIASING_GET,     // Prevents a name's properties from being collapsed
+      DIRECT_GET,       // Prevents a name from being completely eliminated
+      CALL_GET,         // Prevents a name from being collapsed if never set
+    }
+
+    Node node;
+    final Type type;
+    final String sourceName;
+    final Scope scope;
+    final JSModule module;
+
+    /**
+     * Certain types of references are actually double-refs. For example,
+     * var a = b = 0;
+     * counts as both a "set" of b and an "alias" of b.
+     *
+     * We create two Refs for this node, and mark them as twins of each other.
+     */
+    private Ref twin = null;
+
+    /**
+     * Creates a reference at the current node.
+     */
+    Ref(NodeTraversal t, Node name, Type type) {
+      this.node = name;
+      this.sourceName = t.getSourceName();
+      this.type = type;
+      this.scope = t.getScope();
+      this.module = t.getModule();
+    }
+
+    private Ref(Ref original, Type type) {
+      this.node = original.node;
+      this.sourceName = original.sourceName;
+      this.type = type;
+      this.scope = original.scope;
+      this.module = original.module;
+    }
+
+    private Ref(Type type) {
+      this.type = type;
+      this.sourceName = "source";
+      this.scope = null;
+      this.module = null;
+    }
+
+    Ref getTwin() {
+      return twin;
+    }
+
+    boolean isSet() {
+      return type == Type.SET_FROM_GLOBAL || type == Type.SET_FROM_LOCAL;
+    }
+
+    static void markTwins(Ref a, Ref b) {
+      Preconditions.checkArgument(
+          (a.type == Type.ALIASING_GET || b.type == Type.ALIASING_GET) &&
+          (a.type == Type.SET_FROM_GLOBAL || a.type == Type.SET_FROM_LOCAL ||
+           b.type == Type.SET_FROM_GLOBAL || b.type == Type.SET_FROM_LOCAL));
+      a.twin = b;
+      b.twin = a;
+    }
+
+    /**
+     * Create a new ref that is the same as this one, but of
+     * a different class.
+     */
+    Ref cloneAndReclassify(Type type) {
+      return new Ref(this, type);
+    }
+
+    static Ref createRefForTesting(Type type) {
+      return new Ref(type);
+    }
+  }
+}
+
+
+RELATED API DECLARATIONS (bodies omitted): Compiler.java
+package com.google.javascript.jscomp;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Supplier;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.javascript.jscomp.CompilerOptions.DevMode;
+import com.google.javascript.jscomp.CompilerOptions.TracerMode;
+import com.google.javascript.jscomp.deps.SortedDependencies.CircularDependencyException;
+import com.google.javascript.jscomp.deps.SortedDependencies.MissingProvideException;
+import com.google.javascript.jscomp.mozilla.rhino.ErrorReporter;
+import com.google.javascript.jscomp.parsing.Config;
+import com.google.javascript.jscomp.parsing.ParserRunner;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.jstype.JSTypeRegistry;
+import java.io.IOException;
+import java.io.PrintStream;
+import java.io.Serializable;
+import java.nio.charset.Charset;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+public class Compiler extends AbstractCompiler {
+  public PerformanceTracker tracker;
+  public static final DiagnosticType OPTIMIZE_LOOP_ERROR = DiagnosticType.error(
+  public static final DiagnosticType MOTION_ITERATIONS_ERROR =
+  public Compiler() {
+  public Compiler(PrintStream stream) {
+  public Compiler(ErrorManager errorManager) {
+  public void setErrorManager(ErrorManager errorManager) {
+  public void initOptions(CompilerOptions options) {
+  public void init(JSSourceFile[] externs, JSSourceFile[] inputs,
+  public void init(List<JSSourceFile> externs, List<JSSourceFile> inputs,
+  public void init(JSSourceFile[] externs, JSModule[] modules,
+  public void initModules(
+  public void rebuildInputsFromModules() {
+  public Result compile(
+  public Result compile(
+  public Result compile(
+  public Result compile(JSSourceFile[] externs,
+  public Result compile(List<JSSourceFile> externs,
+  public Result compile(JSSourceFile[] externs,
+  public Result compileModules(List<JSSourceFile> externs,
+      public Result call() throws Exception {
+  public void disableThreads() {
+      public void run() {
+  public void parse() {
+  public void setPassConfig(PassConfig passes) {
+  public void check() {
+    protected CompilerPass createInternal(AbstractCompiler compiler) {
+  public Result getResult() {
+  public JSError[] getMessages() {
+  public JSError[] getErrors() {
+  public JSError[] getWarnings() {
+  public Node getRoot() {
+      public String get() {
+  public CompilerInput getInput(String name) {
+  public CompilerInput newExternInput(String name) {
+  public JSTypeRegistry getTypeRegistry() {
+  public Scope getTopScope() {
+  public ReverseAbstractInterpreter getReverseAbstractInterpreter() {
+  public Node parse(JSSourceFile file) {
+  public String toSource() {
+      public String call() throws Exception {
+  public String[] toSourceArray() {
+      public String[] call() throws Exception {
+  public String toSource(final JSModule module) {
+      public String call() throws Exception {
+  public String[] toSourceArray(final JSModule module) {
+      public String[] call() throws Exception {
+  public void toSource(final CodeBuilder cb,
+      public Void call() throws Exception {
+  public static class CodeBuilder {
+    public String toString() {
+    public int getLength() {
+  public void optimize() {
+  public void processDefines() {
+  public void normalize() {
+  protected final CodeChangeHandler.RecentChange recentChange =
+  public void reportCodeChange() {
+  public CodingConvention getCodingConvention() {
+  public boolean isIdeMode() {
+  public boolean isTypeCheckingEnabled() {
+  protected DiagnosticGroups getDiagnosticGroups() {
+  public void report(JSError error) {
+  public CheckLevel getErrorLevel(JSError error) {
+  public int getErrorCount() {
+  public int getWarningCount() {
+  public boolean hasErrors() {
+  public String getSourceLine(String sourceName, int lineNumber) {
+  public Region getSourceRegion(String sourceName, int lineNumber) {
+  public SourceMap getSourceMap() {
+  public static void setLoggingLevel(Level level) {
+  public String getAstDotGraph() throws IOException {
+  public ErrorManager getErrorManager() {
+  public static class IntermediateState implements Serializable {
+  public IntermediateState getState() {
+  public void setState(IntermediateState state) {
+
+RELATED API DECLARATIONS (bodies omitted): CompilerOptions.java
+package com.google.javascript.jscomp;
+import com.google.common.base.Preconditions;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.common.collect.Multimap;
+import com.google.common.collect.Sets;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import java.io.Serializable;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+public class CompilerOptions implements Serializable, Cloneable {
+  public boolean ideMode;
+  public transient MessageBundle messageBundle = null;
+  public boolean checkSymbols;
+  public CheckLevel checkShadowVars;
+  public CheckLevel aggressiveVarCheck;
+  public CheckLevel checkFunctions;
+  public CheckLevel checkMethods;
+  public boolean checkDuplicateMessages;
+  public boolean allowLegacyJsMessages;
+  public boolean strictMessageReplacement;
+  public boolean checkSuspiciousCode;
+  public boolean checkControlStructures;
+  public CheckLevel checkUndefinedProperties;
+  public boolean checkUnusedPropertiesEarly;
+  public boolean checkTypes;
+  public boolean tightenTypes;
+  public boolean inferTypesInGlobalScope;
+  public boolean checkTypedPropertyCalls;
+  public CheckLevel reportMissingOverride;
+  public CheckLevel reportUnknownTypes;
+  public CheckLevel checkRequires;
+  public CheckLevel checkProvides;
+  public CheckLevel checkGlobalNamesLevel;
+  public CheckLevel brokenClosureRequiresLevel;
+  public CheckLevel checkGlobalThisLevel;
+  public CheckLevel checkMissingGetCssNameLevel;
+  public String checkMissingGetCssNameBlacklist;
+  public boolean checkEs5Strict;
+  public boolean checkCaja;
+  public boolean foldConstants;
+  public boolean deadAssignmentElimination;
+  public boolean inlineConstantVars;
+  public boolean inlineFunctions;
+  public boolean decomposeExpressions;
+  public boolean inlineAnonymousFunctionExpressions;
+  public boolean inlineLocalFunctions;
+  public boolean crossModuleCodeMotion;
+  public boolean coalesceVariableNames;
+  public boolean crossModuleMethodMotion;
+  public boolean inlineGetters;
+  public boolean inlineVariables;
+  public boolean inlineLocalVariables;
+  public boolean flowSensitiveInlineVariables;
+  public boolean smartNameRemoval;
+  public boolean removeDeadCode;
+  public CheckLevel checkUnreachableCode;
+  public CheckLevel checkMissingReturn;
+  public boolean extractPrototypeMemberDeclarations;
+  public boolean removeEmptyFunctions;
+  public boolean removeUnusedPrototypeProperties;
+  public boolean removeUnusedPrototypePropertiesInExterns;
+  public boolean removeUnusedVars;
+  public boolean removeUnusedLocalVars;
+  public boolean aliasExternals;
+  public String aliasableGlobals;
+  public String unaliasableGlobals;
+  public boolean collapseVariableDeclarations;
+  public boolean groupVariableDeclarations;
+  public boolean collapseAnonymousFunctions;
+  public Set<String> aliasableStrings;
+  public String aliasStringsBlacklist;
+  public boolean aliasAllStrings;
+  public boolean convertToDottedProperties;
+  public boolean rewriteFunctionExpressions;
+  public boolean optimizeParameters;
+  public boolean optimizeReturns;
+  public boolean optimizeArgumentsArray;
+  public VariableRenamingPolicy variableRenaming;
+  public PropertyRenamingPolicy propertyRenaming;
+  public boolean labelRenaming;
+  public boolean reserveRawExports;
+  public boolean generatePseudoNames;
+  public String renamePrefix;
+  public boolean aliasKeywords;
+  public boolean collapseProperties;
+  public boolean devirtualizePrototypeMethods;
+  public boolean computeFunctionSideEffects;
+  public String debugFunctionSideEffectsPath;
+  public boolean disambiguateProperties;
+  public boolean ambiguateProperties;
+  public AnonymousFunctionNamingPolicy anonymousFunctionNaming;
+  public byte[] inputVariableMapSerialized;
+  public byte[] inputPropertyMapSerialized;
+  public boolean exportTestFunctions;
+  public boolean specializeInitialModule;
+  public boolean instrumentForCoverage;
+  public boolean instrumentForCoverageOnly;
+  public boolean ignoreCajaProperties;
+  public String syntheticBlockStartMarker;
+  public String syntheticBlockEndMarker;
+  public String locale;
+  public boolean markAsCompiled;
+  public boolean removeTryCatchFinally;
+  public boolean closurePass;
+  public boolean gatherCssNames;
+  public Set<String> stripTypes;
+  public Set<String> stripNameSuffixes;
+  public Set<String> stripNamePrefixes;
+  public Set<String> stripTypePrefixes;
+  public transient
+  public boolean markNoSideEffectCalls;
+  public boolean moveFunctionDeclarations;
+  public String instrumentationTemplate;
+  public String appNameStr;
+  public boolean recordFunctionInformation;
+  public boolean generateExports;
+  public CssRenamingMap cssRenamingMap;
+  public boolean prettyPrint;
+  public boolean lineBreak;
+  public boolean printInputDelimiter;
+  public String inputDelimiter = "// Input %num%";
+  public String reportPath;
+  public TracerMode tra
+
+RELATED API DECLARATIONS (bodies omitted): CompilationLevel.java
+package com.google.javascript.jscomp;
+public enum CompilationLevel {
+  public void setOptionsForCompilationLevel(CompilerOptions options) {
+  public void setDebugOptionsForCompilationLevel(CompilerOptions options) {
+
+RELATED API DECLARATIONS (bodies omitted): SourceFile.java
+package com.google.javascript.jscomp;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Charsets;
+import com.google.common.io.CharStreams;
+import com.google.common.io.Files;
+import java.io.File;
+import java.io.FileReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.Reader;
+import java.io.StringReader;
+import java.nio.charset.Charset;
+public abstract class SourceFile {
+  public interface Generator {
+    public String getCode();
+  SourceFile(String fileName) {
+  public String getCode() throws IOException {
+  public Reader getCodeReader() throws IOException {
+  public String getOriginalPath() {
+  public void setOriginalPath(String originalPath) {
+  public void clearCachedSource() {
+  public String getName() {
+  public String getLine(int lineNumber) {
+  public Region getRegion(int lineNumber) {
+  public String toString() {
+  public static SourceFile fromFile(String fileName, Charset c) {
+  public static SourceFile fromFile(String fileName) {
+  public static SourceFile fromFile(File file, Charset c) {
+  public static SourceFile fromFile(File file) {
+  public static SourceFile fromCode(String fileName, String code) {
+  public static SourceFile fromCode(String fileName,
+  public static SourceFile fromInputStream(String fileName, InputStream s)
+  public static SourceFile fromInputStream(String fileName,
+  public static SourceFile fromReader(String fileName, Reader r)
+  public static SourceFile fromGenerator(String fileName,
+    Preloaded(String fileName, String code) {
+    Preloaded(String fileName, String originalPath, String code) {
+    Generated(String fileName, Generator generator) {
+    public synchronized String getCode() throws IOException {
+    public void clearCachedSource() {
+    protected String inputCharset = Charsets.UTF_8.name();
+    OnDisk(File file, Charset c) {
+    OnDisk(File file) {
+    public synchronized String getCode() throws IOException {
+    public Reader getCodeReader() throws IOException {
+    public void clearCachedSource() {
+    public void setCharset(Charset c) {
+    public Charset getCharset() {
+
+RELATED API DECLARATIONS (bodies omitted): JSSourceFile.java
+package com.google.javascript.jscomp;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Charsets;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.Charset;
+public class JSSourceFile extends SourceFile {
+  public static JSSourceFile fromFile(String fileName, Charset charSet) {
+  public static JSSourceFile fromFile(String fileName) {
+  public static JSSourceFile fromFile(File file, Charset charSet) {
+  public static JSSourceFile fromFile(File file) {
+  public static JSSourceFile fromCode(String fileName, String code) {
+  public static JSSourceFile fromInputStream(String fileName, InputStream s)
+  public static JSSourceFile fromGenerator(String fileName,
+  public String getCode() throws IOException {
+  public void clearCachedSource() {
+
+RELATED API DECLARATIONS (bodies omitted): Result.java
+package com.google.javascript.jscomp;
+import java.util.Map;
+public class Result {
+  public final boolean success;
+  public final JSError[] errors;
+  public final JSError[] warnings;
+  public final String debugLog;
+  public final VariableMap variableMap;
+  public final VariableMap propertyMap;
+  public final VariableMap namedAnonFunctionMap;
+  public final VariableMap stringMap;
+  public final FunctionInformationMap functionInformationMap;
+  public final SourceMap sourceMap;
+  public final Map<String, Integer> cssNames;
+  public final String externExport;
+  public final String idGeneratorMap;
+  Result(JSError[] errors, JSError[] warnings, String debugLog,
+  public Result(JSError[] errors, JSError[] warnings, String debugLog,

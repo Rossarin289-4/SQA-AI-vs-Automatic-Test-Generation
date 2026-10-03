@@ -1,0 +1,586 @@
+You are a Java unit test engineer. Generate ONE complete JUnit 4 test file
+for the production class and source context supplied.
+
+Requirements:
+- Use the exact requested package and public test class name.
+- Use JUnit 4 and Java 7 syntax. Do not use JUnit 5, Mockito, or new dependencies.
+- Write at most 3 concise test methods. Focus on useful observable behavior,
+  boundaries, and relevant branches. Avoid repetitive tests and unnecessary helpers.
+- Use only APIs shown in the supplied source context.
+- Tests must compile and pass on the supplied fixed version.
+- When supported by the available evidence, make a test fail on the buggy
+  version and pass on the fixed version. Do not invent bug behavior.
+- Do not copy or modify production code. Do not use @Ignore or weaken assertions.
+- Return the entire Java file only. No prose, no Markdown fences, and no
+  ellipses or omitted sections.
+
+Production class: com.google.javascript.jscomp.UnreachableCodeElimination
+Required test class: com.google.javascript.jscomp.UnreachableCodeEliminationAI85Test
+
+TARGET SOURCE: com.google.javascript.jscomp.UnreachableCodeElimination
+/*
+ * Copyright 2008 The Closure Compiler Authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package com.google.javascript.jscomp;
+
+import com.google.common.base.Preconditions;
+import com.google.javascript.jscomp.ControlFlowGraph.Branch;
+import com.google.javascript.jscomp.NodeTraversal.AbstractPostOrderCallback;
+import com.google.javascript.jscomp.NodeTraversal.ScopedCallback;
+import com.google.javascript.jscomp.graph.GraphReachability;
+import com.google.javascript.jscomp.graph.DiGraph.DiGraphEdge;
+import com.google.javascript.jscomp.graph.DiGraph.DiGraphNode;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+
+import java.util.Deque;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+/**
+ * Removes dead code from a parse tree. The kinds of dead code that this pass
+ * removes are:
+ *  - Any code following a return statement, such as the <code>alert</code>
+ *    call in: <code>if (x) { return; alert('unreachable'); }</code>.
+ *  - Statements that have no side effects, such as:
+ *    <code>a.b.MyClass.prototype.propertyName;</code> or <code>true;</code>.
+ *    That first kind of statement sometimes appears intentionally, so that
+ *    prototype properties can be annotated using JSDoc without actually
+ *    being initialized.
+ *
+ */
+class UnreachableCodeElimination extends AbstractPostOrderCallback
+    implements CompilerPass, ScopedCallback  {
+  private static final Logger logger =
+    Logger.getLogger(UnreachableCodeElimination.class.getName());
+
+  private final AbstractCompiler compiler;
+  private final boolean removeNoOpStatements;
+
+  Deque<ControlFlowGraph<Node>> cfgStack =
+      new LinkedList<ControlFlowGraph<Node>>();
+
+  ControlFlowGraph<Node> curCfg = null;
+
+  UnreachableCodeElimination(AbstractCompiler compiler,
+      boolean removeNoOpStatements) {
+    this.compiler = compiler;
+    this.removeNoOpStatements = removeNoOpStatements;
+  }
+
+  @Override
+  public void enterScope(NodeTraversal t) {
+    Scope scope = t.getScope();
+
+    // Computes the control flow graph.
+    ControlFlowAnalysis cfa = new ControlFlowAnalysis(compiler, false, false);
+    cfa.process(null, scope.getRootNode());
+    cfgStack.push(curCfg);
+    curCfg = cfa.getCfg();
+
+    new GraphReachability<Node, ControlFlowGraph.Branch>(curCfg)
+        .compute(curCfg.getEntry().getValue());
+  }
+
+  @Override
+  public void exitScope(NodeTraversal t) {
+    curCfg = cfgStack.pop();
+  }
+
+  @Override
+  public void process(Node externs, Node root) {
+    NodeTraversal.traverse(compiler, root, this);
+  }
+
+  @Override
+  public void visit(NodeTraversal t, Node n, Node parent) {
+    if (parent == null) {
+      return;
+    }
+    if (n.getType() == Token.FUNCTION || n.getType() == Token.SCRIPT) {
+      return;
+    }
+
+    DiGraphNode<Node, Branch> gNode = curCfg.getDirectedGraphNode(n);
+    if (gNode == null) { // Not in CFG.
+      return;
+    }
+    if (gNode.getAnnotation() != GraphReachability.REACHABLE ||
+        (removeNoOpStatements && !NodeUtil.mayHaveSideEffects(n))) {
+      removeDeadExprStatementSafely(n);
+      return;
+    }
+
+    tryRemoveUnconditionalBranching(n);
+  }
+
+  /**
+   * Tries to remove n if an unconditional branch node (break, continue or
+   * return) if the target of n is the same as the the follow of n. That is, if
+   * we remove n, the control flow remains the same. Also if n targets to
+   * another unconditional branch, this function will recursively try to remove
+   * the target branch as well. The reason why we want to cascade this removal
+   * is because we only run this pass once. If we have code such as
+   *
+   * break -> break -> break
+   *
+   * where all 3 break's are useless. The order of removal matters. When we
+   * first look at the first break, we see that it branches to the 2nd break.
+   * However, if we remove the last break, the 2nd break becomes useless and
+   * finally the first break becomes useless as well.
+   *
+   * @return The target of this jump. If the target is also useless jump,
+   *     the target of that useless jump recursively.
+   */
+  @SuppressWarnings("fallthrough")
+  private Node tryRemoveUnconditionalBranching(Node n) {
+    /*
+     * For each of the unconditional branching control flow node, check to see
+     * if the ControlFlowAnalysis.computeFollowNode of that node is same as
+     * the branching target. If it is, the branch node is safe to be removed.
+     *
+     * This is not as clever as MinimizeExitPoints because it doesn't do any
+     * if-else conversion but it handles more complicated switch statements
+     * much nicer.
+     */
+
+    // If n is null the target is the end of the function, nothing to do.
+    if (n == null) {
+       return n;
+    }
+
+    DiGraphNode<Node, Branch> gNode = curCfg.getDirectedGraphNode(n);
+
+    if (gNode == null) {
+      return n;
+    }
+
+    switch (n.getType()) {
+      case Token.RETURN:
+        if (n.hasChildren()) {
+          break;
+        }
+      case Token.BREAK:
+      case Token.CONTINUE:
+
+        // We are looking for a control flow changing statement that always
+        // branches to the same node. If removing it the control flow still
+        // branches to that same node. It is safe to remove it.
+        List<DiGraphEdge<Node,Branch>> outEdges = gNode.getOutEdges();
+        if (outEdges.size() == 1 &&
+            // If there is a next node, there is no chance this jump is useless.
+            (n.getNext() == null || n.getNext().getType() == Token.FUNCTION)) {
+
+          Preconditions.checkState(outEdges.get(0).getValue() == Branch.UNCOND);
+          Node fallThrough = computeFollowing(n);
+          Node nextCfgNode = outEdges.get(0).getDestination().getValue();
+          if (nextCfgNode == fallThrough) {
+            removeDeadExprStatementSafely(n);
+            return fallThrough;
+          }
+        }
+    }
+    return n;
+  }
+
+  private Node computeFollowing(Node n) {
+    Node next = ControlFlowAnalysis.computeFollowNode(n);
+    while (next != null && next.getType() == Token.BLOCK) {
+      if (next.hasChildren()) {
+        next = next.getFirstChild();
+      } else {
+        next = computeFollowing(next);
+      }
+    }
+    return next;
+  }
+
+  private void removeDeadExprStatementSafely(Node n) {
+    Node parent = n.getParent();
+    if (n.getType() == Token.EMPTY ||
+        (n.getType() == Token.BLOCK && !n.hasChildren())) {
+      // Not always trivial to remove, let FoldContants work its magic later.
+      return;
+    }
+
+    switch (n.getType()) {
+      // Removing an unreachable DO node is messy because it means we still have
+      // to execute one iteration. If the DO's body has breaks in the middle, it
+      // can get even more trickier and code size might actually increase.
+      case Token.DO:
+        return;
+
+      case Token.BLOCK:
+        // BLOCKs are used in several ways including wrapping CATCH blocks in TRYs
+        if (parent.getType() == Token.TRY) {
+          if (NodeUtil.isTryCatchNodeContainer(n)) {
+            return;
+          }
+        }
+        break;
+
+      case Token.CATCH:
+        Node tryNode = parent.getParent();
+        NodeUtil.maybeAddFinally(tryNode);
+        break;
+    }
+
+    NodeUtil.redeclareVarsInsideBranch(n);
+    compiler.reportCodeChange();
+    if (logger.isLoggable(Level.FINE)) {
+      logger.fine("Removing " + n.toString());
+    }
+    NodeUtil.removeChild(n.getParent(), n);
+  }
+}
+
+
+RELATED API DECLARATIONS (bodies omitted): Compiler.java
+package com.google.javascript.jscomp;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Supplier;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.javascript.jscomp.CompilerOptions.DevMode;
+import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
+import com.google.javascript.jscomp.CompilerOptions.TracerMode;
+import com.google.javascript.jscomp.deps.SortedDependencies.CircularDependencyException;
+import com.google.javascript.jscomp.deps.SortedDependencies.MissingProvideException;
+import com.google.javascript.jscomp.mozilla.rhino.ErrorReporter;
+import com.google.javascript.jscomp.parsing.Config;
+import com.google.javascript.jscomp.parsing.ParserRunner;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.jstype.JSTypeRegistry;
+import java.io.IOException;
+import java.io.PrintStream;
+import java.io.Serializable;
+import java.nio.charset.Charset;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+public class Compiler extends AbstractCompiler {
+  public PerformanceTracker tracker;
+  public static final DiagnosticType OPTIMIZE_LOOP_ERROR = DiagnosticType.error(
+  public static final DiagnosticType MOTION_ITERATIONS_ERROR =
+  public Compiler() {
+  public Compiler(PrintStream stream) {
+  public Compiler(ErrorManager errorManager) {
+  public void setErrorManager(ErrorManager errorManager) {
+  public void initOptions(CompilerOptions options) {
+  public void init(JSSourceFile[] externs, JSSourceFile[] inputs,
+  public void init(List<JSSourceFile> externs, List<JSSourceFile> inputs,
+  public void init(JSSourceFile[] externs, JSModule[] modules,
+  public void initModules(
+  public void rebuildInputsFromModules() {
+  public Result compile(
+  public Result compile(
+  public Result compile(
+  public Result compile(JSSourceFile[] externs,
+  public Result compile(List<JSSourceFile> externs,
+  public Result compile(JSSourceFile[] externs,
+  public Result compileModules(List<JSSourceFile> externs,
+      public Result call() throws Exception {
+  public void disableThreads() {
+      public void run() {
+  public void parse() {
+  public void setPassConfig(PassConfig passes) {
+  public void check() {
+    protected CompilerPass createInternal(AbstractCompiler compiler) {
+  public Result getResult() {
+  public JSError[] getMessages() {
+  public JSError[] getErrors() {
+  public JSError[] getWarnings() {
+  public Node getRoot() {
+      public String get() {
+  public CompilerInput getInput(String name) {
+  public CompilerInput newExternInput(String name) {
+  public JSTypeRegistry getTypeRegistry() {
+  public Scope getTopScope() {
+  public ReverseAbstractInterpreter getReverseAbstractInterpreter() {
+  public Node parse(JSSourceFile file) {
+  public String toSource() {
+      public String call() throws Exception {
+  public String[] toSourceArray() {
+      public String[] call() throws Exception {
+  public String toSource(final JSModule module) {
+      public String call() throws Exception {
+  public String[] toSourceArray(final JSModule module) {
+      public String[] call() throws Exception {
+  public void toSource(final CodeBuilder cb,
+      public Void call() throws Exception {
+  public static class CodeBuilder {
+    public String toString() {
+    public int getLength() {
+  public void optimize() {
+  public void processDefines() {
+  public void normalize() {
+  protected final CodeChangeHandler.RecentChange recentChange =
+  public void reportCodeChange() {
+  public CodingConvention getCodingConvention() {
+  public boolean isIdeMode() {
+  public boolean acceptEcmaScript5() {
+  public boolean isTypeCheckingEnabled() {
+  protected DiagnosticGroups getDiagnosticGroups() {
+  public void report(JSError error) {
+  public CheckLevel getErrorLevel(JSError error) {
+  public int getErrorCount() {
+  public int getWarningCount() {
+  public boolean hasErrors() {
+  public String getSourceLine(String sourceName, int lineNumber) {
+  public Region getSourceRegion(String sourceName, int lineNumber) {
+  public SourceMap getSourceMap() {
+  public static void setLoggingLevel(Level level) {
+  public String getAstDotGraph() throws IOException {
+  public ErrorManager getErrorManager() {
+  public static class IntermediateState implements Serializable {
+  public IntermediateState getState() {
+  public void setState(IntermediateState state) {
+
+RELATED API DECLARATIONS (bodies omitted): CompilerOptions.java
+package com.google.javascript.jscomp;
+import com.google.common.base.Preconditions;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.common.collect.Multimap;
+import com.google.common.collect.Sets;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import java.io.Serializable;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+public class CompilerOptions implements Serializable, Cloneable {
+  public boolean ideMode;
+  public transient MessageBundle messageBundle = null;
+  public boolean checkSymbols;
+  public CheckLevel checkShadowVars;
+  public CheckLevel aggressiveVarCheck;
+  public CheckLevel checkFunctions;
+  public CheckLevel checkMethods;
+  public boolean checkDuplicateMessages;
+  public boolean allowLegacyJsMessages;
+  public boolean strictMessageReplacement;
+  public boolean checkSuspiciousCode;
+  public boolean checkControlStructures;
+  public CheckLevel checkUndefinedProperties;
+  public boolean checkUnusedPropertiesEarly;
+  public boolean checkTypes;
+  public boolean tightenTypes;
+  public boolean inferTypesInGlobalScope;
+  public boolean checkTypedPropertyCalls;
+  public CheckLevel reportMissingOverride;
+  public CheckLevel reportUnknownTypes;
+  public CheckLevel checkRequires;
+  public CheckLevel checkProvides;
+  public CheckLevel checkGlobalNamesLevel;
+  public CheckLevel brokenClosureRequiresLevel;
+  public CheckLevel checkGlobalThisLevel;
+  public CheckLevel checkMissingGetCssNameLevel;
+  public String checkMissingGetCssNameBlacklist;
+  public boolean checkEs5Strict;
+  public boolean checkCaja;
+  public boolean foldConstants;
+  public boolean deadAssignmentElimination;
+  public boolean inlineConstantVars;
+  public boolean inlineFunctions;
+  public boolean decomposeExpressions;
+  public boolean inlineAnonymousFunctionExpressions;
+  public boolean inlineLocalFunctions;
+  public boolean crossModuleCodeMotion;
+  public boolean coalesceVariableNames;
+  public boolean crossModuleMethodMotion;
+  public boolean inlineGetters;
+  public boolean inlineVariables;
+  public boolean inlineLocalVariables;
+  public boolean flowSensitiveInlineVariables;
+  public boolean smartNameRemoval;
+  public boolean removeDeadCode;
+  public CheckLevel checkUnreachableCode;
+  public CheckLevel checkMissingReturn;
+  public boolean extractPrototypeMemberDeclarations;
+  public boolean removeEmptyFunctions;
+  public boolean removeUnusedPrototypeProperties;
+  public boolean removeUnusedPrototypePropertiesInExterns;
+  public boolean removeUnusedVars;
+  public boolean removeUnusedLocalVars;
+  public boolean aliasExternals;
+  public String aliasableGlobals;
+  public String unaliasableGlobals;
+  public boolean collapseVariableDeclarations;
+  public boolean groupVariableDeclarations;
+  public boolean collapseAnonymousFunctions;
+  public Set<String> aliasableStrings;
+  public String aliasStringsBlacklist;
+  public boolean aliasAllStrings;
+  public boolean convertToDottedProperties;
+  public boolean rewriteFunctionExpressions;
+  public boolean optimizeParameters;
+  public boolean optimizeReturns;
+  public boolean optimizeCalls;
+  public boolean optimizeArgumentsArray;
+  public VariableRenamingPolicy variableRenaming;
+  public PropertyRenamingPolicy propertyRenaming;
+  public boolean labelRenaming;
+  public boolean reserveRawExports;
+  public boolean generatePseudoNames;
+  public String renamePrefix;
+  public boolean aliasKeywords;
+  public boolean collapseProperties;
+  public boolean devirtualizePrototypeMethods;
+  public boolean computeFunctionSideEffects;
+  public String debugFunctionSideEffectsPath;
+  public boolean disambiguateProperties;
+  public boolean ambiguateProperties;
+  public AnonymousFunctionNamingPolicy anonymousFunctionNaming;
+  public byte[] inputVariableMapSerialized;
+  public byte[] inputPropertyMapSerialized;
+  public boolean exportTestFunctions;
+  public boolean specializeInitialModule;
+  public boolean instrumentForCoverage;
+  public boolean instrumentForCoverageOnly;
+  public boolean ignoreCajaProperties;
+  public String syntheticBlockStartMarker;
+  public String syntheticBlockEndMarker;
+  public String locale;
+  public boolean markAsCompiled;
+  public boolean removeTryCatchFinally;
+  public boolean closurePass;
+  public boolean gatherCssNames;
+  public Set<String> stripTypes;
+  public Set<String> stripNameSuffixes;
+  public Set<String> stripNamePrefixes;
+  public Set<String> stripTypePrefixes;
+  public transient
+  public boolean markNoSideEffectCalls;
+  public boolean moveFunctionDeclarations;
+  public String instrumentationTemplate;
+  public String appNameStr;
+  public boolean recordFunctionInformation;
+  public boolean generateExports;
+  public CssRenamingMap cssRenamingMap;
+  public boolean prettyPrint;
+  public boolean lineBreak;
+  public boolean printInputDelimiter;
+  public String inputDelimiter = "// Input %num%";
+  public String rep
+
+RELATED API DECLARATIONS (bodies omitted): CompilationLevel.java
+package com.google.javascript.jscomp;
+public enum CompilationLevel {
+  public void setOptionsForCompilationLevel(CompilerOptions options) {
+  public void setDebugOptionsForCompilationLevel(CompilerOptions options) {
+
+RELATED API DECLARATIONS (bodies omitted): SourceFile.java
+package com.google.javascript.jscomp;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Charsets;
+import com.google.common.io.CharStreams;
+import com.google.common.io.Files;
+import java.io.File;
+import java.io.FileReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.Reader;
+import java.io.StringReader;
+import java.nio.charset.Charset;
+public abstract class SourceFile {
+  public interface Generator {
+    public String getCode();
+  SourceFile(String fileName) {
+  public String getCode() throws IOException {
+  public Reader getCodeReader() throws IOException {
+  public String getOriginalPath() {
+  public void setOriginalPath(String originalPath) {
+  public void clearCachedSource() {
+  public String getName() {
+  public String getLine(int lineNumber) {
+  public Region getRegion(int lineNumber) {
+  public String toString() {
+  public static SourceFile fromFile(String fileName, Charset c) {
+  public static SourceFile fromFile(String fileName) {
+  public static SourceFile fromFile(File file, Charset c) {
+  public static SourceFile fromFile(File file) {
+  public static SourceFile fromCode(String fileName, String code) {
+  public static SourceFile fromCode(String fileName,
+  public static SourceFile fromInputStream(String fileName, InputStream s)
+  public static SourceFile fromInputStream(String fileName,
+  public static SourceFile fromReader(String fileName, Reader r)
+  public static SourceFile fromGenerator(String fileName,
+    Preloaded(String fileName, String code) {
+    Preloaded(String fileName, String originalPath, String code) {
+    Generated(String fileName, Generator generator) {
+    public synchronized String getCode() throws IOException {
+    public void clearCachedSource() {
+    protected String inputCharset = Charsets.UTF_8.name();
+    OnDisk(File file, Charset c) {
+    OnDisk(File file) {
+    public synchronized String getCode() throws IOException {
+    public Reader getCodeReader() throws IOException {
+    public void clearCachedSource() {
+    public void setCharset(Charset c) {
+    public Charset getCharset() {
+
+RELATED API DECLARATIONS (bodies omitted): JSSourceFile.java
+package com.google.javascript.jscomp;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Charsets;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.Charset;
+public class JSSourceFile extends SourceFile {
+  public static JSSourceFile fromFile(String fileName, Charset charSet) {
+  public static JSSourceFile fromFile(String fileName) {
+  public static JSSourceFile fromFile(File file, Charset charSet) {
+  public static JSSourceFile fromFile(File file) {
+  public static JSSourceFile fromCode(String fileName, String code) {
+  public static JSSourceFile fromInputStream(String fileName, InputStream s)
+  public static JSSourceFile fromGenerator(String fileName,
+  public String getCode() throws IOException {
+  public void clearCachedSource() {
+
+RELATED API DECLARATIONS (bodies omitted): Result.java
+package com.google.javascript.jscomp;
+import java.util.Map;
+public class Result {
+  public final boolean success;
+  public final JSError[] errors;
+  public final JSError[] warnings;
+  public final String debugLog;
+  public final VariableMap variableMap;
+  public final VariableMap propertyMap;
+  public final VariableMap namedAnonFunctionMap;
+  public final VariableMap stringMap;
+  public final FunctionInformationMap functionInformationMap;
+  public final SourceMap sourceMap;
+  public final Map<String, Integer> cssNames;
+  public final String externExport;
+  public final String idGeneratorMap;
+  Result(JSError[] errors, JSError[] warnings, String debugLog,
+  public Result(JSError[] errors, JSError[] warnings, String debugLog,

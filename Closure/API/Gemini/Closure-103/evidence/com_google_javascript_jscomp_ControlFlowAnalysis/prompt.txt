@@ -1,0 +1,713 @@
+You are a Java unit test engineer. Generate ONE complete JUnit 4 test file
+for the production class and source context supplied.
+
+Requirements:
+- Use the exact requested package and public test class name.
+- Use JUnit 4 and Java 7 syntax. Do not use JUnit 5, Mockito, or new dependencies.
+- Write at most 3 concise test methods. Focus on useful observable behavior,
+  boundaries, and relevant branches. Avoid repetitive tests and unnecessary helpers.
+- Use only APIs shown in the supplied source context.
+- Tests must compile and pass on the supplied fixed version.
+- When supported by the available evidence, make a test fail on the buggy
+  version and pass on the fixed version. Do not invent bug behavior.
+- Do not copy or modify production code. Do not use @Ignore or weaken assertions.
+- Return the entire Java file only. No prose, no Markdown fences, and no
+  ellipses or omitted sections.
+
+Production class: com.google.javascript.jscomp.ControlFlowAnalysis
+Required test class: com.google.javascript.jscomp.ControlFlowAnalysisAI103Test
+
+TARGET SOURCE: com.google.javascript.jscomp.ControlFlowAnalysis
+/*
+ * Copyright 2008 Google Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package com.google.javascript.jscomp;
+
+import com.google.common.base.Preconditions;
+import com.google.common.collect.HashMultimap;
+import com.google.common.collect.Maps;
+import com.google.common.collect.Multimap;
+import com.google.javascript.jscomp.ControlFlowGraph.Branch;
+import com.google.javascript.jscomp.NodeTraversal.Callback;
+import com.google.javascript.jscomp.graph.DiGraph.DiGraphNode;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+
+import java.util.ArrayDeque;
+import java.util.Comparator;
+import java.util.Deque;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.PriorityQueue;
+
+/**
+ * This is a compiler pass that computes a control flow graph.
+ *
+*
+ */
+final class ControlFlowAnalysis implements Callback, CompilerPass {
+
+  /**
+   * Based roughly on the first few pages of
+   *
+   * "Declarative Intraprocedural Flow Analysis of Java Source Code by
+   * Nilsson-Nyman, Hedin, Magnusson & Ekman",
+   *
+   * this pass computes the control flow graph from the AST. However, a full
+   * attribute grammar is not necessary. We will compute the flow edges with a
+   * single post order traversal. The "follow()" of a given node will be
+   * computed recursively in a demand driven fashion.
+   *
+   * As of this moment, we are not performing any inter-procedural analysis
+   * within our framework.
+   */
+
+  private final AbstractCompiler compiler;
+
+  private ControlFlowGraph<Node> cfg;
+
+  private Map<Node, Integer> astPosition;
+
+  // TODO(nicksantos): should these be node annotations?
+  private Map<DiGraphNode<Node, Branch>, Integer> nodePriorities;
+
+  // We order CFG nodes by by looking at the AST positions.
+  // CFG nodes that come first lexically should be visited first, because
+  // they will often be executed first in the source program.
+  private final Comparator<DiGraphNode<Node, Branch>> priorityComparator =
+      new Comparator<DiGraphNode<Node, Branch>>() {
+    @Override
+    public int compare(
+        DiGraphNode<Node, Branch> a, DiGraphNode<Node, Branch> b) {
+      return astPosition.get(a.getValue()) - astPosition.get(b.getValue());
+    }
+  };
+
+  private int astPositionCounter;
+  private int priorityCounter;
+
+  private final boolean shouldTraverseFunctions;
+
+  // We need to store where we started, in case we aren't doing a flow analysis
+  // for the whole scope. This happens, for example, when running type inference
+  // on only the externs.
+  private Node root;
+
+  /*
+   * This stack captures the structure of nested TRY blocks. The top of the
+   * stack is the inner most TRY block. A FUNCTION node in this stack implies
+   * that the handler is determined by the caller of the function at runtime.
+   */
+  private final Deque<Node> exceptionHandler = new ArrayDeque<Node>();
+
+  /*
+   * This map is used to handle the follow of FINALLY. For example:
+   *
+   * while(x) {
+   *  try {
+   *    try {
+   *      break;
+   *    } catch (a) {
+   *    } finally {
+   *      foo();
+   *    }
+   *    fooFollow();
+   *  } catch (b) {
+   *  } finally {
+   *    bar();
+   *  }
+   *  barFollow();
+   * }
+   * END();
+   *
+   * In this case finallyMap will contain a map from:
+   *    first FINALLY -> bar()
+   *    second FINALLY -> END()
+   *
+   * When we are connecting foo() and bar() to to their respective follow, we
+   * must also look up this map and connect:
+   *   foo() -> bar()
+   *   bar() -> END
+   */
+  private final Multimap<Node, Node> finallyMap = HashMultimap.create();
+
+  /**
+   * Constructor.
+   *
+   * @param compiler Compiler instance.
+   * @param shouldTraverseFunctions Whether functions should be traversed (true
+   *    by default).
+   */
+  ControlFlowAnalysis(AbstractCompiler compiler,
+      boolean shouldTraverseFunctions) {
+    this.compiler = compiler;
+    this.shouldTraverseFunctions = shouldTraverseFunctions;
+  }
+
+  ControlFlowGraph<Node> getCfg() {
+    return cfg;
+  }
+
+  @Override
+  public void process(Node externs, Node root) {
+    this.root = root;
+    astPositionCounter = 0;
+    astPosition = Maps.newHashMap();
+    nodePriorities = Maps.newHashMap();
+    cfg = new AstControlFlowGraph(computeFallThrough(root), nodePriorities);
+    NodeTraversal.traverse(compiler, root, this);
+    astPosition.put(null, ++astPositionCounter); // the implicit return is last.
+
+    // Now, generate the priority of nodes by doing a depth-first
+    // search on the CFG.
+    priorityCounter = 0;
+    DiGraphNode<Node, Branch> entry = cfg.getEntry();
+    prioritizeFromEntryNode(entry);
+
+    if (shouldTraverseFunctions) {
+      // If we're traversing inner functions, we need to rank the
+      // priority of them too.
+      for (DiGraphNode<Node, Branch> candidate : cfg.getDirectedGraphNodes()) {
+        Node value = candidate.getValue();
+        if (value != null && value.getType() == Token.FUNCTION) {
+          Preconditions.checkState(
+              !nodePriorities.containsKey(candidate) || candidate == entry);
+          prioritizeFromEntryNode(candidate);
+        }
+      }
+    }
+
+    // At this point, all reachable nodes have been given a priority, but
+    // unreachable nodes have not been given a priority. Put them last.
+    // Presumably, it doesn't really matter what priority they get, since
+    // this shouldn't happen in real code.
+    for (DiGraphNode<Node, Branch> candidate : cfg.getDirectedGraphNodes()) {
+      if (!nodePriorities.containsKey(ca
+/* SOURCE MIDDLE OMITTED: context limit */
+cfg.createNode(toNode);
+    cfg.connectIfNotFound(fromNode, branch, toNode);
+  }
+
+  /**
+   * Connects cfgNode to the proper CATCH block if target subtree might throw
+   * an exception. If there are FINALLY blocks reached before a CATCH, it will
+   * make the corresponding entry in finallyMap.
+   */
+  private void connectToPossibleExceptionHandler(Node cfgNode, Node target) {
+    if (mayThrowException(target) && !exceptionHandler.isEmpty()) {
+      Node lastJump = cfgNode;
+      for (Node handler : exceptionHandler) {
+        if (NodeUtil.isFunction(handler)) {
+          return;
+        }
+        Preconditions.checkState(handler.getType() == Token.TRY);
+        Node catchBlock = NodeUtil.getCatchBlock(handler);
+
+        if (!NodeUtil.hasCatchHandler(catchBlock)) { // No catch but a FINALLY.
+          if (lastJump == cfgNode) {
+            createEdge(cfgNode, Branch.ON_EX, handler.getLastChild());
+          } else {
+            finallyMap.put(lastJump, handler.getLastChild());
+          }
+        } else { // Has a catch.
+          if (lastJump == cfgNode) {
+            createEdge(cfgNode, Branch.ON_EX, catchBlock);
+            return;
+          } else {
+            finallyMap.put(lastJump, catchBlock);
+          }
+        }
+        lastJump = handler;
+      }
+    }
+  }
+
+  /**
+   * Get the next sibling (including itself) of one of the given types.
+   */
+  private static Node getNextSiblingOfType(Node first, int ... types) {
+    for (Node c = first; c != null; c = c.getNext()) {
+      for (int type : types) {
+        if (c.getType() == type) {
+          return c;
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Checks if target is actually the break target of labeled continue. The
+   * label can be null if it is an unlabeled break.
+   */
+  private static boolean isBreakTarget(
+      Node target, Node parent, String label) {
+    return isBreakStructure(target, label != null) && matchLabel(parent, label);
+  }
+
+  /**
+   * Checks if target is actually the continue target of labeled continue. The
+   * label can be null if it is an unlabeled continue.
+   */
+  private static boolean isContinueTarget(
+      Node target, Node parent, String label) {
+    return isContinueStructure(target) && matchLabel(parent, label);
+  }
+  /**
+   * Check if label is actually referencing the target control structure. If
+   * label is null, it always returns true.
+   */
+  private static boolean matchLabel(Node target, String label) {
+    if (label == null) {
+      return true;
+    }
+    while (target.getType() == Token.LABEL) {
+      if (target.getFirstChild().getString().equals(label)) {
+        return true;
+      }
+      target = target.getParent();
+    }
+    return false;
+  }
+
+  /**
+   * Determines if the subtree might throw an exception.
+   */
+  private static boolean mayThrowException(Node n) {
+    switch (n.getType()) {
+      case Token.CALL:
+      case Token.GETPROP:
+      case Token.GETELEM:
+      case Token.THROW:
+      case Token.NEW:
+      case Token.ASSIGN:
+      case Token.INC:
+      case Token.DEC:
+      case Token.INSTANCEOF:
+        return true;
+      case Token.FUNCTION:
+        return false;
+    }
+    for (Node c = n.getFirstChild(); c != null; c = c.getNext()) {
+      if (!ControlFlowGraph.isEnteringNewCfgNode(c) && mayThrowException(c)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Determines whether the given node can be terminated with a BREAK node.
+   */
+  static boolean isBreakStructure(Node n, boolean labeled) {
+    switch (n.getType()) {
+      case Token.FOR:
+      case Token.DO:
+      case Token.WHILE:
+      case Token.SWITCH:
+        return true;
+      case Token.BLOCK:
+      case Token.IF:
+      case Token.TRY:
+        return labeled;
+      default:
+        return false;
+    }
+  }
+
+  /**
+   * Determines whether the given node can be advanced with a CONTINUE node.
+   */
+  static boolean isContinueStructure(Node n) {
+    switch (n.getType()) {
+      case Token.FOR:
+      case Token.DO:
+      case Token.WHILE:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  /**
+   * A {@link ControlFlowGraph} which provides a node comparator based on the
+   * pre-order traversal of the AST.
+   */
+  private static class AstControlFlowGraph extends ControlFlowGraph<Node> {
+    private final Map<DiGraphNode<Node, Branch>, Integer> priorities;
+
+    /**
+     * Constructor.
+     * @param entry The entry node.
+     * @param priorities The map from nodes to position in the AST (to be
+     *    filled by the {@link ControlFlowAnalysis#shouldTraverse}).
+     */
+    private AstControlFlowGraph(Node entry,
+        Map<DiGraphNode<Node, Branch>, Integer> priorities) {
+      super(entry);
+      this.priorities = priorities;
+    }
+
+    @Override
+    /**
+     * Returns a node comparator based on the pre-order traversal of the AST.
+     * @param isForward x 'before' y in the pre-order traversal implies
+     * x 'less than' y (if true) and x 'greater than' y (if false).
+     */
+    public Comparator<DiGraphNode<Node, Branch>> getOptionalNodeComparator(
+        boolean isForward) {
+      if (isForward) {
+        return new Comparator<DiGraphNode<Node, Branch>>() {
+          @Override
+          public int compare(
+              DiGraphNode<Node, Branch> n1, DiGraphNode<Node, Branch> n2) {
+            return getPosition(n1) - getPosition(n2);
+          }
+        };
+      } else {
+        return new Comparator<DiGraphNode<Node, Branch>>() {
+          @Override
+          public int compare(
+              DiGraphNode<Node, Branch> n1, DiGraphNode<Node, Branch> n2) {
+            return getPosition(n2) - getPosition(n1);
+          }
+        };
+      }
+    }
+
+    /**
+     * Gets the pre-order traversal position of the given node.
+     * @return An arbitrary counter used for comparing positions.
+     */
+    private int getPosition(DiGraphNode<Node, Branch> n) {
+      Integer priority = priorities.get(n);
+      Preconditions.checkNotNull(priority);
+      return priority;
+    }
+  }
+}
+
+
+RELATED API DECLARATIONS (bodies omitted): Compiler.java
+package com.google.javascript.jscomp;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Supplier;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.javascript.jscomp.CompilerOptions.DevMode;
+import com.google.javascript.jscomp.CompilerOptions.TracerMode;
+import com.google.javascript.jscomp.mozilla.rhino.ErrorReporter;
+import com.google.javascript.jscomp.parsing.Config;
+import com.google.javascript.jscomp.parsing.ParserRunner;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.jstype.JSTypeRegistry;
+import java.io.IOException;
+import java.io.PrintStream;
+import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+public class Compiler extends AbstractCompiler {
+  public PerformanceTracker tracker;
+  public static final DiagnosticType OPTIMIZE_LOOP_ERROR = DiagnosticType.error(
+  public static final DiagnosticType MOTION_ITERATIONS_ERROR =
+  public Compiler() {
+  public Compiler(PrintStream stream) {
+  public Compiler(ErrorManager errorManager) {
+  public void setErrorManager(ErrorManager errorManager) {
+  public void init(JSSourceFile[] externs, JSSourceFile[] inputs,
+  public void init(JSSourceFile[] externs, JSModule[] modules,
+  public void rebuildInputsFromModules() {
+  public Result compile(
+  public Result compile(
+  public Result compile(
+  public Result compile(JSSourceFile[] externs,
+  public Result compile(JSSourceFile[] externs,
+      public Result call() throws Exception {
+  public void disableThreads() {
+      public void run() {
+  public void parse() {
+  public void setPassConfig(PassConfig passes) {
+  public void check() {
+    protected CompilerPass createInternal(AbstractCompiler compiler) {
+  public Result getResult() {
+  public JSError[] getMessages() {
+  public JSError[] getErrors() {
+  public JSError[] getWarnings() {
+  public Node getRoot() {
+      public String get() {
+  public CompilerInput getInput(String name) {
+  public CompilerInput newExternInput(String name) {
+  public JSTypeRegistry getTypeRegistry() {
+  public Scope getTopScope() {
+  public ReverseAbstractInterpreter getReverseAbstractInterpreter() {
+  public Node parse(JSSourceFile file) {
+  public String toSource() {
+      public String call() throws Exception {
+  public String[] toSourceArray() {
+      public String[] call() throws Exception {
+  public String toSource(final JSModule module) {
+      public String call() throws Exception {
+  public String[] toSourceArray(final JSModule module) {
+      public String[] call() throws Exception {
+  public void toSource(final CodeBuilder cb,
+      public Void call() throws Exception {
+  public static class CodeBuilder {
+    public String toString() {
+    public int getLength() {
+  public void optimize() {
+  public void processDefines() {
+  public void normalize() {
+  protected final CodeChangeHandler.RecentChange recentChange =
+  public void reportCodeChange() {
+  public CodingConvention getCodingConvention() {
+  public boolean isIdeMode() {
+  public boolean isTypeCheckingEnabled() {
+  public int getErrorCount() {
+  public int getWarningCount() {
+  public boolean hasErrors() {
+  public String getSourceLine(String sourceName, int lineNumber) {
+  public Region getSourceRegion(String sourceName, int lineNumber) {
+  public SourceMap getSourceMap() {
+  public static void setLoggingLevel(Level level) {
+  public String getAstDotGraph() throws IOException {
+  public ErrorManager getErrorManager() {
+  public static class IntermediateState implements Serializable {
+  public IntermediateState getState() {
+  public void setState(IntermediateState state) {
+
+RELATED API DECLARATIONS (bodies omitted): CompilerOptions.java
+package com.google.javascript.jscomp;
+import com.google.common.base.Preconditions;
+import com.google.common.collect.Maps;
+import com.google.common.collect.Multimap;
+import com.google.common.collect.Sets;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import java.io.Serializable;
+import java.nio.charset.Charset;
+import java.util.Collections;
+import java.util.Map;
+import java.util.Set;
+public class CompilerOptions implements Serializable, Cloneable {
+  public boolean ideMode;
+  public boolean checkSymbols;
+  public CheckLevel checkShadowVars;
+  public CheckLevel aggressiveVarCheck;
+  public CheckLevel checkFunctions;
+  public CheckLevel checkMethods;
+  public boolean checkDuplicateMessages;
+  public boolean allowLegacyJsMessages;
+  public boolean strictMessageReplacement;
+  public boolean checkSuspiciousCode;
+  public boolean checkControlStructures;
+  public CheckLevel checkUndefinedProperties;
+  public boolean checkUnusedPropertiesEarly;
+  public boolean checkTypes;
+  public boolean tightenTypes;
+  public boolean inferTypesInGlobalScope;
+  public boolean checkTypedPropertyCalls;
+  public CheckLevel reportMissingOverride;
+  public CheckLevel reportUnknownTypes;
+  public CheckLevel checkRequires;
+  public CheckLevel checkProvides;
+  public CheckLevel checkGlobalNamesLevel;
+  public CheckLevel brokenClosureRequiresLevel;
+  public CheckLevel checkGlobalThisLevel;
+  public CheckLevel checkMissingGetCssNameLevel;
+  public String checkMissingGetCssNameBlacklist;
+  public boolean checkEs5Strict;
+  public boolean checkCaja;
+  public boolean foldConstants;
+  public boolean removeConstantExpressions;
+  public boolean deadAssignmentElimination;
+  public boolean inlineConstantVars;
+  public boolean inlineFunctions;
+  public boolean decomposeExpressions;
+  public boolean inlineAnonymousFunctionExpressions;
+  public boolean inlineLocalFunctions;
+  public boolean crossModuleCodeMotion;
+  public boolean coalesceVariableNames;
+  public boolean crossModuleMethodMotion;
+  public boolean inlineGetters;
+  public boolean inlineVariables;
+  public boolean inlineLocalVariables;
+  public boolean flowSensitiveInlineVariables;
+  public boolean smartNameRemoval;
+  public boolean removeDeadCode;
+  public CheckLevel checkUnreachableCode;
+  public CheckLevel checkMissingReturn;
+  public boolean extractPrototypeMemberDeclarations;
+  public boolean removeEmptyFunctions;
+  public boolean removeUnusedPrototypeProperties;
+  public boolean removeUnusedPrototypePropertiesInExterns;
+  public boolean removeUnusedVars;
+  public boolean removeUnusedVarsInGlobalScope;
+  public boolean aliasExternals;
+  public String aliasableGlobals;
+  public String unaliasableGlobals;
+  public boolean collapseVariableDeclarations;
+  public boolean collapseAnonymousFunctions;
+  public Set<String> aliasableStrings;
+  public String aliasStringsBlacklist;
+  public boolean aliasAllStrings;
+  public boolean convertToDottedProperties;
+  public boolean rewriteFunctionExpressions;
+  public boolean optimizeParameters;
+  public boolean optimizeArgumentsArray;
+  public VariableRenamingPolicy variableRenaming;
+  public PropertyRenamingPolicy propertyRenaming;
+  public boolean labelRenaming;
+  public boolean reserveRawExports;
+  public boolean generatePseudoNames;
+  public String renamePrefix;
+  public boolean aliasKeywords;
+  public boolean collapseProperties;
+  public boolean devirtualizePrototypeMethods;
+  public boolean computeFunctionSideEffects;
+  public String debugFunctionSideEffectsPath;
+  public boolean disambiguateProperties;
+  public boolean ambiguateProperties;
+  public AnonymousFunctionNamingPolicy anonymousFunctionNaming;
+  public byte[] inputVariableMapSerialized;
+  public byte[] inputPropertyMapSerialized;
+  public boolean exportTestFunctions;
+  public boolean instrumentForCoverage;
+  public boolean instrumentForCoverageOnly;
+  public boolean ignoreCajaProperties;
+  public String syntheticBlockStartMarker;
+  public String syntheticBlockEndMarker;
+  public String locale;
+  public boolean markAsCompiled;
+  public boolean removeTryCatchFinally;
+  public boolean closurePass;
+  public boolean gatherCssNames;
+  public Set<String> stripTypes;
+  public Set<String> stripNameSuffixes;
+  public Set<String> stripNamePrefixes;
+  public Set<String> stripTypePrefixes;
+  public transient
+  public boolean markNoSideEffectCalls;
+  public boolean moveFunctionDeclarations;
+  public String instrumentationTemplate;
+  public String appNameStr;
+  public boolean recordFunctionInformation;
+  public boolean generateExports;
+  public CssRenamingMap cssRenamingMap;
+  public boolean prettyPrint;
+  public boolean lineBreak;
+  public boolean printInputDelimiter;
+  public String inputDelimiter = "// Input %num%";
+  public String reportPath;
+  public TracerMode tracer;
+  public ErrorFormat errorFormat;
+  public String jsOutputFile;
+  public String nameReferenceReportPath;
+  public String nameReferenceGraphPath;
+  public String sourceMapOutputPath;
+  public Chars
+
+RELATED API DECLARATIONS (bodies omitted): CompilationLevel.java
+package com.google.javascript.jscomp;
+public enum CompilationLevel {
+  public void setOptionsForCompilationLevel(CompilerOptions options) {
+  public void setDebugOptionsForCompilationLevel(CompilerOptions options) {
+
+RELATED API DECLARATIONS (bodies omitted): SourceFile.java
+package com.google.javascript.jscomp;
+import com.google.common.base.Charsets;
+import com.google.common.io.Files;
+import com.google.common.io.CharStreams;
+import com.google.common.annotations.VisibleForTesting;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.Reader;
+import java.nio.charset.Charset;
+public abstract class SourceFile {
+  public interface Generator {
+    public String getCode();
+  SourceFile(String fileName) {
+  public String getCode() throws IOException {
+  public void clearCachedSource() {
+  public String getName() {
+  public String getLine(int lineNumber) {
+  public Region getRegion(int lineNumber) {
+  public static SourceFile fromFile(String fileName, Charset c) {
+  public static SourceFile fromFile(String fileName) {
+  public static SourceFile fromFile(File file, Charset c) {
+  public static SourceFile fromFile(File file) {
+  public static SourceFile fromCode(String fileName, String code) {
+  public static SourceFile fromInputStream(String fileName, InputStream s)
+  public static SourceFile fromReader(String fileName, Reader r)
+  public static SourceFile fromGenerator(String fileName,
+    Preloaded(String fileName, String code) {
+    Generated(String fileName, Generator generator) {
+    public synchronized String getCode() throws IOException {
+    public void clearCachedSource() {
+    protected String inputCharset = Charsets.UTF_8.name();
+    OnDisk(File file, Charset c) {
+    OnDisk(File file) {
+    public synchronized String getCode() throws IOException {
+    public void clearCachedSource() {
+    public void setCharset(Charset c) {
+    public Charset getCharset() {
+
+RELATED API DECLARATIONS (bodies omitted): JSSourceFile.java
+package com.google.javascript.jscomp;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Charsets;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.Charset;
+public class JSSourceFile extends SourceFile {
+  public static JSSourceFile fromFile(String fileName, Charset charSet) {
+  public static JSSourceFile fromFile(String fileName) {
+  public static JSSourceFile fromFile(File file, Charset charSet) {
+  public static JSSourceFile fromFile(File file) {
+  public static JSSourceFile fromCode(String fileName, String code) {
+  public static JSSourceFile fromInputStream(String fileName, InputStream s)
+  public static JSSourceFile fromGenerator(String fileName,
+  public String getCode() throws IOException {
+  public void clearCachedSource() {
+
+RELATED API DECLARATIONS (bodies omitted): Result.java
+package com.google.javascript.jscomp;
+import java.util.Map;
+public class Result {
+  public final boolean success;
+  public final JSError[] errors;
+  public final JSError[] warnings;
+  public final String debugLog;
+  public final VariableMap variableMap;
+  public final VariableMap propertyMap;
+  public final VariableMap namedAnonFunctionMap;
+  public final FunctionInformationMap functionInformationMap;
+  public final SourceMap sourceMap;
+  public final Map<String, Integer> cssNames;
+  public final String externExport;
+  Result(JSError[] errors, JSError[] warnings, String debugLog,
+  public Result(JSError[] errors, JSError[] warnings, String debugLog,

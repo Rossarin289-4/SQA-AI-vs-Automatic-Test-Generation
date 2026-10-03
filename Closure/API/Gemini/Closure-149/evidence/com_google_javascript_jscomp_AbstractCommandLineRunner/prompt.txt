@@ -1,0 +1,745 @@
+You are a Java unit test engineer. Generate ONE complete JUnit 4 test file
+for the production class and source context supplied.
+
+Requirements:
+- Use the exact requested package and public test class name.
+- Use JUnit 4 and Java 7 syntax. Do not use JUnit 5, Mockito, or new dependencies.
+- Write at most 3 concise test methods. Focus on useful observable behavior,
+  boundaries, and relevant branches. Avoid repetitive tests and unnecessary helpers.
+- Use only APIs shown in the supplied source context.
+- Tests must compile and pass on the supplied fixed version.
+- When supported by the available evidence, make a test fail on the buggy
+  version and pass on the fixed version. Do not invent bug behavior.
+- Do not copy or modify production code. Do not use @Ignore or weaken assertions.
+- Return the entire Java file only. No prose, no Markdown fences, and no
+  ellipses or omitted sections.
+
+Production class: com.google.javascript.jscomp.AbstractCommandLineRunner
+Required test class: com.google.javascript.jscomp.AbstractCommandLineRunnerAI149Test
+
+TARGET SOURCE: com.google.javascript.jscomp.AbstractCommandLineRunner
+/*
+ * Copyright 2009 Google Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package com.google.javascript.jscomp;
+
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Charsets;
+import com.google.common.base.Joiner;
+import com.google.common.base.Preconditions;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.TokenStream;
+import com.google.protobuf.CodedOutputStream;
+
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.io.PrintStream;
+import java.io.Writer;
+import java.nio.charset.Charset;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.logging.Level;
+
+/**
+ * Implementations of AbstractCommandLineRunner translate flags into Java
+ * API calls on the Compiler. AbstractCompiler contains common flags and logic
+ * to make that happen.
+ *
+ * This class may be extended and used to create other Java classes
+ * that behave the same as running the Compiler from the command line. Example:
+ *
+ * <pre>
+ * class MyCommandLineRunner extends
+ *     AbstractCommandLineRunner<MyCompiler, MyOptions> {
+ *   MyCommandLineRunner(String[] args) {
+ *     super(args);
+ *   }
+ *
+ *   &#064;Override
+ *   protected MyOptions createOptions() {
+ *     MyOptions options = new MyOptions();
+ *     CompilerFlagTranslator.setOptionsFromFlags(options);
+ *     addMyCrazyCompilerPassThatOutputsAnExtraFile(options);
+ *     return options;
+ *   }
+ *
+ *   &#064;Override
+ *   protected MyCompiler createCompiler() {
+ *     return new MyCompiler();
+ *   }
+ *
+ *   public static void main(String[] args) {
+ *     (new MyCommandLineRunner(args)).run();
+ *   }
+ * }
+ * </pre>
+ *
+ * @author bolinfest@google.com (Michael Bolin)
+ */
+abstract class AbstractCommandLineRunner<A extends Compiler,
+    B extends CompilerOptions> {
+
+  private final CommandLineConfig config;
+
+  private Appendable out;
+  private final PrintStream err;
+  private A compiler;
+
+  private static Charset inputCharset;
+
+  // Bookkeeping to measure optimal phase orderings.
+  private static final int NUM_RUNS_TO_DETERMINE_OPTIMAL_ORDER = 100;
+
+  private final RunTimeStats runTimeStats = new RunTimeStats();
+
+  AbstractCommandLineRunner() {
+    this(System.out, System.err);
+  }
+
+  AbstractCommandLineRunner(PrintStream out, PrintStream err) {
+    this.config = new CommandLineConfig();
+    this.out = out;
+    this.err = err;
+  }
+
+  /**
+   * Get the command line config, so that it can be initialized.
+   */
+  protected CommandLineConfig getCommandLineConfig() {
+    return config;
+  }
+
+  /**
+   * Returns the instance of the Compiler to use when {@link #run()} is
+   * called.
+   */
+  protected abstract A createCompiler();
+
+  /**
+   * Returns the instance of the Options to use when {@link #run()} is called.
+   * createCompiler() is called before createOptions(), so getCompiler()
+   * will not return null when createOptions() is called.
+   */
+  protected abstract B createOptions();
+
+  protected DiagnosticGroups getDiagnosticGroups() {
+    return new DiagnosticGroups();
+  }
+
+  /** No longer does anything. */
+  @Deprecated
+  protected void initOptionsFromFlags(CompilerOptions options) {}
+
+  /**
+   * Sets options based on the configurations set flags API.
+   * Called during the run() run() method.
+   * If you want to ignore the flags API, or intepret flags your own way,
+   * then you should override this method.
+   */
+  final protected void setRunOptions(CompilerOptions options)
+      throws FlagUsageException, IOException {
+    DiagnosticGroups diagnosticGroups = getDiagnosticGroups();
+
+    diagnosticGroups.setWarningLevels(
+        options, config.jscompError, CheckLevel.ERROR);
+    diagnosticGroups.setWarningLevels(
+        options, config.jscompWarning, CheckLevel.WARNING);
+    diagnosticGroups.setWarningLevels(
+        options, config.jscompOff, CheckLevel.OFF);
+
+    createDefineReplacements(config.define, options);
+
+    options.manageClosureDependencies = config.manageClosureDependencies;
+    options.devMode = config.jscompDevMode;
+    options.setCodingConvention(config.codingConvention);
+    options.setSummaryDetailLevel(config.summaryDetailLevel);
+
+    options.outputCharset = getOutputCharset();
+    inputCharset = getInputCharset();
+
+    if (config.jsOutputFile.length() > 0) {
+      options.jsOutputFile = config.jsOutputFile;
+    }
+
+    if (config.createSourceMap.length() > 0) {
+      options.sourceMapOutputPath = config.createSourceMap;
+    }
+    options.sourceMapDetailLevel = config.sourceMapDetailLevel;
+
+    if (!config.variableMapInputFile.equals("")) {
+      options.inputVariableMapSerialized =
+          VariableMap.load(config.variableMapInputFile).toBytes();
+    }
+
+    if (!config.propertyMapInputFile.equals("")) {
+      options.inputPropertyMapSerialized =
+          VariableMap.load(config.propertyMapInputFile).toBytes();
+    }
+  }
+
+  final protected A getCompiler() {
+    return compiler;
+  }
+
+  /**
+   * Runs the Compiler and calls exit() with the exit status of the
+   * compiler. By default, exit() is just System.exit().
+   */
+  final public void run() {
+    int result = 0;
+    int runs = 1;
+    Throwable error = null;
+    if (config.computePhaseOrdering) {
+      runs = NUM_
+/* SOURCE MIDDLE OMITTED: context limit */
+duced as {binary name}_vars_map.out and
+     * {binary name}_props_map.out. Note that this flag cannot be used
+     * in conjunction with either variable_map_output_file or
+     * property_map_output_file
+     */
+    CommandLineConfig setCreateNameMapFiles(boolean createNameMapFiles) {
+      this.createNameMapFiles = createNameMapFiles;
+      return this;
+    }
+
+    private String propertyMapOutputFile = "";
+
+    /**
+     * File where the serialized version of the property renaming map
+     * produced should be saved
+     */
+    CommandLineConfig setPropertyMapOutputFile(String propertyMapOutputFile) {
+      this.propertyMapOutputFile = propertyMapOutputFile;
+      return this;
+    }
+
+    private CodingConvention codingConvention = new DefaultCodingConvention();
+
+    /**
+     * Sets rules and conventions to enforce.
+     */
+    CommandLineConfig setCodingConvention(CodingConvention codingConvention) {
+      this.codingConvention = codingConvention;
+      return this;
+    }
+
+    private int summaryDetailLevel = 1;
+
+    /**
+     * Controls how detailed the compilation summary is. Values:
+     *  0 (never print summary), 1 (print summary only if there are
+     * errors or warnings), 2 (print summary if type checking is on,
+     * see --check_types), 3 (always print summary). The default level
+     * is 1
+     */
+    CommandLineConfig setSummaryDetailLevel(int summaryDetailLevel) {
+      this.summaryDetailLevel = summaryDetailLevel;
+      return this;
+    }
+
+    private String outputWrapper = "";
+
+    /**
+     * Interpolate output into this string at the place denoted
+     *  by the marker token %output%. See --output_wrapper_marker
+     */
+    CommandLineConfig setOutputWrapper(String outputWrapper) {
+      this.outputWrapper = outputWrapper;
+      return this;
+    }
+
+    private String outputWrapperMarker = "";
+
+    /**
+     * Use this token as output marker in the value of
+     *  --output_wrapper
+     */
+    CommandLineConfig setOutputWrapperMarker(String outputWrapperMarker) {
+      this.outputWrapperMarker = outputWrapperMarker;
+      return this;
+    }
+
+    private final List<String> moduleWrapper = Lists.newArrayList();
+
+    /**
+     * An output wrapper for a javascript module (optional).
+     * The format is <name>:<wrapper>. The module name must correspond
+     * with a module specified using --module. The wrapper must
+     * contain %s as the code placeholder
+     */
+    CommandLineConfig setModuleWrapper(List<String> moduleWrapper) {
+      this.moduleWrapper.clear();
+      this.moduleWrapper.addAll(moduleWrapper);
+      return this;
+    }
+
+    private String moduleOutputPathPrefix = "";
+
+    /**
+     * Prefix for filenames of compiled js modules.
+     * <module-name>.js will be appended to this prefix. Directories
+     * will be created as needed. Use with --module
+     */
+    CommandLineConfig setModuleOutputPathPrefix(String moduleOutputPathPrefix) {
+      this.moduleOutputPathPrefix = moduleOutputPathPrefix;
+      return this;
+    }
+
+    private String createSourceMap = "";
+
+    /**
+     * If specified, a source map file mapping the generated
+     * source files back to the original source file will be
+     * output to the specified path. The %outname% placeholder will
+     * expand to the name of the output file that the source map
+     * corresponds to.
+     */
+    CommandLineConfig setCreateSourceMap(String createSourceMap) {
+      this.createSourceMap = createSourceMap;
+      return this;
+    }
+
+    private SourceMap.DetailLevel sourceMapDetailLevel =
+        SourceMap.DetailLevel.ALL;
+
+    /**
+     * The detail supplied in the source map file, if generated.
+     */
+    CommandLineConfig setSourceMapDetailLevel(SourceMap.DetailLevel level) {
+      this.sourceMapDetailLevel = level;
+      return this;
+    }
+
+    private final List<String> jscompError = Lists.newArrayList();
+
+    /**
+     * Make the named class of warnings an error.
+     */
+    CommandLineConfig setJscompError(List<String> jscompError) {
+      this.jscompError.clear();
+      this.jscompError.addAll(jscompError);
+      return this;
+    }
+
+    private final List<String> jscompWarning = Lists.newArrayList();
+
+    /**
+     * Make the named class of warnings a normal warning.
+     */
+    CommandLineConfig setJscompWarning(List<String> jscompWarning) {
+      this.jscompWarning.clear();
+      this.jscompWarning.addAll(jscompWarning);
+      return this;
+    }
+
+    private final List<String> jscompOff = Lists.newArrayList();
+
+    /**
+     * Turn off the named class of warnings.
+     */
+    CommandLineConfig setJscompOff(List<String> jscompOff) {
+      this.jscompOff.clear();
+      this.jscompOff.addAll(jscompOff);
+      return this;
+    }
+
+    private final List<String> define = Lists.newArrayList();
+
+    /**
+     * Override the value of a variable annotated @define.
+     * The format is <name>[=<val>], where <name> is the name of a @define
+     * variable and <val> is a boolean, number, or a single-quoted string
+     * that contains no single quotes. If [=<val>] is omitted,
+     * the variable is marked true
+     */
+    CommandLineConfig setDefine(List<String> define) {
+      this.define.clear();
+      this.define.addAll(define);
+      return this;
+    }
+
+    private String charset = "";
+
+    /**
+     * Input charset for all files.
+     */
+    CommandLineConfig setCharset(String charset) {
+      this.charset = charset;
+      return this;
+    }
+
+    private boolean manageClosureDependencies = false;
+
+    /**
+     * Sets whether to sort files by their goog.provide/require deps,
+     * and prune inputs that are not required.
+     */
+    CommandLineConfig setManageClosureDependencies(boolean newVal) {
+      this.manageClosureDependencies = newVal;
+      return this;
+    }
+
+    private String outputManifest = "";
+
+    /**
+     * Sets whether to print an output manifest file.
+     */
+    CommandLineConfig setOutputManifest(String outputManifest) {
+      this.outputManifest = outputManifest;
+      return this;
+    }
+  }
+}
+
+
+RELATED API DECLARATIONS (bodies omitted): Compiler.java
+package com.google.javascript.jscomp;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Supplier;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.javascript.jscomp.CompilerOptions.DevMode;
+import com.google.javascript.jscomp.CompilerOptions.TracerMode;
+import com.google.javascript.jscomp.deps.SortedDependencies.CircularDependencyException;
+import com.google.javascript.jscomp.mozilla.rhino.ErrorReporter;
+import com.google.javascript.jscomp.parsing.Config;
+import com.google.javascript.jscomp.parsing.ParserRunner;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.jstype.JSTypeRegistry;
+import java.io.IOException;
+import java.io.PrintStream;
+import java.io.Serializable;
+import java.nio.charset.Charset;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+public class Compiler extends AbstractCompiler {
+  public PerformanceTracker tracker;
+  public static final DiagnosticType OPTIMIZE_LOOP_ERROR = DiagnosticType.error(
+  public static final DiagnosticType MOTION_ITERATIONS_ERROR =
+  public Compiler() {
+  public Compiler(PrintStream stream) {
+  public Compiler(ErrorManager errorManager) {
+  public void setErrorManager(ErrorManager errorManager) {
+  public void initOptions(CompilerOptions options) {
+  public void init(JSSourceFile[] externs, JSSourceFile[] inputs,
+  public void init(List<JSSourceFile> externs, List<JSSourceFile> inputs,
+  public void init(JSSourceFile[] externs, JSModule[] modules,
+  public void initModules(
+  public void rebuildInputsFromModules() {
+  public Result compile(
+  public Result compile(
+  public Result compile(
+  public Result compile(JSSourceFile[] externs,
+  public Result compile(List<JSSourceFile> externs,
+  public Result compile(JSSourceFile[] externs,
+  public Result compileModules(List<JSSourceFile> externs,
+      public Result call() throws Exception {
+  public void disableThreads() {
+      public void run() {
+  public void parse() {
+  public void setPassConfig(PassConfig passes) {
+  public void check() {
+    protected CompilerPass createInternal(AbstractCompiler compiler) {
+  public Result getResult() {
+  public JSError[] getMessages() {
+  public JSError[] getErrors() {
+  public JSError[] getWarnings() {
+  public Node getRoot() {
+      public String get() {
+  public CompilerInput getInput(String name) {
+  public CompilerInput newExternInput(String name) {
+  public JSTypeRegistry getTypeRegistry() {
+  public Scope getTopScope() {
+  public ReverseAbstractInterpreter getReverseAbstractInterpreter() {
+  public Node parse(JSSourceFile file) {
+  public String toSource() {
+      public String call() throws Exception {
+  public String[] toSourceArray() {
+      public String[] call() throws Exception {
+  public String toSource(final JSModule module) {
+      public String call() throws Exception {
+  public String[] toSourceArray(final JSModule module) {
+      public String[] call() throws Exception {
+  public void toSource(final CodeBuilder cb,
+      public Void call() throws Exception {
+  public static class CodeBuilder {
+    public String toString() {
+    public int getLength() {
+  public void optimize() {
+  public void processDefines() {
+  public void normalize() {
+  protected final CodeChangeHandler.RecentChange recentChange =
+  public void reportCodeChange() {
+  public CodingConvention getCodingConvention() {
+  public boolean isIdeMode() {
+  public boolean isTypeCheckingEnabled() {
+  public void report(JSError error) {
+  public CheckLevel getErrorLevel(JSError error) {
+  public int getErrorCount() {
+  public int getWarningCount() {
+  public boolean hasErrors() {
+  public String getSourceLine(String sourceName, int lineNumber) {
+  public Region getSourceRegion(String sourceName, int lineNumber) {
+  public SourceMap getSourceMap() {
+  public static void setLoggingLevel(Level level) {
+  public String getAstDotGraph() throws IOException {
+  public ErrorManager getErrorManager() {
+  public static class IntermediateState implements Serializable {
+  public IntermediateState getState() {
+  public void setState(IntermediateState state) {
+
+RELATED API DECLARATIONS (bodies omitted): CompilerOptions.java
+package com.google.javascript.jscomp;
+import com.google.common.base.Preconditions;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.common.collect.Multimap;
+import com.google.common.collect.Sets;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import java.io.Serializable;
+import java.nio.charset.Charset;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+public class CompilerOptions implements Serializable, Cloneable {
+  public boolean ideMode;
+  public transient MessageBundle messageBundle = null;
+  public boolean checkSymbols;
+  public CheckLevel checkShadowVars;
+  public CheckLevel aggressiveVarCheck;
+  public CheckLevel checkFunctions;
+  public CheckLevel checkMethods;
+  public boolean checkDuplicateMessages;
+  public boolean allowLegacyJsMessages;
+  public boolean strictMessageReplacement;
+  public boolean checkSuspiciousCode;
+  public boolean checkControlStructures;
+  public CheckLevel checkUndefinedProperties;
+  public boolean checkUnusedPropertiesEarly;
+  public boolean checkTypes;
+  public boolean tightenTypes;
+  public boolean inferTypesInGlobalScope;
+  public boolean checkTypedPropertyCalls;
+  public CheckLevel reportMissingOverride;
+  public CheckLevel reportUnknownTypes;
+  public CheckLevel checkRequires;
+  public CheckLevel checkProvides;
+  public CheckLevel checkGlobalNamesLevel;
+  public CheckLevel brokenClosureRequiresLevel;
+  public CheckLevel checkGlobalThisLevel;
+  public CheckLevel checkMissingGetCssNameLevel;
+  public String checkMissingGetCssNameBlacklist;
+  public boolean checkEs5Strict;
+  public boolean checkCaja;
+  public boolean foldConstants;
+  public boolean removeConstantExpressions;
+  public boolean deadAssignmentElimination;
+  public boolean inlineConstantVars;
+  public boolean inlineFunctions;
+  public boolean decomposeExpressions;
+  public boolean inlineAnonymousFunctionExpressions;
+  public boolean inlineLocalFunctions;
+  public boolean crossModuleCodeMotion;
+  public boolean coalesceVariableNames;
+  public boolean crossModuleMethodMotion;
+  public boolean inlineGetters;
+  public boolean inlineVariables;
+  public boolean inlineLocalVariables;
+  public boolean flowSensitiveInlineVariables;
+  public boolean smartNameRemoval;
+  public boolean removeDeadCode;
+  public CheckLevel checkUnreachableCode;
+  public CheckLevel checkMissingReturn;
+  public boolean extractPrototypeMemberDeclarations;
+  public boolean removeEmptyFunctions;
+  public boolean removeUnusedPrototypeProperties;
+  public boolean removeUnusedPrototypePropertiesInExterns;
+  public boolean removeUnusedVars;
+  public boolean removeUnusedVarsInGlobalScope;
+  public boolean aliasExternals;
+  public String aliasableGlobals;
+  public String unaliasableGlobals;
+  public boolean collapseVariableDeclarations;
+  public boolean groupVariableDeclarations;
+  public boolean collapseAnonymousFunctions;
+  public Set<String> aliasableStrings;
+  public String aliasStringsBlacklist;
+  public boolean aliasAllStrings;
+  public boolean convertToDottedProperties;
+  public boolean rewriteFunctionExpressions;
+  public boolean optimizeParameters;
+  public boolean optimizeArgumentsArray;
+  public VariableRenamingPolicy variableRenaming;
+  public PropertyRenamingPolicy propertyRenaming;
+  public boolean labelRenaming;
+  public boolean reserveRawExports;
+  public boolean generatePseudoNames;
+  public String renamePrefix;
+  public boolean aliasKeywords;
+  public boolean collapseProperties;
+  public boolean devirtualizePrototypeMethods;
+  public boolean computeFunctionSideEffects;
+  public String debugFunctionSideEffectsPath;
+  public boolean disambiguateProperties;
+  public boolean ambiguateProperties;
+  public AnonymousFunctionNamingPolicy anonymousFunctionNaming;
+  public byte[] inputVariableMapSerialized;
+  public byte[] inputPropertyMapSerialized;
+  public boolean exportTestFunctions;
+  public boolean instrumentForCoverage;
+  public boolean instrumentForCoverageOnly;
+  public boolean ignoreCajaProperties;
+  public String syntheticBlockStartMarker;
+  public String syntheticBlockEndMarker;
+  public String locale;
+  public boolean markAsCompiled;
+  public boolean removeTryCatchFinally;
+  public boolean closurePass;
+  public boolean gatherCssNames;
+  public Set<String> stripTypes;
+  public Set<String> stripNameSuffixes;
+  public Set<String> stripNamePrefixes;
+  public Set<String> stripTypePrefixes;
+  public transient
+  public boolean markNoSideEffectCalls;
+  public boolean moveFunctionDeclarations;
+  public String instrumentationTemplate;
+  public String appNameStr;
+  public boolean recordFunctionInformation;
+  public boolean generateExports;
+  public CssRenamingMap cssRenamingMap;
+  public boolean prettyPrint;
+  public boolean lineBreak;
+  public boolean printInputDelimiter;
+  public String inputDelimiter = "// Input %num%";
+  public String reportPath;
+  public TracerMode tracer;
+  public ErrorFormat errorFormat;
+
+
+RELATED API DECLARATIONS (bodies omitted): CompilationLevel.java
+package com.google.javascript.jscomp;
+public enum CompilationLevel {
+  public void setOptionsForCompilationLevel(CompilerOptions options) {
+  public void setDebugOptionsForCompilationLevel(CompilerOptions options) {
+
+RELATED API DECLARATIONS (bodies omitted): SourceFile.java
+package com.google.javascript.jscomp;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Charsets;
+import com.google.common.io.CharStreams;
+import com.google.common.io.Files;
+import java.io.File;
+import java.io.FileReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.Reader;
+import java.io.StringReader;
+import java.nio.charset.Charset;
+public abstract class SourceFile {
+  public interface Generator {
+    public String getCode();
+  SourceFile(String fileName) {
+  public String getCode() throws IOException {
+  public Reader getCodeReader() throws IOException {
+  public String getOriginalPath() {
+  public void setOriginalPath(String originalPath) {
+  public void clearCachedSource() {
+  public String getName() {
+  public String getLine(int lineNumber) {
+  public Region getRegion(int lineNumber) {
+  public static SourceFile fromFile(String fileName, Charset c) {
+  public static SourceFile fromFile(String fileName) {
+  public static SourceFile fromFile(File file, Charset c) {
+  public static SourceFile fromFile(File file) {
+  public static SourceFile fromCode(String fileName, String code) {
+  public static SourceFile fromCode(String fileName,
+  public static SourceFile fromInputStream(String fileName, InputStream s)
+  public static SourceFile fromInputStream(String fileName,
+  public static SourceFile fromReader(String fileName, Reader r)
+  public static SourceFile fromGenerator(String fileName,
+    Preloaded(String fileName, String code) {
+    Preloaded(String fileName, String originalPath, String code) {
+    Generated(String fileName, Generator generator) {
+    public synchronized String getCode() throws IOException {
+    public void clearCachedSource() {
+    protected String inputCharset = Charsets.UTF_8.name();
+    OnDisk(File file, Charset c) {
+    OnDisk(File file) {
+    public synchronized String getCode() throws IOException {
+    public Reader getCodeReader() throws IOException {
+    public void clearCachedSource() {
+    public void setCharset(Charset c) {
+    public Charset getCharset() {
+
+RELATED API DECLARATIONS (bodies omitted): JSSourceFile.java
+package com.google.javascript.jscomp;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Charsets;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.Charset;
+public class JSSourceFile extends SourceFile {
+  public static JSSourceFile fromFile(String fileName, Charset charSet) {
+  public static JSSourceFile fromFile(String fileName) {
+  public static JSSourceFile fromFile(File file, Charset charSet) {
+  public static JSSourceFile fromFile(File file) {
+  public static JSSourceFile fromCode(String fileName, String code) {
+  public static JSSourceFile fromInputStream(String fileName, InputStream s)
+  public static JSSourceFile fromGenerator(String fileName,
+  public String getCode() throws IOException {
+  public void clearCachedSource() {
+
+RELATED API DECLARATIONS (bodies omitted): Result.java
+package com.google.javascript.jscomp;
+import java.util.Map;
+public class Result {
+  public final boolean success;
+  public final JSError[] errors;
+  public final JSError[] warnings;
+  public final String debugLog;
+  public final VariableMap variableMap;
+  public final VariableMap propertyMap;
+  public final VariableMap namedAnonFunctionMap;
+  public final VariableMap stringMap;
+  public final FunctionInformationMap functionInformationMap;
+  public final SourceMap sourceMap;
+  public final Map<String, Integer> cssNames;
+  public final String externExport;
+  Result(JSError[] errors, JSError[] warnings, String debugLog,
+  public Result(JSError[] errors, JSError[] warnings, String debugLog,

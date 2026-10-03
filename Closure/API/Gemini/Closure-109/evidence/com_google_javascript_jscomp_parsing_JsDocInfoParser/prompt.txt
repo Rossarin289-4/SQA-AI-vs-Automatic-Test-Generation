@@ -1,0 +1,425 @@
+You are a Java unit test engineer. Generate ONE complete JUnit 4 test file
+for the production class and source context supplied.
+
+Requirements:
+- Use the exact requested package and public test class name.
+- Use JUnit 4 and Java 7 syntax. Do not use JUnit 5, Mockito, or new dependencies.
+- Write at most 3 concise test methods. Focus on useful observable behavior,
+  boundaries, and relevant branches. Avoid repetitive tests and unnecessary helpers.
+- Use only APIs shown in the supplied source context.
+- Tests must compile and pass on the supplied fixed version.
+- When supported by the available evidence, make a test fail on the buggy
+  version and pass on the fixed version. Do not invent bug behavior.
+- Do not copy or modify production code. Do not use @Ignore or weaken assertions.
+- Return the entire Java file only. No prose, no Markdown fences, and no
+  ellipses or omitted sections.
+
+Production class: com.google.javascript.jscomp.parsing.JsDocInfoParser
+Required test class: com.google.javascript.jscomp.parsing.JsDocInfoParserAI109Test
+
+TARGET SOURCE: com.google.javascript.jscomp.parsing.JsDocInfoParser
+/*
+ * Copyright 2007 The Closure Compiler Authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package com.google.javascript.jscomp.parsing;
+
+import com.google.common.base.Preconditions;
+import com.google.common.base.Splitter;
+import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Sets;
+import com.google.javascript.jscomp.parsing.Config.LanguageMode;
+import com.google.javascript.rhino.IR;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.JSDocInfo.Visibility;
+import com.google.javascript.rhino.JSDocInfoBuilder;
+import com.google.javascript.rhino.JSTypeExpression;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.SimpleErrorReporter;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.head.ErrorReporter;
+import com.google.javascript.rhino.head.ast.Comment;
+import com.google.javascript.rhino.jstype.StaticSourceFile;
+
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+/**
+ * A parser for JSDoc comments.
+ *
+ */
+// TODO(nicksantos): Unify all the JSDocInfo stuff into one package, instead of
+// spreading it across multiple packages.
+public final class JsDocInfoParser {
+
+  private final JsDocTokenStream stream;
+  private final JSDocInfoBuilder jsdocBuilder;
+  private final StaticSourceFile sourceFile;
+  private final Node associatedNode;
+  private final ErrorReporter errorReporter;
+  private final ErrorReporterParser parser = new ErrorReporterParser();
+
+  // Use a template node for properties set on all nodes to minimize the
+  // memory footprint associated with these (similar to IRFactory).
+  private final Node templateNode;
+
+  private class ErrorReporterParser {
+    void addParserWarning(String messageId, String messageArg, int lineno,
+        int charno) {
+      errorReporter.warning(
+          SimpleErrorReporter.getMessage1(messageId, messageArg),
+          getSourceName(), lineno, null, charno);
+    }
+
+    void addParserWarning(String messageId, int lineno, int charno) {
+      errorReporter.warning(SimpleErrorReporter.getMessage0(messageId),
+          getSourceName(), lineno, null, charno);
+    }
+
+    void addTypeWarning(String messageId, String messageArg, int lineno,
+                    int charno) {
+      errorReporter.warning(
+          "Bad type annotation. " +
+          SimpleErrorReporter.getMessage1(messageId, messageArg),
+          getSourceName(), lineno, null, charno);
+    }
+
+    void addTypeWarning(String messageId, int lineno, int charno) {
+      errorReporter.warning(
+          "Bad type annotation. " +
+          SimpleErrorReporter.getMessage0(messageId),
+          getSourceName(), lineno, null, charno);
+    }
+  }
+
+  // The DocInfo with the fileoverview tag for the whole file.
+  private JSDocInfo fileOverviewJSDocInfo = null;
+  private State state;
+
+  private final Map<String, Annotation> annotationNames;
+  private final Set<String> suppressionNames;
+  private static final Set<String> modifiesAnnotationKeywords =
+      ImmutableSet.<String>of("this", "arguments");
+  private static final Set<String> idGeneratorAnnotationKeywords =
+      ImmutableSet.<String>of("unique", "consistent", "stable", "mapped");
+
+  private Node.FileLevelJsDocBuilder fileLevelJsDocBuilder;
+
+  /**
+   * Sets the JsDocBuilder for the file-level (root) node of this parse. The
+   * parser uses the builder to append any preserve annotations it encounters
+   * in JsDoc comments.
+   *
+   * @param fileLevelJsDocBuilder
+   */
+  void setFileLevelJsDocBuilder(
+      Node.FileLevelJsDocBuilder fileLevelJsDocBuilder) {
+    this.fileLevelJsDocBuilder = fileLevelJsDocBuilder;
+  }
+
+  /**
+   * Sets the file overview JSDocInfo, in order to warn about multiple uses of
+   * the @fileoverview tag in a file.
+   */
+  void setFileOverviewJSDocInfo(JSDocInfo fileOverviewJSDocInfo) {
+    this.fileOverviewJSDocInfo = fileOverviewJSDocInfo;
+  }
+
+  private enum State {
+    SEARCHING_ANNOTATION,
+    SEARCHING_NEWLINE,
+    NEXT_IS_ANNOTATION
+  }
+
+  JsDocInfoParser(JsDocTokenStream stream,
+                  Comment commentNode,
+                  Node associatedNode,
+                  Config config,
+                  ErrorReporter errorReporter) {
+    this.stream = stream;
+    this.associatedNode = associatedNode;
+
+    // Sometimes this will be null in tests.
+    this.sourceFile = associatedNode == null
+        ? null : associatedNode.getStaticSourceFile();
+
+    this.jsdocBuilder = new JSDocInfoBuilder(config.parseJsDocDocumentation);
+    if (commentNode != null) {
+      this.jsdocBuilder.recordOriginalCommentString(commentNode.getValue());
+      this.jsdocBuilder.recordOriginalCommentPosition(commentNode.getPosition());
+    }
+    this.annotationNames = config.annotationNames;
+    this.suppressionNames = config.suppressionNames;
+
+    this.errorReporter = errorReporter;
+    this.templateNode = this.createTemplateNode();
+  }
+
+  private String getSourceName() {
+    return sourceFile == null ? null : sourceFile.getName();
+  }
+
+  /**
+   * Parse a description as a {@code @type}.
+   */
+  public JSDocInfo parseInlineTypeDoc() {
+    skipEOLs();
+
+    JsDocToken token = next();
+    int lineno = stream.getLineno();
+    int startCharno = stream.getCharno();
+    Node typeAst = parseTypeExpression(token);
+    recordTypeNode(lineno, startCharno, typeAst, token == JsDocToken.LC);
+
+    JSTypeExpression expr = createJSTypeExpression(typeAst);
+    if (expr !
+/* SOURCE MIDDLE OMITTED: context limit */
+ddChildToBack(typeExpression);
+    return fieldType;
+  }
+
+  /**
+   * FieldName := NameExpression | StringLiteral | NumberLiteral |
+   * ReservedIdentifier
+   */
+  private Node parseFieldName(JsDocToken token) {
+    switch (token) {
+      case STRING:
+        String string = stream.getString();
+        return newStringNode(string);
+
+      default:
+        return null;
+    }
+  }
+
+  private Node wrapNode(int type, Node n) {
+    return n == null ? null :
+        new Node(type, n, stream.getLineno(),
+            stream.getCharno()).clonePropsFrom(templateNode);
+  }
+
+  private Node newNode(int type) {
+    return new Node(type, stream.getLineno(),
+        stream.getCharno()).clonePropsFrom(templateNode);
+  }
+
+  private Node newStringNode(String s) {
+    return newStringNode(s, stream.getLineno(), stream.getCharno());
+  }
+
+  private Node newStringNode(String s, int lineno, int charno) {
+    Node n = Node.newString(s, lineno, charno).clonePropsFrom(templateNode);
+    n.setLength(s.length());
+    return n;
+  }
+
+  // This is similar to IRFactory.createTemplateNode to share common props
+  // e.g., source-name, between all nodes.
+  private Node createTemplateNode() {
+    // The Node type choice is arbitrary.
+    Node templateNode = IR.script();
+    templateNode.setStaticSourceFile(
+      this.associatedNode != null ?
+      this.associatedNode.getStaticSourceFile() :
+      null);
+    return templateNode;
+  }
+
+  private Node reportTypeSyntaxWarning(String warning) {
+    parser.addTypeWarning(warning, stream.getLineno(), stream.getCharno());
+    return null;
+  }
+
+  private Node reportGenericTypeSyntaxWarning() {
+    return reportTypeSyntaxWarning("msg.jsdoc.type.syntax");
+  }
+
+  private JsDocToken eatUntilEOLIfNotAnnotation() {
+    return eatUntilEOLIfNotAnnotation(next());
+  }
+
+  private JsDocToken eatUntilEOLIfNotAnnotation(JsDocToken token) {
+    if (token == JsDocToken.ANNOTATION) {
+      state = State.SEARCHING_ANNOTATION;
+      return token;
+    }
+    return eatTokensUntilEOL(token);
+  }
+
+  /**
+   * Eats tokens until {@link JsDocToken#EOL} included, and switches back the
+   * state to {@link State#SEARCHING_ANNOTATION}.
+   */
+  private JsDocToken eatTokensUntilEOL() {
+    return eatTokensUntilEOL(next());
+  }
+
+  /**
+   * Eats tokens until {@link JsDocToken#EOL} included, and switches back the
+   * state to {@link State#SEARCHING_ANNOTATION}.
+   */
+  private JsDocToken eatTokensUntilEOL(JsDocToken token) {
+    do {
+      if (token == JsDocToken.EOL || token == JsDocToken.EOC ||
+          token == JsDocToken.EOF) {
+        state = State.SEARCHING_ANNOTATION;
+        return token;
+      }
+      token = next();
+    } while (true);
+  }
+
+  /**
+   * Specific value indicating that the {@link #unreadToken} contains no token.
+   */
+  private static final JsDocToken NO_UNREAD_TOKEN = null;
+
+  /**
+   * One token buffer.
+   */
+  private JsDocToken unreadToken = NO_UNREAD_TOKEN;
+
+  /** Restores the lookahead token to the token stream */
+  private void restoreLookAhead(JsDocToken token) {
+    unreadToken = token;
+  }
+
+  /**
+   * Tests whether the next symbol of the token stream matches the specific
+   * token.
+   */
+  private boolean match(JsDocToken token) {
+    unreadToken = next();
+    return unreadToken == token;
+  }
+
+  /**
+   * Tests that the next symbol of the token stream matches one of the specified
+   * tokens.
+   */
+  private boolean match(JsDocToken token1, JsDocToken token2) {
+    unreadToken = next();
+    return unreadToken == token1 || unreadToken == token2;
+  }
+
+  /**
+   * Gets the next token of the token stream or the buffered token if a matching
+   * was previously made.
+   */
+  private JsDocToken next() {
+    if (unreadToken == NO_UNREAD_TOKEN) {
+      return stream.getJsDocToken();
+    } else {
+      return current();
+    }
+  }
+
+  /**
+   * Gets the current token, invalidating it in the process.
+   */
+  private JsDocToken current() {
+    JsDocToken t = unreadToken;
+    unreadToken = NO_UNREAD_TOKEN;
+    return t;
+  }
+
+  /**
+   * Skips all EOLs and all empty lines in the JSDoc. Call this method if you
+   * want the JSDoc entry to span multiple lines.
+   */
+  private void skipEOLs() {
+    while (match(JsDocToken.EOL)) {
+      next();
+      if (match(JsDocToken.STAR)) {
+        next();
+      }
+    }
+  }
+
+  /**
+   * Returns the remainder of the line.
+   */
+  private String getRemainingJSDocLine() {
+    String result = stream.getRemainingJSDocLine();
+    unreadToken = NO_UNREAD_TOKEN;
+    return result;
+  }
+
+  /**
+   * Determines whether the parser has been populated with docinfo with a
+   * fileoverview tag.
+   */
+  private boolean hasParsedFileOverviewDocInfo() {
+    return jsdocBuilder.isPopulatedWithFileOverview();
+  }
+
+  boolean hasParsedJSDocInfo() {
+    return jsdocBuilder.isPopulated();
+  }
+
+  JSDocInfo retrieveAndResetParsedJSDocInfo() {
+    return jsdocBuilder.build(associatedNode);
+  }
+
+  /**
+   * Gets the fileoverview JSDocInfo, if any.
+   */
+  JSDocInfo getFileOverviewJSDocInfo() {
+    return fileOverviewJSDocInfo;
+  }
+
+  /**
+   * Look ahead for a type annotation by advancing the character stream.
+   * Does not modify the token stream.
+   * This is kind of a hack, and is only necessary because we use the token
+   * stream to parse types, but need the underlying character stream to get
+   * JsDoc descriptions.
+   * @return Whether we found a type annotation.
+   */
+  private boolean lookAheadForType() {
+    return lookAheadFor('{');
+  }
+
+  private boolean lookAheadForAnnotation() {
+    return lookAheadFor('@');
+  }
+
+  /**
+   * Look ahead by advancing the character stream.
+   * Does not modify the token stream.
+   * @return Whether we found the char.
+   */
+  private boolean lookAheadFor(char expect) {
+    boolean matched = false;
+    int c;
+    while (true) {
+      c = stream.getChar();
+      if (c == ' ') {
+        continue;
+      } else if (c == expect) {
+        matched = true;
+        break;
+      } else {
+        break;
+      }
+    }
+    stream.ungetChar(c);
+    return matched;
+  }
+}

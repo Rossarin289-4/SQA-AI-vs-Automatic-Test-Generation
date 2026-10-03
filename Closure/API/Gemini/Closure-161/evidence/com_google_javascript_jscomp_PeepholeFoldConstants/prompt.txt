@@ -1,0 +1,791 @@
+You are a Java unit test engineer. Generate ONE complete JUnit 4 test file
+for the production class and source context supplied.
+
+Requirements:
+- Use the exact requested package and public test class name.
+- Use JUnit 4 and Java 7 syntax. Do not use JUnit 5, Mockito, or new dependencies.
+- Write at most 3 concise test methods. Focus on useful observable behavior,
+  boundaries, and relevant branches. Avoid repetitive tests and unnecessary helpers.
+- Use only APIs shown in the supplied source context.
+- Tests must compile and pass on the supplied fixed version.
+- When supported by the available evidence, make a test fail on the buggy
+  version and pass on the fixed version. Do not invent bug behavior.
+- Do not copy or modify production code. Do not use @Ignore or weaken assertions.
+- Return the entire Java file only. No prose, no Markdown fences, and no
+  ellipses or omitted sections.
+
+Production class: com.google.javascript.jscomp.PeepholeFoldConstants
+Required test class: com.google.javascript.jscomp.PeepholeFoldConstantsAI161Test
+
+TARGET SOURCE: com.google.javascript.jscomp.PeepholeFoldConstants
+/*
+ * Copyright 2004 The Closure Compiler Authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package com.google.javascript.jscomp;
+
+import com.google.common.base.Preconditions;
+import com.google.javascript.jscomp.mozilla.rhino.ScriptRuntime;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.jstype.TernaryValue;
+
+/**
+ * Peephole optimization to fold constants (e.g. x + 1 + 7 --> x + 8).
+ *
+ */
+class PeepholeFoldConstants extends AbstractPeepholeOptimization {
+
+  static final DiagnosticType INVALID_GETELEM_INDEX_ERROR =
+      DiagnosticType.error(
+          "JSC_INVALID_GETELEM_INDEX_ERROR",
+          "Array index not integer: {0}");
+
+  static final DiagnosticType INDEX_OUT_OF_BOUNDS_ERROR =
+      DiagnosticType.error(
+          "JSC_INDEX_OUT_OF_BOUNDS_ERROR",
+          "Array index out of bounds: {0}");
+
+  static final DiagnosticType NEGATING_A_NON_NUMBER_ERROR =
+      DiagnosticType.error(
+          "JSC_NEGATING_A_NON_NUMBER_ERROR",
+          "Can't negate non-numeric value: {0}");
+
+  static final DiagnosticType BITWISE_OPERAND_OUT_OF_RANGE =
+      DiagnosticType.error(
+          "JSC_BITWISE_OPERAND_OUT_OF_RANGE",
+          "Operand out of range, bitwise operation will lose information: {0}");
+
+  static final DiagnosticType SHIFT_AMOUNT_OUT_OF_BOUNDS = DiagnosticType.error(
+      "JSC_SHIFT_AMOUNT_OUT_OF_BOUNDS",
+      "Shift amount out of bounds: {0}");
+
+  static final DiagnosticType FRACTIONAL_BITWISE_OPERAND = DiagnosticType.error(
+      "JSC_FRACTIONAL_BITWISE_OPERAND",
+      "Fractional bitwise operand: {0}");
+
+  private static final double MAX_FOLD_NUMBER = Math.pow(2, 53);
+
+  @Override
+  Node optimizeSubtree(Node subtree) {
+    switch(subtree.getType()) {
+      case Token.NEW:
+        return tryFoldCtorCall(subtree);
+
+      case Token.TYPEOF:
+        return tryFoldTypeof(subtree);
+
+      case Token.NOT:
+      case Token.POS:
+      case Token.NEG:
+      case Token.BITNOT:
+        tryReduceOperandsForOp(subtree);
+        return tryFoldUnaryOperator(subtree);
+
+      case Token.VOID:
+        return tryReduceVoid(subtree);
+
+      default:
+        tryReduceOperandsForOp(subtree);
+        return tryFoldBinaryOperator(subtree);
+    }
+  }
+
+  private Node tryFoldBinaryOperator(Node subtree) {
+    Node left = subtree.getFirstChild();
+
+    if (left == null) {
+      return subtree;
+    }
+
+    Node right = left.getNext();
+
+    if (right == null) {
+      return subtree;
+    }
+
+    // If we've reached here, node is truly a binary operator.
+    switch(subtree.getType()) {
+      case Token.GETPROP:
+        return tryFoldGetProp(subtree, left, right);
+
+      case Token.GETELEM:
+        return tryFoldGetElem(subtree, left, right);
+
+      case Token.INSTANCEOF:
+        return tryFoldInstanceof(subtree, left, right);
+
+      case Token.AND:
+      case Token.OR:
+        return tryFoldAndOr(subtree, left, right);
+
+      case Token.LSH:
+      case Token.RSH:
+      case Token.URSH:
+        return tryFoldShift(subtree, left, right);
+
+      case Token.ASSIGN:
+        return tryFoldAssign(subtree, left, right);
+
+      case Token.ADD:
+        return tryFoldAdd(subtree, left, right);
+
+      case Token.SUB:
+      case Token.DIV:
+      case Token.MOD:
+        return tryFoldArithmeticOp(subtree, left, right);
+
+      case Token.MUL:
+      case Token.BITAND:
+      case Token.BITOR:
+      case Token.BITXOR:
+        Node result = tryFoldArithmeticOp(subtree, left, right);
+        if (result != subtree) {
+          return result;
+        }
+        return tryFoldLeftChildOp(subtree, left, right);
+
+      case Token.LT:
+      case Token.GT:
+      case Token.LE:
+      case Token.GE:
+      case Token.EQ:
+      case Token.NE:
+      case Token.SHEQ:
+      case Token.SHNE:
+        return tryFoldComparison(subtree, left, right);
+
+      default:
+        return subtree;
+    }
+  }
+
+  private Node tryReduceVoid(Node n) {
+    Node child = n.getFirstChild();
+    if (child.getType() != Token.NUMBER || child.getDouble() != 0.0) {
+      if (!mayHaveSideEffects(n)) {
+        n.replaceChild(child, Node.newNumber(0));
+        reportCodeChange();
+      }
+    }
+    return n;
+  }
+
+  private void tryReduceOperandsForOp(Node n) {
+    switch (n.getType()) {
+      case Token.ADD:
+        Node left = n.getFirstChild();
+        Node right = n.getLastChild();
+        if (!NodeUtil.mayBeString(left) && !NodeUtil.mayBeString(right)) {
+          tryConvertOperandsToNumber(n);
+        }
+        break;
+      case Token.ASSIGN_BITOR:
+      case Token.ASSIGN_BITXOR:
+      case Token.ASSIGN_BITAND:
+        // TODO(johnlenz): convert these to integers.
+      case Token.ASSIGN_LSH:
+      case Token.ASSIGN_RSH:
+      case Token.ASSIGN_URSH:
+      case Token.ASSIGN_SUB:
+      case Token.ASSIGN_MUL:
+      case Token.ASSIGN_MOD:
+      case Token.ASSIGN_DIV:
+        tryConvertToNumber(n.getLastChild());
+        break;
+      case Token.BITNOT:
+      case Token.BITOR:
+      case Token.BITXOR:
+      case Token.BITAND:
+      case Token.LSH:
+      case Token.RSH:
+      case Token.URSH:
+      case Token.SUB:
+      case Token.MUL:
+      case Token.MOD:
+      case Token.DIV:
+      case Token.POS:
+      case Token.NEG:
+        tryConvertOperandsToNumber(n);
+        break;
+    }
+  }
+
+  private void tryConvertOperandsToNumber(Node n) {
+    Node next;
+    for (Node c = n.getFirstChild(); c != null; c = next) {
+      next = c.getNext();
+      tryConvertToNumber(c);
+    }
+  }
+
+  private void tryCon
+/* SOURCE MIDDLE OMITTED: context limit */
+;
+
+    Node objectType = n.getFirstChild();
+    if (objectType.getType() != Token.NAME) {
+      return n;
+    }
+
+    if (objectType.getString().equals("String")) {
+      Node value = objectType.getNext();
+      String stringValue = null;
+      if (value == null) {
+        stringValue = "";
+      } else {
+        if (!NodeUtil.isImmutableValue(value)) {
+          return n;
+        }
+
+        stringValue = NodeUtil.getStringValue(value);
+      }
+
+      if (stringValue == null) {
+        return n;
+      }
+
+      Node parent = n.getParent();
+      Node newString = Node.newString(stringValue);
+
+      parent.replaceChild(n, newString);
+      newString.copyInformationFrom(parent);
+      reportCodeChange();
+
+      return newString;
+    }
+    return n;
+  }
+
+  /**
+   * Try to fold array-element. e.g [1, 2, 3][10];
+   */
+  private Node tryFoldGetElem(Node n, Node left, Node right) {
+    Preconditions.checkArgument(n.getType() == Token.GETELEM);
+
+    if (left.getType() == Token.OBJECTLIT) {
+      return tryFoldObjectPropAccess(n, left, right);
+    }
+
+    if (left.getType() == Token.ARRAYLIT) {
+      return tryFoldArrayAccess(n, left, right);
+    }
+    return n;
+  }
+
+  /**
+   * Try to fold array-length. e.g [1, 2, 3].length ==> 3, [x, y].length ==> 2
+   */
+  private Node tryFoldGetProp(Node n, Node left, Node right) {
+    Preconditions.checkArgument(n.getType() == Token.GETPROP);
+
+    if (left.getType() == Token.OBJECTLIT) {
+      return tryFoldObjectPropAccess(n, left, right);
+    }
+
+    if (right.getType() == Token.STRING &&
+        right.getString().equals("length")) {
+      int knownLength = -1;
+      switch (left.getType()) {
+        case Token.ARRAYLIT:
+          if (mayHaveSideEffects(left)) {
+            // Nope, can't fold this, without handling the side-effects.
+            return n;
+          }
+          knownLength = left.getChildCount();
+          break;
+        case Token.STRING:
+          knownLength = left.getString().length();
+          break;
+        default:
+          // Not a foldable case, forget it.
+          return n;
+      }
+
+      Preconditions.checkState(knownLength != -1);
+      Node lengthNode = Node.newNumber(knownLength);
+      n.getParent().replaceChild(n, lengthNode);
+      reportCodeChange();
+
+      return lengthNode;
+    }
+
+    return n;
+  }
+
+  private boolean isAssignmentTarget(Node n) {
+    Node parent = n.getParent();
+    if ((NodeUtil.isAssignmentOp(parent) && parent.getFirstChild() == n)
+        || parent.getType() == Token.INC
+        || parent.getType() == Token.DEC) {
+      // If GETPROP/GETELEM is used as assignment target the object literal is
+      // acting as a temporary we can't fold it here:
+      //    "{a:x}.a += 1" is not "x += 1"
+      return true;
+    }
+    return false;
+  }
+
+  private Node tryFoldArrayAccess(Node n, Node left, Node right) {
+    Node parent = n.getParent();
+    // If GETPROP/GETELEM is used as assignment target the array literal is
+    // acting as a temporary we can't fold it here:
+    //    "[][0] += 1"
+    if (isAssignmentTarget(n)) {
+      return n;
+    }
+
+    if (right.getType() != Token.NUMBER) {
+      // Sometimes people like to use complex expressions to index into
+      // arrays, or strings to index into array methods.
+      return n;
+    }
+
+    double index = right.getDouble();
+    int intIndex = (int) index;
+    if (intIndex != index) {
+      error(INVALID_GETELEM_INDEX_ERROR, right);
+      return n;
+    }
+
+    if (intIndex < 0) {
+      error(INDEX_OUT_OF_BOUNDS_ERROR, right);
+      return n;
+    }
+
+    Node elem = left.getFirstChild();
+    for (int i = 0; elem != null && i < intIndex; i++) {
+      elem = elem.getNext();
+    }
+
+    if (elem == null) {
+      error(INDEX_OUT_OF_BOUNDS_ERROR, right);
+      return n;
+    }
+
+    if (elem.getType() == Token.EMPTY) {
+      elem = NodeUtil.newUndefinedNode(elem);
+    } else {
+      left.removeChild(elem);
+    }
+
+    // Replace the entire GETELEM with the value
+    n.getParent().replaceChild(n, elem);
+    reportCodeChange();
+    return elem;
+  }
+
+  private Node tryFoldObjectPropAccess(Node n, Node left, Node right) {
+    Preconditions.checkArgument(NodeUtil.isGet(n));
+
+    if (left.getType() != Token.OBJECTLIT || right.getType() != Token.STRING) {
+      return n;
+    }
+
+    if (isAssignmentTarget(n)) {
+      // If GETPROP/GETELEM is used as assignment target the object literal is
+      // acting as a temporary we can't fold it here:
+      //    "{a:x}.a += 1" is not "x += 1"
+      return n;
+    }
+
+    // find the last definition in the object literal
+    Node key = null;
+    Node value = null;
+    for (Node c = left.getFirstChild(); c != null; c = c.getNext()) {
+      if (c.getString().equals(right.getString())) {
+        switch (c.getType()) {
+          case Token.SET:
+            continue;
+          case Token.GET:
+          case Token.STRING:
+            if (value != null && mayHaveSideEffects(value)) {
+              // The previously found value had side-effects
+              return n;
+            }
+            key = c;
+            value = key.getFirstChild();
+            break;
+          default:
+            throw new IllegalStateException();
+        }
+      } else if (mayHaveSideEffects(c.getFirstChild())) {
+        // We don't handle the side-effects here as they might need a temporary
+        // or need to be reordered.
+        return n;
+      }
+    }
+
+    // Didn't find a definition of the name in the object literal, it might
+    // be coming from the Object prototype
+    if (value == null) {
+      return n;
+    }
+
+    if (value.getType() == Token.FUNCTION && NodeUtil.referencesThis(value)) {
+      // 'this' may refer to the object we are trying to remove
+      return n;
+    }
+
+    Node replacement = value.detachFromParent();
+    if (key.getType() == Token.GET){
+      replacement = new Node(Token.CALL, replacement);
+      replacement.putBooleanProp(Node.FREE_CALL, true);
+    }
+
+    n.getParent().replaceChild(n, replacement);
+    reportCodeChange();
+    return n;
+  }
+}
+
+
+RELATED API DECLARATIONS (bodies omitted): Compiler.java
+package com.google.javascript.jscomp;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Supplier;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.javascript.jscomp.CompilerOptions.DevMode;
+import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
+import com.google.javascript.jscomp.CompilerOptions.TracerMode;
+import com.google.javascript.jscomp.ReferenceCollectingCallback.ReferenceCollection;
+import com.google.javascript.jscomp.ReferenceCollectingCallback.ReferenceMap;
+import com.google.javascript.jscomp.Scope.Var;
+import com.google.javascript.jscomp.deps.SortedDependencies.CircularDependencyException;
+import com.google.javascript.jscomp.deps.SortedDependencies.MissingProvideException;
+import com.google.javascript.jscomp.mozilla.rhino.ErrorReporter;
+import com.google.javascript.jscomp.parsing.Config;
+import com.google.javascript.jscomp.parsing.ParserRunner;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.jstype.JSTypeRegistry;
+import java.io.IOException;
+import java.io.PrintStream;
+import java.io.Serializable;
+import java.nio.charset.Charset;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+public class Compiler extends AbstractCompiler {
+  public PerformanceTracker tracker;
+  public static final DiagnosticType OPTIMIZE_LOOP_ERROR = DiagnosticType.error(
+  public static final DiagnosticType MOTION_ITERATIONS_ERROR =
+  public Compiler() {
+  public Compiler(PrintStream stream) {
+  public Compiler(ErrorManager errorManager) {
+  public void setErrorManager(ErrorManager errorManager) {
+  public void initOptions(CompilerOptions options) {
+  public void init(JSSourceFile[] externs, JSSourceFile[] inputs,
+  public void init(List<JSSourceFile> externs, List<JSSourceFile> inputs,
+  public void init(JSSourceFile[] externs, JSModule[] modules,
+  public void initModules(
+  public void rebuildInputsFromModules() {
+  public Result compile(
+  public Result compile(
+  public Result compile(
+  public Result compile(JSSourceFile[] externs,
+  public Result compile(List<JSSourceFile> externs,
+  public Result compile(JSSourceFile[] externs,
+  public Result compileModules(List<JSSourceFile> externs,
+      public Result call() throws Exception {
+  public void disableThreads() {
+      public void run() {
+  public void parse() {
+  public void setPassConfig(PassConfig passes) {
+  public void check() {
+    protected CompilerPass createInternal(AbstractCompiler compiler) {
+  public Result getResult() {
+  public JSError[] getMessages() {
+  public JSError[] getErrors() {
+  public JSError[] getWarnings() {
+  public Node getRoot() {
+      public String get() {
+  public CompilerInput getInput(String name) {
+  protected void removeExternInput(String name) {
+  public CompilerInput newExternInput(String name) {
+  public JSTypeRegistry getTypeRegistry() {
+  public SymbolTable buildKnownSymbolTable() {
+  public Scope getTopScope() {
+  public ReverseAbstractInterpreter getReverseAbstractInterpreter() {
+  public Node parse(JSSourceFile file) {
+  public String toSource() {
+      public String call() throws Exception {
+  public String[] toSourceArray() {
+      public String[] call() throws Exception {
+  public String toSource(final JSModule module) {
+      public String call() throws Exception {
+  public String[] toSourceArray(final JSModule module) {
+      public String[] call() throws Exception {
+  public void toSource(final CodeBuilder cb,
+      public Void call() throws Exception {
+  public static class CodeBuilder {
+    public String toString() {
+    public int getLength() {
+  public void optimize() {
+  public void processDefines() {
+  public void normalize() {
+  protected final CodeChangeHandler.RecentChange recentChange =
+  public void reportCodeChange() {
+  public CodingConvention getCodingConvention() {
+  public boolean isIdeMode() {
+  public boolean acceptEcmaScript5() {
+  public LanguageMode languageMode() {
+  public boolean acceptConstKeyword() {
+  public boolean isTypeCheckingEnabled() {
+  protected DiagnosticGroups getDiagnosticGroups() {
+  public void report(JSError error) {
+  public CheckLevel getErrorLevel(JSError error) {
+  public int getErrorCount() {
+  public int getWarningCount() {
+  public boolean hasErrors() {
+  public String getSourceLine(String sourceName, int lineNumber) {
+  public Region getSourceRegion(String sourceName, int lineNumber) {
+  public SourceMap getSourceMap() {
+  public static void setLoggingLevel(Level level) {
+  public String getAstDotGraph() throws IOException {
+  public ErrorManager getErrorManager() {
+  public static class IntermediateState implements Serializable {
+  public Interm
+
+RELATED API DECLARATIONS (bodies omitted): CompilerOptions.java
+package com.google.javascript.jscomp;
+import com.google.common.base.Preconditions;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.common.collect.Multimap;
+import com.google.common.collect.Sets;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.SourcePosition;
+import com.google.javascript.rhino.Token;
+import java.io.Serializable;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+public class CompilerOptions implements Serializable, Cloneable {
+  public boolean ideMode;
+  public transient MessageBundle messageBundle = null;
+  public boolean checkSymbols;
+  public CheckLevel checkShadowVars;
+  public void setCheckShadowVars(CheckLevel level) {
+  public CheckLevel aggressiveVarCheck;
+  public void setAggressiveVarCheck(CheckLevel level) {
+  public CheckLevel checkFunctions;
+  public void setCheckFunctions(CheckLevel level) {
+  public CheckLevel checkMethods;
+  public void setCheckMethods(CheckLevel level) {
+  public boolean checkDuplicateMessages;
+  public boolean allowLegacyJsMessages;
+  public boolean strictMessageReplacement;
+  public boolean checkSuspiciousCode;
+  public boolean checkControlStructures;
+  public boolean checkTypes;
+  public boolean tightenTypes;
+  public boolean inferTypesInGlobalScope;
+  public boolean checkTypedPropertyCalls;
+  public CheckLevel reportMissingOverride;
+  public void setReportMissingOverride(CheckLevel level) {
+  public CheckLevel reportUnknownTypes;
+  public void setReportUnknownTypes(CheckLevel level) {
+  public CheckLevel checkRequires;
+  public void setCheckRequires(CheckLevel level) {
+  public CheckLevel checkProvides;
+  public void setCheckProvides(CheckLevel level) {
+  public CheckLevel checkGlobalNamesLevel;
+  public void setCheckGlobalNamesLevel(CheckLevel level) {
+  public CheckLevel brokenClosureRequiresLevel;
+  public void setBrokenClosureRequiresLevel(CheckLevel level) {
+  public CheckLevel checkGlobalThisLevel;
+  public void setCheckGlobalThisLevel(CheckLevel level) {
+  public CheckLevel checkMissingGetCssNameLevel;
+  public void setCheckMissingGetCssNameLevel(CheckLevel level) {
+  public String checkMissingGetCssNameBlacklist;
+  public boolean checkEs5Strict;
+  public boolean checkCaja;
+  public boolean foldConstants;
+  public boolean deadAssignmentElimination;
+  public boolean inlineConstantVars;
+  public boolean inlineFunctions;
+  public boolean decomposeExpressions;
+  public boolean inlineAnonymousFunctionExpressions;
+  public boolean inlineLocalFunctions;
+  public boolean crossModuleCodeMotion;
+  public boolean coalesceVariableNames;
+  public boolean crossModuleMethodMotion;
+  public boolean inlineGetters;
+  public boolean inlineVariables;
+  public boolean inlineLocalVariables;
+  public boolean flowSensitiveInlineVariables;
+  public boolean smartNameRemoval;
+  public boolean removeDeadCode;
+  public CheckLevel checkUnreachableCode;
+  public void setCheckUnreachableCode(CheckLevel level) {
+  public CheckLevel checkMissingReturn;
+  public void setCheckMissingReturn(CheckLevel level) {
+  public boolean extractPrototypeMemberDeclarations;
+  public boolean removeEmptyFunctions;
+  public boolean removeUnusedPrototypeProperties;
+  public boolean removeUnusedPrototypePropertiesInExterns;
+  public boolean removeUnusedVars;
+  public boolean removeUnusedLocalVars;
+  public boolean aliasExternals;
+  public String aliasableGlobals;
+  public String unaliasableGlobals;
+  public boolean collapseVariableDeclarations;
+  public boolean groupVariableDeclarations;
+  public boolean collapseAnonymousFunctions;
+  public Set<String> aliasableStrings;
+  public String aliasStringsBlacklist;
+  public boolean aliasAllStrings;
+  public boolean convertToDottedProperties;
+  public boolean rewriteFunctionExpressions;
+  public boolean optimizeParameters;
+  public boolean optimizeReturns;
+  public boolean optimizeCalls;
+  public boolean optimizeArgumentsArray;
+  public VariableRenamingPolicy variableRenaming;
+  public PropertyRenamingPolicy propertyRenaming;
+  public boolean labelRenaming;
+  public boolean reserveRawExports;
+  public boolean generatePseudoNames;
+  public String renamePrefix;
+  public boolean aliasKeywords;
+  public boolean collapseProperties;
+  public boolean collapseObjectLiterals;
+  public boolean devirtualizePrototypeMethods;
+  public boolean computeFunctionSideEffects;
+  public String debugFunctionSideEffectsPath;
+  public boolean disambiguateProperties;
+  public boolean ambiguateProperties;
+  public AnonymousFunctionNamingPolicy anonymousFunctionNaming;
+  public byte[] inputVariableMapSerialized;
+  public byte[] inputPropertyMapSerialized;
+  public boolean exportTestFunctions;
+  public boolean specializeInitialModule;
+  public boolean instrumentForCoverage;
+  public boolean instrumentForCoverageOnly;
+  public boolean ignoreCajaProperties;
+  public String syntheticBlockStartMarker;
+  public String synt
+
+RELATED API DECLARATIONS (bodies omitted): CompilationLevel.java
+package com.google.javascript.jscomp;
+public enum CompilationLevel {
+  public void setOptionsForCompilationLevel(CompilerOptions options) {
+  public void setDebugOptionsForCompilationLevel(CompilerOptions options) {
+
+RELATED API DECLARATIONS (bodies omitted): SourceFile.java
+package com.google.javascript.jscomp;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Charsets;
+import com.google.common.io.CharStreams;
+import com.google.common.io.Files;
+import com.google.javascript.rhino.jstype.StaticSourceFile;
+import java.io.File;
+import java.io.FileReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.Reader;
+import java.io.Serializable;
+import java.io.StringReader;
+import java.nio.charset.Charset;
+public class SourceFile implements StaticSourceFile, Serializable {
+  public interface Generator {
+    public String getCode();
+  public SourceFile(String fileName) {
+  public int getLineOffset(int lineno) {
+  public String getCode() throws IOException {
+  public Reader getCodeReader() throws IOException {
+  public String getOriginalPath() {
+  public void setOriginalPath(String originalPath) {
+  public void clearCachedSource() {
+  public String getName() {
+  public boolean isExtern() {
+  public String getLine(int lineNumber) {
+  public Region getRegion(int lineNumber) {
+  public String toString() {
+  public static SourceFile fromFile(String fileName, Charset c) {
+  public static SourceFile fromFile(String fileName) {
+  public static SourceFile fromFile(File file, Charset c) {
+  public static SourceFile fromFile(File file) {
+  public static SourceFile fromCode(String fileName, String code) {
+  public static SourceFile fromCode(String fileName,
+  public static SourceFile fromInputStream(String fileName, InputStream s)
+  public static SourceFile fromInputStream(String fileName,
+  public static SourceFile fromReader(String fileName, Reader r)
+  public static SourceFile fromGenerator(String fileName,
+    Preloaded(String fileName, String code) {
+    Preloaded(String fileName, String originalPath, String code) {
+    Generated(String fileName, Generator generator) {
+    public synchronized String getCode() throws IOException {
+    public void clearCachedSource() {
+    protected String inputCharset = Charsets.UTF_8.name();
+    OnDisk(File file, Charset c) {
+    OnDisk(File file) {
+    public synchronized String getCode() throws IOException {
+    public Reader getCodeReader() throws IOException {
+    public void clearCachedSource() {
+    public void setCharset(Charset c) {
+    public Charset getCharset() {
+
+RELATED API DECLARATIONS (bodies omitted): JSSourceFile.java
+package com.google.javascript.jscomp;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Charsets;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.Serializable;
+import java.nio.charset.Charset;
+public class JSSourceFile extends SourceFile implements Serializable {
+  public static JSSourceFile fromFile(String fileName, Charset charSet) {
+  public static JSSourceFile fromFile(String fileName) {
+  public static JSSourceFile fromFile(File file, Charset charSet) {
+  public static JSSourceFile fromFile(File file) {
+  public static JSSourceFile fromCode(String fileName, String code) {
+  public static JSSourceFile fromInputStream(String fileName, InputStream s)
+  public static JSSourceFile fromGenerator(String fileName,
+  public String getCode() throws IOException {
+  public void clearCachedSource() {
+
+RELATED API DECLARATIONS (bodies omitted): Result.java
+package com.google.javascript.jscomp;
+import java.util.Map;
+public class Result {
+  public final boolean success;
+  public final JSError[] errors;
+  public final JSError[] warnings;
+  public final String debugLog;
+  public final VariableMap variableMap;
+  public final VariableMap propertyMap;
+  public final VariableMap namedAnonFunctionMap;
+  public final VariableMap stringMap;
+  public final FunctionInformationMap functionInformationMap;
+  public final SourceMap sourceMap;
+  public final Map<String, Integer> cssNames;
+  public final String externExport;
+  public final String idGeneratorMap;
+  Result(JSError[] errors, JSError[] warnings, String debugLog,
+  public Result(JSError[] errors, JSError[] warnings, String debugLog,
