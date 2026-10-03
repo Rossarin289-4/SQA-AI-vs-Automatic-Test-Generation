@@ -1,0 +1,330 @@
+## 1. The behavior that differs
+
+The defect is in `FastDateFormat.format(Calendar, StringBuffer)` when the formatter has an explicitly forced time zone.
+
+The buggy implementation effectively does:
+
+```java
+if (mTimeZoneForced) {
+    calendar = (Calendar) calendar.clone();
+    calendar.setTimeZone(mTimeZone);
+}
+return applyRules(calendar, buf);
+```
+
+The fixed implementation adds:
+
+```java
+calendar.getTime(); // LANG-538
+```
+
+before cloning and changing the time zone. This forces the `Calendar` to resolve its pending field changes into its actual millisecond instant before the time zone is changed. ([Apache Issues][1])
+
+The Apache release notes describe LANG-538 as fixing `FastDateFormat` by calling `getTime()` on a calendar so its timezone is in the correct state. ([Apache Commons][2])
+
+---
+
+## 2. The likely root cause visible from the source
+
+The root cause is a **stale/uncomputed `Calendar` state**.
+
+A `Calendar` can be constructed, cleared, and populated with date/time fields using `set(...)` without immediately resolving those fields into the underlying millisecond timestamp.
+
+When `FastDateFormat` changes the calendar's time zone, the buggy implementation changes the zone before forcing that pending calendar state to be resolved.
+
+The fixed implementation therefore performs:
+
+```java
+calendar.getTime();
+```
+
+first, then clones the calendar and applies the formatter's time zone.
+
+This is specifically the one-line behavioral change associated with LANG-538. 
+
+---
+
+## 3. The specific behavior that a generated test should distinguish
+
+The tests should create a `GregorianCalendar` like this:
+
+1. Give it an explicit source time zone.
+2. `clear()` it.
+3. Set date/time fields with `set(...)`.
+4. **Do not call `getTime()` or `getTimeInMillis()` on the calendar used by `FastDateFormat`.**
+5. Format it using a `FastDateFormat` whose time zone is different from the calendar's original time zone.
+
+The expected result should represent the **same instant converted into the formatter's time zone**.
+
+This is important because the bug is not simply "timezone formatting is wrong." The key condition is:
+
+> an unresolved calendar + a forced formatter timezone.
+
+The expected timestamp can be calculated independently using a separate reference calendar, avoiding any call that would accidentally repair the calendar being tested.
+
+---
+
+## 4. Boundary cases, representative cases, and regression cases
+
+### Representative defect cases
+
+* Source timezone `GMT-05:00` → formatter timezone `GMT+02:00`
+* Source timezone `GMT+09:00` → formatter timezone `GMT-04:00`
+
+These exercise conversion across substantially different offsets.
+
+### Boundary case
+
+Use a time close to midnight so that changing the timezone crosses a calendar date boundary.
+
+For example:
+
+* source timezone: `GMT-05:00`
+* formatter timezone: `GMT+02:00`
+* local time near `23:xx`
+
+The expected result should change both the **date and time**, not merely the hour.
+
+### Regression cases
+
+Also include cases where the calendar has already been normalized before formatting. These should continue to produce the normal result on both versions.
+
+A useful regression case is formatting a normal `Date` through `FastDateFormat`, because the defect specifically concerns the unresolved `Calendar` path rather than ordinary date formatting.
+
+---
+
+## 5. Complete JUnit 4.12 test class
+
+The following suite uses independently chosen dates, time zones, and patterns. It does not call or reproduce `testLang538`.
+
+```java
+package org.apache.commons.lang3.time;
+
+import static org.junit.Assert.assertEquals;
+
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.GregorianCalendar;
+import java.util.TimeZone;
+
+import org.junit.Test;
+
+public class FastDateFormatLang38Test {
+
+    @Test
+    public void testFormatUnresolvedCalendarAcrossPositiveOffset() {
+        TimeZone sourceZone = TimeZone.getTimeZone("GMT-05:00");
+        TimeZone targetZone = TimeZone.getTimeZone("GMT+02:00");
+
+        GregorianCalendar reference = new GregorianCalendar(sourceZone);
+        reference.clear();
+        reference.set(2011, GregorianCalendar.MARCH, 14, 23, 35, 42);
+
+        long expectedMillis = reference.getTimeInMillis();
+
+        GregorianCalendar calendar = new GregorianCalendar(sourceZone);
+        calendar.clear();
+        calendar.set(2011, GregorianCalendar.MARCH, 14, 23, 35, 42);
+
+        FastDateFormat format = FastDateFormat.getInstance(
+                "yyyy-MM-dd HH:mm:ss Z",
+                targetZone);
+
+        String actual = format.format(calendar);
+
+        SimpleDateFormat expectedFormat =
+                new SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z");
+        expectedFormat.setTimeZone(targetZone);
+
+        String expected = expectedFormat.format(new Date(expectedMillis));
+
+        assertEquals(expected, actual);
+    }
+
+    @Test
+    public void testFormatUnresolvedCalendarAcrossNegativeOffset() {
+        TimeZone sourceZone = TimeZone.getTimeZone("GMT+09:00");
+        TimeZone targetZone = TimeZone.getTimeZone("GMT-04:00");
+
+        GregorianCalendar reference = new GregorianCalendar(sourceZone);
+        reference.clear();
+        reference.set(2012, GregorianCalendar.JULY, 8, 2, 15, 27);
+
+        long expectedMillis = reference.getTimeInMillis();
+
+        GregorianCalendar calendar = new GregorianCalendar(sourceZone);
+        calendar.clear();
+        calendar.set(2012, GregorianCalendar.JULY, 8, 2, 15, 27);
+
+        FastDateFormat format = FastDateFormat.getInstance(
+                "yyyy-MM-dd HH:mm:ss Z",
+                targetZone);
+
+        String actual = format.format(calendar);
+
+        SimpleDateFormat expectedFormat =
+                new SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z");
+        expectedFormat.setTimeZone(targetZone);
+
+        String expected = expectedFormat.format(new Date(expectedMillis));
+
+        assertEquals(expected, actual);
+    }
+
+    @Test
+    public void testFormatUnresolvedCalendarCrossesDateBoundary() {
+        TimeZone sourceZone = TimeZone.getTimeZone("GMT-05:00");
+        TimeZone targetZone = TimeZone.getTimeZone("GMT+10:00");
+
+        GregorianCalendar reference = new GregorianCalendar(sourceZone);
+        reference.clear();
+        reference.set(2013, GregorianCalendar.NOVEMBER, 20, 22, 50, 10);
+
+        long expectedMillis = reference.getTimeInMillis();
+
+        GregorianCalendar calendar = new GregorianCalendar(sourceZone);
+        calendar.clear();
+        calendar.set(2013, GregorianCalendar.NOVEMBER, 20, 22, 50, 10);
+
+        FastDateFormat format = FastDateFormat.getInstance(
+                "yyyy-MM-dd HH:mm:ss Z",
+                targetZone);
+
+        String actual = format.format(calendar);
+
+        SimpleDateFormat expectedFormat =
+                new SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z");
+        expectedFormat.setTimeZone(targetZone);
+
+        String expected = expectedFormat.format(new Date(expectedMillis));
+
+        assertEquals(expected, actual);
+    }
+
+    @Test
+    public void testFormatAlreadyResolvedCalendar() {
+        TimeZone sourceZone = TimeZone.getTimeZone("GMT+03:00");
+        TimeZone targetZone = TimeZone.getTimeZone("GMT-06:00");
+
+        GregorianCalendar calendar = new GregorianCalendar(sourceZone);
+        calendar.clear();
+        calendar.set(2014, GregorianCalendar.FEBRUARY, 5, 11, 20, 30);
+
+        Date date = calendar.getTime();
+
+        FastDateFormat format = FastDateFormat.getInstance(
+                "yyyy-MM-dd HH:mm:ss Z",
+                targetZone);
+
+        String actual = format.format(calendar);
+
+        SimpleDateFormat expectedFormat =
+                new SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z");
+        expectedFormat.setTimeZone(targetZone);
+
+        String expected = expectedFormat.format(date);
+
+        assertEquals(expected, actual);
+    }
+
+    @Test
+    public void testFormatDateUsesSameForcedTimezone() {
+        TimeZone targetZone = TimeZone.getTimeZone("GMT+05:30");
+
+        GregorianCalendar reference = new GregorianCalendar(
+                TimeZone.getTimeZone("GMT"));
+        reference.clear();
+        reference.set(2015, GregorianCalendar.AUGUST, 17, 6, 45, 12);
+
+        Date date = reference.getTime();
+
+        FastDateFormat format = FastDateFormat.getInstance(
+                "yyyy-MM-dd HH:mm:ss Z",
+                targetZone);
+
+        String actual = format.format(date);
+
+        SimpleDateFormat expectedFormat =
+                new SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z");
+        expectedFormat.setTimeZone(targetZone);
+
+        String expected = expectedFormat.format(date);
+
+        assertEquals(expected, actual);
+    }
+}
+```
+
+---
+
+## 6. Defect detection strategy
+
+| Test                                               | Purpose                                                 | BUGGY     | FIXED  |
+| -------------------------------------------------- | ------------------------------------------------------- | --------- | ------ |
+| `testFormatUnresolvedCalendarAcrossPositiveOffset` | Unresolved Calendar + different positive timezone       | **Fails** | Passes |
+| `testFormatUnresolvedCalendarAcrossNegativeOffset` | Reverse timezone direction                              | **Fails** | Passes |
+| `testFormatUnresolvedCalendarCrossesDateBoundary`  | Timezone conversion crossing midnight                   | **Fails** | Passes |
+| `testFormatAlreadyResolvedCalendar`                | Regression after `Calendar` has already been normalized | Passes    | Passes |
+| `testFormatDateUsesSameForcedTimezone`             | Normal `Date` formatting regression                     | Passes    | Passes |
+
+### Why the first three detect the defect
+
+For example, in the first test, the calendar used by the SUT is:
+
+```java
+calendar.clear();
+calendar.set(...);
+```
+
+and is passed directly to:
+
+```java
+format.format(calendar);
+```
+
+No `getTime()` is called on this calendar.
+
+In the **BUGGY** version, `FastDateFormat` changes the timezone before resolving the calendar's pending state. Therefore the formatted fields can represent the wrong instant/timezone conversion, causing the assertion to fail.
+
+In the **FIXED** version, the implementation first performs:
+
+```java
+calendar.getTime();
+```
+
+so the calendar's actual instant is resolved before the forced timezone is applied. The resulting formatted value matches the independently calculated expected value. 
+
+The expected value is deliberately calculated from a **different reference calendar**:
+
+```java
+long expectedMillis = reference.getTimeInMillis();
+```
+
+This is important because calling `getTime()` on the actual test calendar before invoking `FastDateFormat` would repair the buggy behavior and make the test unable to distinguish the two versions.
+
+### Expected overall result
+
+* **BUGGY:** 3 defect-oriented tests should fail; 2 regression tests should pass.
+* **FIXED:** all 5 tests should pass.
+
+---
+
+# Summary
+
+* **Root cause:** `FastDateFormat.format(Calendar, StringBuffer)` changed the timezone of an unresolved `Calendar` before forcing its pending fields to be resolved.
+* **Fix:** call `calendar.getTime()` before cloning/changing the timezone. This is the documented LANG-538 fix. ([Apache Issues][1])
+* **Targeted behavior:** formatting an unresolved calendar with a `FastDateFormat` that forces a different timezone.
+* **Generated tests:** **5**
+
+  * 3 direct defect-oriented cases
+  * 2 regression cases
+* **Independence:** the tests use different dates, time zones, patterns, and test structures from the supplied trigger. They derive the expected behavior from the semantics of timezone conversion rather than reproducing the trigger.
+
+# Limitations
+
+The supplied source excerpt does not include the exact complete `format(Calendar, StringBuffer)` section, but the relevant changed behavior is independently confirmed by the historical Apache source: the fixed version adds `calendar.getTime()` immediately before cloning and changing the timezone. 
+
+One additional limitation is that LANG-538 originated from a JDK `Calendar` state/timezone interaction reported on older JDKs. The exact manifestation can therefore depend on the JDK used to execute the historical Defects4J version. The Apache issue itself documents the original environment as Sun JDK 6. ([Apache Issues][1])
+
+[1]: https://issues.apache.org/jira/browse/LANG-538?utm_source=chatgpt.com "[LANG-538] DateFormatUtils.format does not correctly change Calendar TimeZone in certain situations - ASF Jira"
+[2]: https://commons.apache.org/proper/commons-lang/changes.html?utm_source=chatgpt.com "Apache Commons Lang Release Notes – Apache Commons Lang"

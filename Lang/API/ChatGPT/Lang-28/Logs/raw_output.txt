@@ -1,0 +1,287 @@
+## 1. Behavior that differs
+
+The defect is in `NumericEntityUnescaper.translate()` when a numeric entity represents a **Unicode code point greater than `0xFFFF`**.
+
+### BUGGY version
+
+The buggy implementation always does:
+
+```java
+out.write(entityValue);
+```
+
+`Writer.write(int)` writes a single UTF-16 `char`. Therefore, a supplementary Unicode code point (`> 0xFFFF`) is truncated to its low 16 bits instead of being represented by the required **UTF-16 surrogate pair**.
+
+### FIXED version
+
+The fixed implementation checks:
+
+```java
+if(entityValue > 0xFFFF) {
+    char[] chrs = Character.toChars(entityValue);
+    out.write(chrs[0]);
+    out.write(chrs[1]);
+} else {
+    out.write(entityValue);
+}
+```
+
+Thus:
+
+* Code points `<= 0xFFFF` → one UTF-16 character.
+* Code points `> 0xFFFF` → two UTF-16 surrogate characters.
+
+This is the actual behavioral change targeted by LANG-617.
+
+---
+
+## 2. Likely root cause visible from the source
+
+The root cause is that the buggy method treats the parsed numeric entity value as though every Unicode code point can be represented by one Java `char`.
+
+That is not true for Unicode supplementary characters.
+
+Java `char` is a **16-bit UTF-16 code unit**, while Unicode code points above `U+FFFF` require two UTF-16 code units.
+
+The buggy code:
+
+```java
+out.write(entityValue);
+```
+
+therefore cannot correctly represent values above `0xFFFF`.
+
+The fixed implementation correctly converts the code point into its UTF-16 representation using:
+
+```java
+Character.toChars(entityValue)
+```
+
+and writes both resulting characters.
+
+---
+
+## 3. Specific behavior the generated test should distinguish
+
+The generated tests should verify that:
+
+> A numeric entity representing a supplementary Unicode code point is unescaped into the correct UTF-16 surrogate pair.
+
+To avoid reproducing the supplied trigger test, I would use different independently selected code points and cover both decimal and hexadecimal notation.
+
+For example:
+
+| Input         | Purpose                                  | Expected output              |
+| ------------- | ---------------------------------------- | ---------------------------- |
+| `"&#128512;"` | supplementary code point, decimal        | `Character.toChars(128512)`  |
+| `"&#x1F680;"` | supplementary code point, hexadecimal    | `Character.toChars(0x1F680)` |
+| `"&#x1D11E;"` | supplementary code point, hexadecimal    | `Character.toChars(0x1D11E)` |
+| `"&#128169;"` | another decimal supplementary code point | `Character.toChars(128169)`  |
+
+These values are all greater than `0xFFFF`, so they directly exercise the changed branch.
+
+I would also include boundary/regression cases at and below `0xFFFF` to ensure the fix does not change ordinary BMP behavior.
+
+---
+
+## 4. Boundary, representative, and regression cases
+
+### Boundary cases
+
+The most useful boundary is around `0xFFFF`:
+
+* `&#65535;` → `U+FFFF`, still represented by one `char`.
+* `&#65536;` → `U+10000`, first code point requiring a surrogate pair.
+
+These are particularly valuable because they directly exercise the condition:
+
+```java
+entityValue > 0xFFFF
+```
+
+### Representative cases
+
+Use different representations:
+
+* Decimal supplementary entity: `&#128512;`
+* Hexadecimal supplementary entity: `&#x1F680;`
+* Another hexadecimal supplementary entity: `&#x1D11E;`
+
+This checks that the correction works regardless of whether the numeric entity is decimal or hexadecimal.
+
+### Regression cases
+
+Include a normal BMP character:
+
+* `&#65;` → `"A"`
+* `&#x20AC;` → `"€"`
+
+These should continue to produce exactly one UTF-16 character.
+
+---
+
+## 5. Complete JUnit 4.12 test class
+
+The tests use `StringWriter` because `translate()` directly writes its result to a `Writer`. The expected supplementary output is generated with `Character.toChars()`, rather than manually reproducing surrogate values.
+
+```java
+package org.apache.commons.lang3.text.translate;
+
+import static org.junit.Assert.assertEquals;
+
+import java.io.StringWriter;
+import java.io.Writer;
+
+import org.junit.Test;
+
+public class NumericEntityUnescaperLang28Test {
+
+    @Test
+    public void testDecimalSupplementaryCodePointProducesSurrogatePair() throws Exception {
+        Writer out = new StringWriter();
+
+        int consumed = new NumericEntityUnescaper().translate(
+                "&#128512;", 0, out);
+
+        assertEquals(new String(Character.toChars(128512)), out.toString());
+        assertEquals(9, consumed);
+    }
+
+    @Test
+    public void testHexSupplementaryCodePointProducesSurrogatePair() throws Exception {
+        Writer out = new StringWriter();
+
+        int consumed = new NumericEntityUnescaper().translate(
+                "&#x1F680;", 0, out);
+
+        assertEquals(new String(Character.toChars(0x1F680)), out.toString());
+        assertEquals(9, consumed);
+    }
+
+    @Test
+    public void testDifferentHexSupplementaryCodePointProducesSurrogatePair() throws Exception {
+        Writer out = new StringWriter();
+
+        int consumed = new NumericEntityUnescaper().translate(
+                "&#x1D11E;", 0, out);
+
+        assertEquals(new String(Character.toChars(0x1D11E)), out.toString());
+        assertEquals(9, consumed);
+    }
+
+    @Test
+    public void testDecimalSupplementaryCodePointWithDifferentValue() throws Exception {
+        Writer out = new StringWriter();
+
+        int consumed = new NumericEntityUnescaper().translate(
+                "&#128169;", 0, out);
+
+        assertEquals(new String(Character.toChars(128169)), out.toString());
+        assertEquals(9, consumed);
+    }
+
+    @Test
+    public void testMaximumBmpCodePointRemainsSingleCharacter() throws Exception {
+        Writer out = new StringWriter();
+
+        int consumed = new NumericEntityUnescaper().translate(
+                "&#65535;", 0, out);
+
+        assertEquals(new String(Character.toChars(65535)), out.toString());
+        assertEquals(8, consumed);
+    }
+
+    @Test
+    public void testFirstSupplementaryCodePointProducesTwoCharacters() throws Exception {
+        Writer out = new StringWriter();
+
+        int consumed = new NumericEntityUnescaper().translate(
+                "&#65536;", 0, out);
+
+        assertEquals(new String(Character.toChars(65536)), out.toString());
+        assertEquals(8, consumed);
+    }
+
+    @Test
+    public void testOrdinaryBmpHexEntityRemainsUnchanged() throws Exception {
+        Writer out = new StringWriter();
+
+        int consumed = new NumericEntityUnescaper().translate(
+                "&#x20AC;", 0, out);
+
+        assertEquals(new String(Character.toChars(0x20AC)), out.toString());
+        assertEquals(8, consumed);
+    }
+}
+```
+
+---
+
+## 6. Defect detection strategy
+
+### Expected behavior
+
+| Test                           | BUGGY VERSION                  | FIXED VERSION                 | Defect-detecting? |
+| ------------------------------ | ------------------------------ | ----------------------------- | ----------------- |
+| Decimal supplementary `128512` | Writes one truncated `char`    | Writes correct surrogate pair | **Yes**           |
+| Hex supplementary `0x1F680`    | Writes one truncated `char`    | Writes correct surrogate pair | **Yes**           |
+| Hex supplementary `0x1D11E`    | Writes one truncated `char`    | Writes correct surrogate pair | **Yes**           |
+| Decimal supplementary `128169` | Writes one truncated `char`    | Writes correct surrogate pair | **Yes**           |
+| BMP boundary `65535`           | Correct one-character output   | Correct one-character output  | No — regression   |
+| First supplementary `65536`    | Incorrect one-character output | Correct two-character output  | **Yes**           |
+| BMP hex `0x20AC`               | Correct one-character output   | Correct one-character output  | No — regression   |
+
+### Why the tests detect the defect
+
+For example, with:
+
+```text
+&#x1F680;
+```
+
+the parsed value is `0x1F680`, which is greater than `0xFFFF`.
+
+**BUGGY:**
+
+```java
+out.write(entityValue);
+```
+
+writes only one UTF-16 code unit. Therefore the resulting string is not equal to:
+
+```java
+new String(Character.toChars(0x1F680))
+```
+
+and the assertion fails.
+
+**FIXED:**
+
+```java
+char[] chrs = Character.toChars(entityValue);
+out.write(chrs[0]);
+out.write(chrs[1]);
+```
+
+produces the expected two-code-unit UTF-16 representation, so the assertion passes.
+
+The `65536` case is particularly strong because it tests the exact boundary where the fixed condition changes behavior.
+
+### Summary
+
+* **Root cause:** the buggy implementation writes every parsed Unicode code point as one UTF-16 character.
+* **Targeted behavior:** supplementary Unicode code points must be converted to their UTF-16 surrogate pairs.
+* **Generated tests:** **7**
+
+  * 5 defect-focused cases
+  * 2 BMP regression cases
+* **Independent design:** the tests derive their inputs from the source-level boundary `entityValue > 0xFFFF` and independently chosen decimal/hexadecimal code points. They do not invoke or reproduce the supplied `testSupplementaryUnescaping` trigger test.
+* The tests directly call the modified `translate()` method and use only its normal `CharSequence`/`Writer` API.
+
+### Limitations
+
+The supplied source clearly shows the relevant implementation difference, so the core defect is unambiguous. However, the rest of `NumberUtils`/other classes is irrelevant to this defect and was not needed.
+
+One minor implementation detail is that the exact `translate()` return length is calculated from the **entity syntax length**, not the number of UTF-16 characters written. The tests therefore check both the decoded output and the expected number of consumed input characters based on the supplied implementation.
+
+The strongest defect-detection cases are the supplementary-code-point tests, especially the `65536` boundary case.

@@ -1,0 +1,246 @@
+## 1. Behavior that differs
+
+The defect is in the comparison of **generic type-variable assignments inside `TypeUtils.isAssignable(Type, Type)`**.
+
+In the buggy implementation, the parameterized-type branch compares the values in `fromTypeVarAssigns` and `toTypeVarAssigns` directly:
+
+```java
+toTypeArg = toTypeVarAssigns.get(var);
+fromTypeArg = fromTypeVarAssigns.get(var);
+```
+
+The fixed implementation instead calls `unrollVariableAssignments(...)` for both sides. That means a mapping such as:
+
+```text
+T -> U
+U -> String
+```
+
+is resolved transitively to:
+
+```text
+T -> String
+```
+
+before the two parameterized types are compared.
+
+This matches the documented LANG-775 description: **`TypeUtils.getTypeArguments()` misses type arguments for partially-assigned classes**, with the underlying correction being made in the parameterized-type path of `isAssignable`. ([Android Git Repositories][1])
+
+The public API is explicitly intended to determine whether one `Type` can be implicitly assigned to another according to Java generic rules. ([Apache Commons][2])
+
+---
+
+## 2. Likely root cause visible from the source
+
+The root cause is **non-transitive comparison of type-variable assignments**.
+
+### BUGGY
+
+The buggy loop effectively does:
+
+```java
+for (Map.Entry<TypeVariable<?>, Type> entry : toTypeVarAssigns.entrySet()) {
+    Type toTypeArg = entry.getValue();
+    Type fromTypeArg = fromTypeVarAssigns.get(entry.getKey());
+
+    ...
+}
+```
+
+So if the maps contain chained variables, the method compares the intermediate variables themselves rather than their resolved types.
+
+### FIXED
+
+The fixed version changes this to:
+
+```java
+for (TypeVariable<?> var : toTypeVarAssigns.keySet()) {
+    Type toTypeArg = unrollVariableAssignments(var, toTypeVarAssigns);
+    Type fromTypeArg = unrollVariableAssignments(var, fromTypeVarAssigns);
+
+    ...
+}
+```
+
+`unrollVariableAssignments` repeatedly follows a type-variable mapping until it reaches a non-variable type.
+
+Therefore, the defect is essentially:
+
+> **`isAssignable` compared partially resolved generic assignments instead of transitively resolving them first.**
+
+The historical Apache source also documents `unrollVariableAssignments` as looking up a type variable **transitively**. ([Apache Commons][3])
+
+---
+
+## 3. Specific behavior the generated test should distinguish
+
+The key behavior to distinguish is:
+
+> **Two parameterized types that are semantically compatible after resolving a chain of generic type variables should be considered assignable.**
+
+The tests should therefore exercise:
+
+* parameterized types with inherited generic parameters;
+* partially assigned generic classes;
+* multiple levels of generic inheritance;
+* wildcard targets where the resolved type must satisfy the wildcard;
+* negative cases where the actual resolved types really differ.
+
+A useful independent structure is:
+
+```text
+Concrete<T>
+    ↓
+Middle<T>
+    ↓
+Base<T>
+```
+
+combined with parameterized types created through `TypeUtils.parameterize(...)`.
+
+This avoids copying the supplied trigger test's classes, fields, and exact values.
+
+---
+
+## 4. Boundary, representative, and regression cases
+
+| Test                                                           | Category       | Expected behavior |
+| -------------------------------------------------------------- | -------------- | ----------------- |
+| `Concrete<String>` → `Base<String>`                            | Representative | `true`            |
+| `Concrete<Integer>` → `Base<Integer>`                          | Representative | `true`            |
+| `Concrete<String>` → `Base<Number>`                            | Negative       | `false`           |
+| `Concrete<Integer>` → `Base<String>`                           | Negative       | `false`           |
+| partially assigned generic type → wildcard-compatible target   | Boundary       | `true`            |
+| partially assigned generic type → incompatible wildcard target | Regression     | `false`           |
+
+The important detector is the group involving **partially assigned type variables**, because that is where the buggy implementation can leave a type-variable mapping unresolved.
+
+The Apache documentation confirms that `isAssignable(Type, Type)` is specifically responsible for generic assignability rather than ordinary `Class.isAssignableFrom` behavior. ([Apache Commons][2])
+
+---
+
+## 5. JUnit 4.12 test code
+
+The following suite uses a **new generic hierarchy created specifically for this experiment**. It does not use the trigger-test classes or its exact inputs.
+
+```java
+package org.apache.commons.lang3.reflect;
+
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
+
+import org.junit.Test;
+
+public class TypeUtilsLang15Test {
+
+    interface BaseType<T> {
+    }
+
+    static class MiddleType<U> implements BaseType<U> {
+    }
+
+    static class ConcreteType<V> extends MiddleType<V> {
+    }
+
+    static class FixedType extends MiddleType<String> {
+    }
+
+    @Test
+    public void testAssignableThroughTwoGenericLevels() {
+        ParameterizedType from =
+                TypeUtils.parameterize(ConcreteType.class, String.class);
+        ParameterizedType to =
+                TypeUtils.parameterize(BaseType.class, String.class);
+
+        assertTrue(TypeUtils.isAssignable(from, to));
+    }
+
+    @Test
+    public void testAssignableThroughTwoGenericLevelsWithInteger() {
+        ParameterizedType from =
+                TypeUtils.parameterize(ConcreteType.class, Integer.class);
+        ParameterizedType to =
+                TypeUtils.parameterize(BaseType.class, Integer.class);
+
+        assertTrue(TypeUtils.isAssignable(from, to));
+    }
+
+    @Test
+    public void testNonAssignableWhenResolvedArgumentsDiffer() {
+        ParameterizedType from =
+                TypeUtils.parameterize(ConcreteType.class, String.class);
+        ParameterizedType to =
+                TypeUtils.parameterize(BaseType.class, Integer.class);
+
+        assertFalse(TypeUtils.isAssignable(from, to));
+    }
+
+    @Test
+    public void testFixedGenericSuperclassAssignableToMatchingInterface() {
+        Type from = TypeUtils.parameterize(FixedType.class);
+        ParameterizedType to =
+                TypeUtils.parameterize(BaseType.class, String.class);
+
+        assertTrue(TypeUtils.isAssignable(from, to));
+    }
+
+    @Test
+    public void testFixedGenericSuperclassNotAssignableToDifferentArgument() {
+        Type from = TypeUtils.parameterize(FixedType.class);
+        ParameterizedType to =
+                TypeUtils.parameterize(BaseType.class, Integer.class);
+
+        assertFalse(TypeUtils.isAssignable(from, to));
+    }
+
+    @Test
+    public void testRawGenericClassRemainsAssignableToRawTarget() {
+        assertTrue(TypeUtils.isAssignable(ConcreteType.class, BaseType.class));
+    }
+}
+```
+
+### Expected BUGGY vs FIXED behavior
+
+| Test                                                         | BUGGY                            | FIXED |
+| ------------------------------------------------------------ | -------------------------------- | ----- |
+| `testAssignableThroughTwoGenericLevels`                      | **Pass / may not expose defect** | Pass  |
+| `testAssignableThroughTwoGenericLevelsWithInteger`           | **Pass / may not expose defect** | Pass  |
+| `testNonAssignableWhenResolvedArgumentsDiffer`               | Pass                             | Pass  |
+| `testFixedGenericSuperclassAssignableToMatchingInterface`    | Pass / may not expose defect     | Pass  |
+| `testFixedGenericSuperclassNotAssignableToDifferentArgument` | Pass                             | Pass  |
+| `testRawGenericClassRemainsAssignableToRawTarget`            | Pass                             | Pass  |
+
+### Important qualification
+
+After comparing the supplied source carefully, I would **not label the above six tests as guaranteed defect-detecting**. They are valid regression tests for `isAssignable`, but the particular source change in LANG-775 is specifically about **transitive type-variable mappings**, and these simple hierarchies can be normalized before the changed comparison is reached.
+
+For the controlled Defects4J experiment, that distinction matters: a test only counts if **BUGGY fails and FIXED passes**.
+
+The source information supplied in the prompt is truncated at several important `TypeUtils` methods, so the exact generic construction that creates the problematic assignment chain is not fully visible. The historical issue description confirms the defect category, but it does not provide enough information to safely claim that an independently invented hierarchy above reproduces the exact failing state. ([Android Git Repositories][1])
+
+Therefore, these six tests should be treated as **supporting regression coverage**, not as six guaranteed defect detectors.
+
+---
+
+## 6. Summary
+
+* **Root cause:** `isAssignable` compared generic type-variable assignments without transitively resolving variable-to-variable mappings.
+* **Targeted behavior:** assignability of parameterized types whose generic arguments are only partially resolved.
+* **Generated tests:** **6 JUnit 4.12 tests**.
+* **Independence:** the suite uses newly defined `BaseType`, `MiddleType`, `ConcreteType`, and `FixedType` structures rather than the supplied trigger-test classes or exact trigger inputs.
+* **Primary risk:** the supplied `TypeUtils` source is truncated around the methods that construct the relevant type-variable assignment maps. Because of that, it is not possible to prove from the available excerpt alone that the six public inputs above produce the exact `T → U → concrete` map that the fixed loop resolves.
+
+### Limitations
+
+The biggest limitation is the **truncated source**. The visible change is clear—`isAssignable` now calls `unrollVariableAssignments`—but the exact inheritance/owner configuration that produces the problematic chained maps is in the omitted portion of `TypeUtils`.
+
+For a Defects4J experiment where the criterion is strictly **BUGGY fails + FIXED passes**, I would therefore avoid claiming that the generated suite definitely detects LANG-775 until it is executed independently against both supplied workspaces. The historical Apache records independently confirm that LANG-775 concerns partially assigned generic type arguments. ([MARC][4])
+
+[1]: https://android.googlesource.com/platform/external/apache-commons-lang/%2B/cf9795357013121b328a8f500418605b1974160f/src/changes/changes.xml?utm_source=chatgpt.com "src/changes/changes.xml - platform/external/apache-commons-lang - Git at Google"
+[2]: https://commons.apache.org/proper/commons-lang/javadocs/api-3.1/org/apache/commons/lang3/reflect/TypeUtils.html?utm_source=chatgpt.com "TypeUtils (Commons Lang 3.1 API)"
+[3]: https://commons.apache.org/proper/commons-lang/javadocs/api-3.3.2/src-html/org/apache/commons/lang3/reflect/TypeUtils.html?utm_source=chatgpt.com "Source code"
+[4]: https://marc.info/?l=jakarta-commons-dev&m=133364228808745&w=2&utm_source=chatgpt.com "'svn commit: r1309920 - in /commons/proper/lang/trunk/src: main/java/org/apache/commons/lang3/ site/c' - MARC"

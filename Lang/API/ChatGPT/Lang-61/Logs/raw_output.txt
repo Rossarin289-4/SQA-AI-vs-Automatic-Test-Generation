@@ -1,0 +1,428 @@
+## 1. SOURCE CODE ANALYSIS
+
+### 1.1 Behavior that differs
+
+The defect is in `StrBuilder.indexOf(String)` and its search logic.
+
+A `StrBuilder` has two different concepts:
+
+* `buffer` = the whole internal `char[]`, including unused capacity.
+* `size` = the actual logical length of the current string.
+
+Operations such as `deleteFirst`, `deleteAll`, `delete`, `setLength`, and `clear` can reduce `size` **without clearing the old characters from the unused part of `buffer`**.
+
+The documented LANG-294 issue confirms that `indexOf` incorrectly searched beyond the logical string into this leftover buffer data. The Apache issue specifically describes the defect as `indexOf` failing to respect the `size` boundary. ([Apache Issues][1])
+
+The 2.3 release notes also list LANG-294 as a fixed `StrBuilder` bug. ([Apache Commons][2])
+
+### 1.2 Likely root cause
+
+The root cause is a **logical-length vs. physical-buffer-length error**.
+
+Conceptually, the buggy implementation behaves like:
+
+```text
+search through buffer
+        ↓
+may inspect characters beyond size
+        ↓
+finds stale characters from previously deleted content
+```
+
+while the fixed implementation limits the search to:
+
+```text
+[0, size)
+```
+
+For example, suppose:
+
+```text
+buffer = [a b c d e f ...]
+size   = 3
+logical string = "abc"
+```
+
+The characters `d`, `e`, `f` are no longer part of the `StrBuilder`, even though they can still exist in `buffer`.
+
+Therefore:
+
+```java
+builder.indexOf("ef")
+```
+
+must return:
+
+```text
+-1
+```
+
+The Apache issue describes exactly this class of failure: data remaining beyond `size` was incorrectly considered part of the searchable string. ([Apache Issues][1])
+
+### 1.3 Behavior the generated tests should distinguish
+
+The most important distinction is:
+
+> **A substring that exists only in stale buffer data must not be reported as present.**
+
+The strongest test design is therefore to:
+
+1. Create a builder containing a known substring.
+2. Remove that substring using a normal public `StrBuilder` operation.
+3. Verify that `indexOf` no longer finds it.
+4. Also verify legitimate searches in the remaining logical content.
+
+This directly targets the source-level defect without reproducing the original trigger.
+
+---
+
+## 2. TEST CASE DESIGN
+
+I would use **5 complementary tests**.
+
+| Test | Scenario                                                                 | Expected result |
+| ---- | ------------------------------------------------------------------------ | --------------: |
+| 1    | Delete a suffix, then search for the removed suffix                      |            `-1` |
+| 2    | Delete a middle section, then search for the removed section             |            `-1` |
+| 3    | Clear builder, then search for old content                               |            `-1` |
+| 4    | Search for content that still exists after deletion                      |   correct index |
+| 5    | Search for a substring spanning the end of the remaining logical content |            `-1` |
+
+### Test 1 — Removed suffix
+
+Use a string different from the trigger and remove its ending.
+
+The old characters remain in the internal buffer, but they are outside `size`.
+
+```text
+logical content: "redgreen"
+after deletion:  "red"
+stale buffer:    "green"
+```
+
+Searching for `"green"` must return `-1`.
+
+### Test 2 — Removed middle section
+
+This checks that the defect is not limited to truncating the entire suffix.
+
+For example:
+
+```text
+"cat123dog"
+delete "123"
+→ "catdog"
+```
+
+Searching for `"123"` must return `-1`.
+
+This is particularly useful because `deleteImpl` shifts the remaining characters while the old tail can remain in the backing array.
+
+### Test 3 — Clear
+
+`clear()` explicitly sets:
+
+```java
+size = 0;
+```
+
+but does not reduce the backing buffer.
+
+Therefore the logical builder is empty even though old characters can remain physically in `buffer`.
+
+`indexOf` must return `-1`.
+
+### Test 4 — Existing content
+
+A defect-oriented suite should also make sure the fix has not simply made `indexOf` stop searching.
+
+After deleting part of the content, search for something that is still logically present.
+
+### Test 5 — Match would require going beyond `size`
+
+This is a strong boundary test.
+
+If the logical content ends with `"ab"` and the stale buffer begins with `"cde"`, searching for `"bcde"` must return `-1`.
+
+The search must not construct a match by crossing the logical boundary.
+
+---
+
+## 3. JUNIT 4.12 TEST CODE
+
+```java
+package org.apache.commons.lang.text;
+
+import static org.junit.Assert.assertEquals;
+
+import org.junit.Test;
+
+public class StrBuilderLang61Test {
+
+    @Test
+    public void testIndexOfDoesNotFindRemovedSuffix() {
+        StrBuilder builder = new StrBuilder("redgreen");
+
+        builder.deleteFirst("green");
+
+        assertEquals(-1, builder.indexOf("green"));
+    }
+
+    @Test
+    public void testIndexOfDoesNotFindRemovedMiddleContent() {
+        StrBuilder builder = new StrBuilder("cat123dog");
+
+        builder.deleteFirst("123");
+
+        assertEquals(-1, builder.indexOf("123"));
+    }
+
+    @Test
+    public void testIndexOfDoesNotSearchClearedBuffer() {
+        StrBuilder builder = new StrBuilder("sunshine");
+
+        builder.clear();
+
+        assertEquals(-1, builder.indexOf("shine"));
+    }
+
+    @Test
+    public void testIndexOfStillFindsContentInsideLogicalSize() {
+        StrBuilder builder = new StrBuilder("redgreen");
+
+        builder.deleteFirst("green");
+
+        assertEquals(1, builder.indexOf("ed"));
+    }
+
+    @Test
+    public void testIndexOfDoesNotMatchAcrossLogicalEnd() {
+        StrBuilder builder = new StrBuilder("ab12345");
+
+        builder.setLength(2);
+
+        assertEquals(-1, builder.indexOf("b123"));
+    }
+}
+```
+
+---
+
+## 4. DEFECT DETECTION STRATEGY
+
+### Test 1 — `testIndexOfDoesNotFindRemovedSuffix`
+
+Initial state:
+
+```text
+"redgreen"
+```
+
+After deletion:
+
+```text
+"red"
+```
+
+The substring `"green"` is no longer logically present.
+
+**BUGGY VERSION:**
+Expected to fail because `indexOf("green")` can inspect stale characters beyond `size` and return a non-negative index.
+
+**FIXED VERSION:**
+Expected to pass with:
+
+```text
+-1
+```
+
+This directly targets the defect mechanism.
+
+---
+
+### Test 2 — `testIndexOfDoesNotFindRemovedMiddleContent`
+
+Initial:
+
+```text
+"cat123dog"
+```
+
+After deleting `"123"`:
+
+```text
+"catdog"
+```
+
+`"123"` should not be searchable anymore.
+
+**BUGGY VERSION:**
+Expected to fail if `indexOf` examines stale data remaining beyond the logical size.
+
+**FIXED VERSION:**
+Expected:
+
+```text
+-1
+```
+
+This provides a different mutation pattern from a simple suffix truncation.
+
+---
+
+### Test 3 — `testIndexOfDoesNotSearchClearedBuffer`
+
+After:
+
+```java
+builder.clear();
+```
+
+the logical size is zero.
+
+The backing buffer can still contain the characters from `"sunshine"`.
+
+**BUGGY VERSION:**
+Expected to fail because the implementation can search the physical buffer rather than only the logical content.
+
+**FIXED VERSION:**
+Expected:
+
+```text
+-1
+```
+
+This specifically exercises the `size == 0` boundary.
+
+---
+
+### Test 4 — `testIndexOfStillFindsContentInsideLogicalSize`
+
+After deleting `"green"`:
+
+```text
+logical content = "red"
+```
+
+The substring `"ed"` is still valid and begins at index `1`.
+
+**BUGGY VERSION:**
+Expected:
+
+```text
+1
+```
+
+**FIXED VERSION:**
+Expected:
+
+```text
+1
+```
+
+This is a regression/control test ensuring that a correction to the search boundary does not prevent legitimate searches.
+
+---
+
+### Test 5 — `testIndexOfDoesNotMatchAcrossLogicalEnd`
+
+Initial:
+
+```text
+"ab12345"
+```
+
+After:
+
+```java
+builder.setLength(2);
+```
+
+the logical content is:
+
+```text
+"ab"
+```
+
+The old `"12345"` characters can remain in the backing array.
+
+The search string `"b123"` would require `indexOf` to start at the final logical character `b` and continue beyond `size`.
+
+**BUGGY VERSION:**
+Expected to fail if it searches beyond the logical boundary and sees the stale suffix.
+
+**FIXED VERSION:**
+Expected:
+
+```text
+-1
+```
+
+This is a particularly direct test of the boundary condition.
+
+---
+
+### Defect-detection criterion
+
+The decisive tests are **1, 2, 3, and 5**.
+
+For each of those:
+
+```text
+BUGGY  → test fails
+FIXED  → test passes
+```
+
+Test 4 is a regression/control case:
+
+```text
+BUGGY  → passes
+FIXED  → passes
+```
+
+That control is useful because the intended fix should restrict the search range, not disable `indexOf`.
+
+---
+
+## 5. SUMMARY
+
+* **Root cause:** `indexOf` did not properly respect `StrBuilder.size` and could search stale characters remaining in the internal `buffer`. The Apache LANG-294 report explicitly identifies this as the cause. ([Apache Issues][1])
+* **Targeted behavior:** `indexOf` must search only the current logical contents of the builder.
+* **Generated tests:** **5**
+* **Defect-oriented tests:** 4
+* **Regression/control test:** 1
+* **Main defect condition:** content removed from the logical builder must not subsequently be found by `indexOf`.
+* **Independence from trigger:** the tests use different strings, different mutations, and different searched substrings from the reported trigger. They are derived from the source-level invariant that searching must stop at `size`, rather than copying the original trigger scenario.
+
+The LANG-294 issue itself records that the original problem was caused by `indexOf` searching into leftover buffer data beyond the actual string length. ([Apache Issues][1])
+
+---
+
+## 6. LIMITATIONS
+
+The supplied source excerpt truncates the actual `indexOf` implementation, so the exact buggy loop condition is not visible in the prompt.
+
+However, the defect mechanism can be independently established from:
+
+1. the `buffer` / `size` design visible in the supplied source,
+2. the `clear()` and `setLength()` behavior,
+3. the documented LANG-294 report, which explicitly states that `indexOf` searched beyond the actual `size`. ([Apache Issues][1])
+
+Therefore, the strongest confirmation is still to execute the generated class independently against both:
+
+```text
+Lang-61-buggy
+Lang-61-fixed
+```
+
+with the required criterion:
+
+```text
+BUGGY fails
+FIXED passes
+```
+
+The Apache release documentation confirms that LANG-294 was fixed in Commons Lang 2.3. ([Apache Commons][2])
+
+[1]: https://issues.apache.org/jira/browse/LANG-294?utm_source=chatgpt.com "[LANG-294] StrBuilder.replaceAll and StrBuilder.deleteAll can throw ArrayIndexOutOfBoundsException. - ASF Jira"
+[2]: https://commons.apache.org/proper/commons-lang/upgradeto2_3.html?utm_source=chatgpt.com "2.3 Release Notes – Apache Commons Lang"

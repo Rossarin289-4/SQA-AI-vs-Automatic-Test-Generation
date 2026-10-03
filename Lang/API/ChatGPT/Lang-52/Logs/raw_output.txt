@@ -1,0 +1,254 @@
+## 1. Behavior that differs
+
+The important difference is in `escapeJavaStyleString(Writer, String, boolean)`.
+
+### BUGGY version
+
+For normal printable characters, the `switch` handles:
+
+* `'`
+* `"`
+* `\`
+* everything else
+
+There is **no special handling for `/`**.
+
+Therefore, when `escapeJavaScript()` is called with `/`, the buggy version writes `/` unchanged.
+
+### FIXED version
+
+The fixed implementation adds:
+
+```java
+case '/':
+    out.write('\\');
+    out.write('/');
+    break;
+```
+
+So JavaScript escaping changes `/` into `\/`.
+
+Because `escapeJavaScript(String)` calls:
+
+```java
+escapeJavaStyleString(str, true);
+```
+
+the modified behavior is directly observable through the public `escapeJavaScript()` API.
+
+The writer overload is also affected because it eventually uses the same worker implementation.
+
+---
+
+## 2. Likely root cause visible from the source
+
+The root cause is a **missing `/` case in the character escaping switch**.
+
+The buggy implementation treats `/` as an ordinary character:
+
+```java
+default :
+    out.write(ch);
+    break;
+```
+
+The fixed implementation explicitly recognizes `/` and emits two characters:
+
+```java
+'\\' + '/'
+```
+
+In other words:
+
+| Input character   | BUGGY | FIXED |
+| ----------------- | ----- | ----- |
+| `/`               | `/`   | `\/`  |
+| `"`               | `\"`  | `\"`  |
+| `\`               | `\\`  | `\\`  |
+| `'` in JavaScript | `\'`  | `\'`  |
+
+The defect is therefore specifically about **JavaScript escaping of forward slashes**.
+
+---
+
+## 3. Specific behavior that a generated test should distinguish
+
+A defect-oriented test should give `escapeJavaScript()` a string containing `/` and assert that every forward slash is escaped.
+
+For example:
+
+```text
+input:  /
+expected: \/
+```
+
+On the two versions:
+
+* **BUGGY:** returns `/`
+* **FIXED:** returns `\/`
+
+This is a clean oracle because the expected behavior is directly visible from the fixed source.
+
+The tests should also verify that the fix does not accidentally change unrelated JavaScript escaping behavior.
+
+---
+
+## 4. Boundary cases, representative cases, and regression cases
+
+I would use **6 complementary tests**.
+
+| Test | Input                           | Expected             | Purpose                                                |
+| ---- | ------------------------------- | -------------------- | ------------------------------------------------------ |
+| 1    | `"/"`                           | `"\\/"`              | Minimal boundary case: exactly one slash               |
+| 2    | `"a/b"`                         | `"a\\/b"`            | Slash surrounded by ordinary characters                |
+| 3    | `"path/to/file"`                | `"path\\/to\\/file"` | Multiple slash occurrences                             |
+| 4    | `"http://x"`                    | `"http:\\/\\/x"`     | Consecutive slash behavior                             |
+| 5    | `"a/b\"c"`                      | `"a\\/b\\\"c"`       | Regression: slash fix must coexist with quote escaping |
+| 6    | `"/"` through `Writer` overload | `"\\/"`              | Verifies the public writer-based JavaScript API        |
+
+The first four directly target the missing `/` branch.
+
+Tests 5 and 6 provide complementary coverage without relying on the original trigger test.
+
+In particular, test 6 is useful because the modified private worker is reached through both public APIs.
+
+---
+
+## 5. Complete JUnit 4.12 test class
+
+```java
+package org.apache.commons.lang;
+
+import static org.junit.Assert.assertEquals;
+
+import java.io.StringWriter;
+
+import org.junit.Test;
+
+public class StringEscapeUtilsLang52Test {
+
+    @Test
+    public void testEscapeJavaScriptSingleSlash() {
+        assertEquals("\\/", StringEscapeUtils.escapeJavaScript("/"));
+    }
+
+    @Test
+    public void testEscapeJavaScriptSlashBetweenCharacters() {
+        assertEquals("a\\/b", StringEscapeUtils.escapeJavaScript("a/b"));
+    }
+
+    @Test
+    public void testEscapeJavaScriptMultipleSlashes() {
+        assertEquals(
+                "path\\/to\\/file",
+                StringEscapeUtils.escapeJavaScript("path/to/file"));
+    }
+
+    @Test
+    public void testEscapeJavaScriptConsecutiveSlashes() {
+        assertEquals(
+                "http:\\/\\/x",
+                StringEscapeUtils.escapeJavaScript("http://x"));
+    }
+
+    @Test
+    public void testEscapeJavaScriptSlashWithQuote() {
+        assertEquals(
+                "a\\/b\\\"c",
+                StringEscapeUtils.escapeJavaScript("a/b\"c"));
+    }
+
+    @Test
+    public void testEscapeJavaScriptWriterWithSlash() throws Exception {
+        StringWriter writer = new StringWriter();
+
+        StringEscapeUtils.escapeJavaScript(writer, "/");
+
+        assertEquals("\\/", writer.toString());
+    }
+}
+```
+
+---
+
+## 6. Defect Detection Strategy
+
+### Test 1 — single slash
+
+**Input:** `/`
+
+* **BUGGY VERSION:** returns `/`
+* **FIXED VERSION:** returns `\/`
+* **Result:** **DEFECT-DETECTING**
+
+This is the smallest possible input that reaches the missing `/` branch.
+
+### Test 2 — slash between characters
+
+**Input:** `a/b`
+
+* **BUGGY VERSION:** returns `a/b`
+* **FIXED VERSION:** returns `a\/b`
+* **Result:** **DEFECT-DETECTING**
+
+This confirms the behavior is not limited to a slash-only string.
+
+### Test 3 — multiple slashes
+
+**Input:** `path/to/file`
+
+* **BUGGY VERSION:** returns `path/to/file`
+* **FIXED VERSION:** returns `path\/to\/file`
+* **Result:** **DEFECT-DETECTING**
+
+This verifies that every occurrence of `/` is escaped rather than only the first one.
+
+### Test 4 — consecutive slashes
+
+**Input:** `http://x`
+
+* **BUGGY VERSION:** returns `http://x`
+* **FIXED VERSION:** returns `http:\/\/x`
+* **Result:** **DEFECT-DETECTING**
+
+This covers adjacent `/` characters and ensures both are processed independently.
+
+### Test 5 — slash combined with quote
+
+**Input:** `a/b"c`
+
+* **BUGGY VERSION:** returns `a/b\"c`
+* **FIXED VERSION:** returns `a\/b\"c`
+* **Result:** **DEFECT-DETECTING**
+
+This is a combination/regression case. It checks that the newly required slash escaping occurs while the existing quote escaping remains correct.
+
+### Test 6 — Writer API
+
+**Input:** `/`
+
+* **BUGGY VERSION:** writes `/`
+* **FIXED VERSION:** writes `\/`
+* **Result:** **DEFECT-DETECTING**
+
+This reaches the same modified worker through the public `escapeJavaScript(Writer, String)` API rather than the `String`-returning API.
+
+### Overall detection
+
+All six tests are expected to fail on the **BUGGY** version because their assertions require `/` to become `\/`.
+
+All six are expected to pass on the **FIXED** version.
+
+### Summary
+
+* **Root cause:** the buggy `escapeJavaStyleString` implementation has no `case '/'`.
+* **Targeted behavior:** JavaScript escaping must convert `/` to `\/`.
+* **Number of generated tests:** **6**
+* **Defect-detecting tests:** **6/6 expected**
+* **Independence from trigger:** the tests are derived directly from the source-level difference—the newly added `/` branch—and use independently selected inputs such as `/`, `a/b`, `path/to/file`, and `http://x`. They do not invoke or reproduce the supplied trigger test.
+
+## Limitations
+
+The analysis is based on the supplied BUGGY and FIXED implementations rather than the complete historical bug report or the original trigger-test implementation. Therefore, the tests intentionally focus on the behavior that can be established with high confidence from the source diff: **forward-slash escaping in JavaScript mode**.
+
+The exact historical rationale for why `/` needed escaping is not required to detect this defect; the observable contract is unambiguous from the fixed implementation.

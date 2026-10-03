@@ -1,0 +1,91 @@
+### Identify
+
+1. **The behavior that differs**:
+   In the buggy version, the `escape` method in `Entities` iterates through a string using `str.charAt(i)` and treats each `char` individually as a 16-bit code unit. When given Unicode characters outside the Basic Multilingual Plane (BMP)—which are represented in Java using surrogate pairs (two `char` code units forming a single supplementary code point $\ge 0x010000$)—the buggy version processes each surrogate half independently. Thus, a surrogate pair is incorrectly escaped as two separate numeric character references (one for the high surrogate and one for the low surrogate) rather than being translated via `Character.codePointAt` into a single supplementary code point and emitted as one entity (or correctly skipped/handled).
+
+2. **The likely root cause visible from the source**:
+   - *Buggy*: `char c = str.charAt(i);` followed by `int entityName = this.entityName(c);` and checking `if (c > 0x7F)`. It handles 16-bit `char` elements directly.
+   - *Fixed*: Uses `int c = Character.codePointAt(str, i);` and checks `if (c >= 0x010000 && i < len - 1)` to correctly consume surrogate pairs and format high Unicode/supplementary characters.
+
+3. **The specific behavior that a generated test should distinguish between the buggy and fixed versions**:
+   A test passing a string containing supplementary characters (e.g., characters encoded with surrogate pairs, such as emojis or rare CJK extensions above `0xFFFF`) to `StringEscapeUtils.escapeHtml()` or `Entities.escape()` will observe that the buggy version produces two separate entity references (e.g., `&#55356;&#57216;`), whereas the fixed version produces a single correct entity reference (e.g., `&#127440;` depending on the numeric value of the code point).
+
+4. **Boundary cases, representative cases, and regression cases that are independently designed**:
+   - *Representative Supplementary Character*: A high-Unicode character (surrogate pair) test case simulating characters beyond the BMP.
+   - *Boundary BMP Character*: High ASCII characters right below supplementary range (e.g., `\u007F`, `\u00FF`, `\uFFFF`).
+   - *Normal ASCII Regression Case*: Standard ASCII text to ensure no regressions on basic inputs.
+
+---
+
+### Test Case Design
+
+- **Test 1 (`testEscapeSupplementaryUnicodeCharacter`)**: Passes a string containing a supplementary Unicode character (surrogate pair) into `StringEscapeUtils.escapeHtml()`. Asserts that the resulting escaped string corresponds to the single combined code point reference rather than two split surrogate references.
+- **Test 2 (`testEscapeHighBmpCharacterBoundary`)**: Tests a high BMP character (e.g., right below the surrogate block or at the edge of 16-bit range) to ensure correct single-character escaping behavior.
+- **Test 3 (`testEscapeMixedSupplementaryAndAscii`)**: Tests a string combining normal ASCII text and supplementary characters to verify iteration advancement (`i++` in the fixed version when handling surrogate pairs).
+
+---
+
+### JUnit 4.12 Test Code
+
+```java
+package org.apache.commons.lang;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+
+public class Lang42IndependentTest {
+
+    @Test
+    public void testEscapeSupplementaryUnicodeCharacter() {
+        // A supplementary character represented as a surrogate pair in Java (e.g., U+1D300 or similar)
+        // \ud834\udf00 represents U+1D300 (Tetragram for Centre)
+        String input = "\ud834\udf00";
+        String escaped = StringEscapeUtils.escapeHtml(input);
+        
+        // In the fixed version, this is treated as a single code point (119552) and escaped as &#119552;
+        // In the buggy version, it splits into two separate entities: &#55348;&#57600;
+        assertEquals("&#119552;", escaped);
+    }
+
+    @Test
+    public void testEscapeHighBmpCharacterBoundary() {
+        // Character just below surrogate range / high BMP
+        String input = "\uFFFF";
+        String escaped = StringEscapeUtils.escapeHtml(input);
+        assertEquals("&#65535;", escaped);
+    }
+
+    @Test
+    public void testEscapeMixedSupplementaryAndAscii() {
+        // Mixing ASCII and a supplementary character to test index shifting
+        String input = "A\ud834\udf00B";
+        String escaped = StringEscapeUtils.escapeHtml(input);
+        assertEquals("A&#119552;B", escaped);
+    }
+}
+```
+
+---
+
+### Defect Detection Strategy
+
+- **BUGGY VERSION**: 
+  - `testEscapeSupplementaryUnicodeCharacter` will evaluate `\ud834` and `\udf00` separately as two `char` values (`55348` and `57600`), resulting in `&#55348;&#57600;`. This will fail the assertion expecting `&#119552;`.
+  - `testEscapeMixedSupplementaryAndAscii` will fail similarly because it will split the surrogate pair across characters instead of parsing it as a single code point `0x1D300`.
+- **FIXED VERSION**: 
+  - `Character.codePointAt` correctly identifies the surrogate pair as code point `119552`, writes `&#119552;`, and increments the loop index `i` properly. All assertions pass successfully.
+
+---
+
+### Summary
+
+- **Root cause**: The production code processed strings character-by-character using `char` primitives (`str.charAt(i)`), failing to recognize 32-bit Unicode supplementary characters represented as surrogate pairs.
+- **Targeted behavior**: Correct handling and escaping of Unicode surrogate pairs into single code point entity references.
+- **Number of generated tests**: 3 independent test methods.
+- **Why the tests are independent from the original trigger test**: They use different supplementary Unicode characters (e.g., `\ud834\udf00` / U+1D300 instead of the exact high unicode character used in the original trigger test) and test different interaction scenarios such as mixed ASCII/supplementary strings and BMP boundary conditions.
+
+---
+
+### Limitations
+
+The test suite relies entirely on Java's built-in UTF-16 surrogate pair representation for characters outside the BMP. Behavior may vary slightly depending on runtime environment font support or string encoding defaults, but string escaping logic operates purely on code point arithmetic and string manipulation, making these tests robust across environments.

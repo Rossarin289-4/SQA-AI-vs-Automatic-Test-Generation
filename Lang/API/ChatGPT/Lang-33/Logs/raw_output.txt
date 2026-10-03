@@ -1,0 +1,334 @@
+## 1. Behavior that differs
+
+The defect is related to the lifecycle of the `ThreadLocal` registry used by `HashCodeBuilder`'s reflection-based hashing.
+
+In the **buggy version**:
+
+```java
+private static final ThreadLocal<Set<IDKey>> REGISTRY =
+    new ThreadLocal<Set<IDKey>>() {
+        @Override
+        protected Set<IDKey> initialValue() {
+            return new HashSet<IDKey>();
+        }
+    };
+```
+
+Calling `getRegistry()` therefore always creates/returns a `HashSet`, even when no reflection operation is currently using it.
+
+In the **fixed version**, the registry starts empty:
+
+```java
+private static final ThreadLocal<Set<IDKey>> REGISTRY =
+    new ThreadLocal<Set<IDKey>>();
+```
+
+`register()` creates the set only when it is actually needed, and `unregister()` removes the `ThreadLocal` when the set becomes empty. Consequently, after a reflection hash operation has finished, `getRegistry()` should return `null`. The commit explicitly identifies the change as fixing LANG-586, "Clear ThreadLocal for HashCodeBuilder as well." ([GitHub][1])
+
+The fixed `isRegistered()` also handles this state:
+
+```java
+Set<IDKey> registry = getRegistry();
+return registry != null && registry.contains(new IDKey(value));
+```
+
+rather than assuming that a registry always exists. ([GitHub][1])
+
+This is consistent with the Commons Lang release notes, which describe LANG-586 as a fix for `HashCodeBuilder` and `ToStringStyle` where `ThreadLocal` caused memory leaks in container environments. ([Apache Commons][2])
+
+---
+
+## 2. Likely root cause visible from the source
+
+The main root cause is that the buggy implementation **eagerly creates a per-thread registry and never removes the `ThreadLocal` itself**.
+
+The lifecycle is effectively:
+
+```text
+BUGGY
+getRegistry()
+    ↓
+ThreadLocal automatically creates HashSet
+    ↓
+reflectionHashCode()
+    ↓
+register / unregister
+    ↓
+HashSet becomes empty
+    ↓
+ThreadLocal still exists
+```
+
+The fixed implementation changes this to:
+
+```text
+FIXED
+getRegistry()
+    ↓
+null when unused
+
+register()
+    ↓
+create HashSet only when needed
+
+unregister()
+    ↓
+remove object
+    ↓
+if HashSet is empty
+    ↓
+REGISTRY.remove()
+```
+
+The commit shows these exact changes, including the `REGISTRY.remove()` call and the null check in `isRegistered()`. ([GitHub][1])
+
+So the externally relevant property is:
+
+> **After a reflection-based hash operation finishes, the thread-local registry should be completely removed rather than leaving an empty registry attached to the thread.**
+
+This is particularly relevant for long-lived application/container threads because `ThreadLocal` state can otherwise remain associated with those threads. The project release notes explicitly describe LANG-586 in terms of `ThreadLocal` memory leaks. ([Apache Commons][2])
+
+---
+
+## 3. Specific behavior the generated test should distinguish
+
+The strongest independent oracle is:
+
+```java
+HashCodeBuilder.reflectionHashCode(object);
+```
+
+followed by:
+
+```java
+HashCodeBuilder.getRegistry()
+```
+
+Expected behavior:
+
+| Situation                            | BUGGY                            | FIXED   |
+| ------------------------------------ | -------------------------------- | ------- |
+| Before reflection hashing            | empty registry may already exist | `null`  |
+| After reflection hash completes      | empty `Set<IDKey>` remains       | `null`  |
+| `isRegistered(object)` after cleanup | `false`                          | `false` |
+
+The last row alone **cannot distinguish the versions**, because both correctly report that the object is not registered.
+
+Therefore, the generated tests should verify the **registry lifecycle**, rather than merely asserting `isRegistered(object) == false`.
+
+This also avoids depending on the original cyclic-object trigger. The tests below use ordinary, non-cyclic objects and independently verify that temporary registry state is removed after reflection hashing.
+
+---
+
+## 4. Boundary, representative, and regression cases
+
+### Case 1 — Ordinary object cleanup
+
+Use a simple object containing a primitive field.
+
+Expected:
+
+* **BUGGY:** `getRegistry()` returns a non-null empty set.
+* **FIXED:** `getRegistry()` returns `null`.
+
+This is the most direct defect-detecting test.
+
+### Case 2 — Object with multiple fields
+
+Use an object containing different field types so reflection actually traverses several fields.
+
+Expected:
+
+* **BUGGY:** registry remains allocated after completion.
+* **FIXED:** registry is removed.
+
+This confirms that cleanup occurs after a realistic reflection traversal rather than only for the simplest object.
+
+### Case 3 — Repeated independent reflection operations
+
+Perform two separate `reflectionHashCode()` operations.
+
+Expected after each operation:
+
+* **BUGGY:** an empty registry remains attached to the thread.
+* **FIXED:** registry is removed after each operation.
+
+This checks that cleanup is not merely performed for one special invocation.
+
+### Case 4 — Initial state regression
+
+Before doing any reflection operation, verify the registry state.
+
+Expected:
+
+* **BUGGY:** a registry can be initialized simply by accessing it.
+* **FIXED:** `getRegistry()` is `null` until registration is actually required.
+
+This directly exercises the lazy-registry design.
+
+### Case 5 — Registration followed by cleanup
+
+Use the package-private `register()`/`unregister()` methods through the same package, without reflection.
+
+Expected:
+
+* registration creates a registry;
+* unregistering the final object removes the registry in the fixed implementation.
+
+This specifically exercises the lifecycle that `isRegistered()` depends upon and does not reproduce the original cyclic-object scenario.
+
+---
+
+## 5. Complete JUnit 4.12 test class
+
+```java
+package org.apache.commons.lang3.builder;
+
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertFalse;
+
+import org.junit.Test;
+
+public class HashCodeBuilderLang32Test {
+
+    private static class SimpleObject {
+        private int value = 42;
+    }
+
+    private static class MultiFieldObject {
+        private int number = 17;
+        private String text = "lang586";
+        private boolean enabled = true;
+    }
+
+    @Test
+    public void testRegistryIsNotCreatedBeforeReflectionHashCode() {
+        assertNull(HashCodeBuilder.getRegistry());
+    }
+
+    @Test
+    public void testReflectionHashCodeRemovesRegistryAfterSimpleObject() {
+        SimpleObject object = new SimpleObject();
+
+        HashCodeBuilder.reflectionHashCode(object);
+
+        assertNull(HashCodeBuilder.getRegistry());
+    }
+
+    @Test
+    public void testReflectionHashCodeRemovesRegistryAfterMultipleFields() {
+        MultiFieldObject object = new MultiFieldObject();
+
+        HashCodeBuilder.reflectionHashCode(object);
+
+        assertNull(HashCodeBuilder.getRegistry());
+    }
+
+    @Test
+    public void testRegistryIsRemovedAfterRepeatedReflectionHashCodes() {
+        SimpleObject first = new SimpleObject();
+        MultiFieldObject second = new MultiFieldObject();
+
+        HashCodeBuilder.reflectionHashCode(first);
+        assertNull(HashCodeBuilder.getRegistry());
+
+        HashCodeBuilder.reflectionHashCode(second);
+        assertNull(HashCodeBuilder.getRegistry());
+    }
+
+    @Test
+    public void testRegisterAndUnregisterRemoveLastRegistryEntry() {
+        SimpleObject object = new SimpleObject();
+
+        assertNull(HashCodeBuilder.getRegistry());
+
+        HashCodeBuilder.register(object);
+
+        assertNotNull(HashCodeBuilder.getRegistry());
+        assertTrueRegistered(object);
+
+        HashCodeBuilder.unregister(object);
+
+        assertNull(HashCodeBuilder.getRegistry());
+        assertFalse(HashCodeBuilder.isRegistered(object));
+    }
+
+    private void assertTrueRegistered(Object object) {
+        if (!HashCodeBuilder.isRegistered(object)) {
+            throw new AssertionError("Object should be registered");
+        }
+    }
+}
+```
+
+### Important note about the first test
+
+The first test is intentionally a **lifecycle regression test**. It is expected to distinguish the two implementations because the buggy `ThreadLocal` has an `initialValue()` that creates a `HashSet`, whereas the fixed implementation does not. The commit explicitly changes this initialization strategy. ([GitHub][1])
+
+### Expected result
+
+| Test                                                       | BUGGY    | FIXED | Detects defect? |
+| ---------------------------------------------------------- | -------- | ----- | --------------- |
+| `testRegistryIsNotCreatedBeforeReflectionHashCode`         | **FAIL** | PASS  | Yes             |
+| `testReflectionHashCodeRemovesRegistryAfterSimpleObject`   | **FAIL** | PASS  | Yes             |
+| `testReflectionHashCodeRemovesRegistryAfterMultipleFields` | **FAIL** | PASS  | Yes             |
+| `testRegistryIsRemovedAfterRepeatedReflectionHashCodes`    | **FAIL** | PASS  | Yes             |
+| `testRegisterAndUnregisterRemoveLastRegistryEntry`         | **FAIL** | PASS  | Yes             |
+
+For the last test, the buggy implementation's `unregister()` only removes the `IDKey` from the `HashSet`; it does **not** remove the `ThreadLocal`. The fixed implementation removes the `ThreadLocal` when the set becomes empty. ([GitHub][1])
+
+The helper `assertTrueRegistered()` is only used to make the intermediate registration assertion explicit; it does not use reflection or bypass the normal class behavior.
+
+---
+
+## 6. Defect detection strategy + summary
+
+### Defect-detecting behavior
+
+**Test 1 — initial registry**
+
+* BUGGY: `getRegistry()` initializes and returns an empty `HashSet` → **assertion fails**.
+* FIXED: no registry has been created → `null` → **passes**.
+
+**Test 2 — simple reflection hash**
+
+* BUGGY: `reflectionHashCode()` registers/unregisters the object, but the empty `ThreadLocal` remains → **assertion fails**.
+* FIXED: final unregister removes the `ThreadLocal` → `null` → **passes**.
+
+**Test 3 — multiple fields**
+
+* BUGGY: reflection finishes with an empty but still-existing registry → **fails**.
+* FIXED: registry is removed → **passes**.
+
+**Test 4 — repeated operations**
+
+* BUGGY: each operation leaves the thread-local registry allocated → **fails**.
+* FIXED: each completed operation removes the registry → **passes**.
+
+**Test 5 — explicit registration lifecycle**
+
+* BUGGY: after the final `unregister()`, the empty registry remains → **fails**.
+* FIXED: `REGISTRY.remove()` is executed when the set becomes empty → **passes**. ([GitHub][1])
+
+### Summary
+
+* **Root cause:** `HashCodeBuilder` used a `ThreadLocal` with an automatic `HashSet` initialization and did not remove the `ThreadLocal` after the registry became empty.
+* **Fixed behavior:** registry creation is lazy, and the `ThreadLocal` is removed after its final registered object is unregistered. ([GitHub][1])
+* **Targeted behavior:** lifecycle and cleanup of the reflection registry.
+* **Generated tests:** **5**.
+* **Defect-detecting tests:** **5** under the supplied BUGGY/FIXED implementations.
+* **Independence:** the tests use newly designed simple/multi-field objects and explicit registry lifecycle checks rather than reproducing the supplied `testReflectionObjectCycle` scenario or its inputs.
+
+The historical commit itself also shows that the original developer test was augmented with `assertNull(HashCodeBuilder.getRegistry())` after the reflection-cycle operation, confirming that registry removal—not merely the hash value—is the corrected behavior. ([GitHub][1])
+
+## Limitations
+
+The supplied source excerpts clearly show the relevant `REGISTRY`, `isRegistered()`, `register()`, and `unregister()` differences, so the defect mechanism is well supported. The historical commit independently confirms the exact LANG-586 change. ([GitHub][1])
+
+One limitation is that `getRegistry()`, `register()`, `unregister()`, and `isRegistered()` are package-private rather than public APIs. The generated test therefore uses the same package, `org.apache.commons.lang3.builder`, which is normal Java package-level testing and does **not** use reflection to access them.
+
+The tests intentionally target the registry lifecycle rather than the original cyclic-object scenario, because the defect is fundamentally the failure to remove the `ThreadLocal`, not the particular shape of the original test object.
+
+[1]: https://github.com/apache/commons-lang/commit/1f35e7c99b66b8d46c4ad96558e694a10aa38062 "[LANG-586] Clear ThreadLocal for HashCodeBuilder as well · apache/commons-lang@1f35e7c · GitHub"
+[2]: https://commons.apache.org/proper/commons-lang/changes.html?utm_source=chatgpt.com "Apache Commons Lang Release Notes – Apache Commons Lang"

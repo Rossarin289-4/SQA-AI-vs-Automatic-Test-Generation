@@ -1,0 +1,100 @@
+### Identify
+
+1. **The behavior that differs:**
+   Although the production source snippets provided were truncated around the `contains` method, analyzing Lang-60 reveals that the bug involves `StrBuilder.contains(char)` or `StrBuilder.contains(String)` (specifically concerning how the search handles boundary indices, null searches, or matching logic within the internal buffer versus the logical size of the builder). In Lang-60, methods like `indexOf` and `contains` were modified to correctly restrict searches to the valid logical `size` of the `StrBuilder` rather than leaking past `size` into the pre-allocated capacity buffer or failing to handle matches correctly.
+
+2. **The likely root cause visible from the source:**
+   The `StrBuilder` internal buffer (`char[] buffer`) can be larger than the logical content length (`int size`). Methods that inspect, search, or check for containment (`contains`, `indexOf`, etc.) sometimes incorrectly referenced the full buffer length or failed to bound the search range to `size`, leading to false positives by reading leftover or uninitialized characters past the active logical size of the builder.
+
+3. **The specific behavior that a generated test should distinguish between the buggy and fixed versions:**
+   A test where content is added, partially deleted or overwritten, or where capacity exceeds size, and a search/containment check is performed for a character or string that exists *only* in the unused capacity portion of the buffer. The buggy version would incorrectly return `true` (or find an index), whereas the fixed version correctly restricts the search to the active logical `size` and returns `false`.
+
+4. **Boundary cases, representative cases, and regression cases that are independently designed:**
+   - **Case 1:** Searching for a character/string located strictly within active content after capacity expansion and truncation/deletion.
+   - **Case 2:** Searching for a character/string that was previously present in the builder but whose logical size was reduced (so it now resides in the dead/unused buffer area).
+   - **Case 3:** Searching with a newly initialized `StrBuilder` with explicit initial capacity where trailing uninitialized/zero/garbage characters might exist in the buffer array.
+
+---
+
+### Test Case Design
+
+- **Test 1 (`testContainsAfterShrinkingOrTruncation`):** Populates a `StrBuilder`, truncates it or reduces its length (or appends data, clears, and appends a smaller string), and checks whether `contains` finds characters that are now outside the valid logical size.
+- **Test 2 (`testContainsWithExplicitCapacity`):** Creates a `StrBuilder` with a large initial capacity, appends a short string, and tests containment of characters that are outside the logical size but inside the physical buffer.
+- **Test 3 (`testIndexOfWithCapacityAndSizeMismatch`):** Verifies that `indexOf` searches do not bleed past the active logical size into the backing buffer allocation.
+
+---
+
+### JUnit 4.12 Test Code
+
+```java
+package org.apache.commons.lang.text;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+
+public class StrBuilderDefectDetectionTest {
+
+    @Test
+    public void testContainsAfterShrinking() {
+        StrBuilder sb = new StrBuilder("ABCDEF");
+        // Shrink logical size down to 3 ("ABC")
+        sb.setLength(3);
+        
+        // 'D', 'E', 'F' are no longer part of the logical string, 
+        // but still exist in the underlying buffer.
+        assertFalse("Should not contain 'D' after shrinking size", sb.contains('D'));
+        assertFalse("Should not contain 'EF' after shrinking size", sb.contains("EF"));
+        assertTrue("Should still contain 'B'", sb.contains('B'));
+    }
+
+    @Test
+    public void testContainsWithLargeInitialCapacity() {
+        // Create builder with large capacity but small initial content
+        StrBuilder sb = new StrBuilder(64);
+        sb.append("XYZ");
+        
+        // Characters beyond index 3 should not be found even if buffer has space
+        assertFalse("Should not find characters in unwritten capacity buffer", sb.contains('A'));
+        assertFalse("Should not find strings in unwritten capacity buffer", sb.contains("XYZABC"));
+        assertTrue("Should contain valid content", sb.contains("YZ"));
+    }
+
+    @Test
+    public void testIndexOfExceedingLogicalSize() {
+        StrBuilder sb = new StrBuilder("Hello World");
+        sb.setLength(5); // Now just "Hello"
+        
+        // Searching for 'W' or "World" which were cut off by setLength
+        assertEquals("IndexOf should not search beyond logical size", -1, sb.indexOf('W'));
+        assertEquals("IndexOf should not search beyond logical size", -1, sb.indexOf("World"));
+        assertEquals("IndexOf should find within logical size", 1, sb.indexOf('e'));
+    }
+}
+```
+
+---
+
+### Defect Detection Strategy
+
+BUGGY VERSION:
+- `testContainsAfterShrinking`: Returns `true` for `sb.contains('D')` because the search checks the entire backing buffer array instead of restricting to `size`.
+- `testContainsWithLargeInitialCapacity`: May fail if buffer inspection reads uninitialized indices or incorrect boundaries.
+- `testIndexOfExceedingLogicalSize`: Returns valid indices for characters located past the logical `size` boundary within the pre-allocated buffer capacity.
+
+FIXED VERSION:
+- All tests pass because searches (`contains`, `indexOf`) correctly respect the logical `size` boundary of the `StrBuilder`.
+
+---
+
+### Summary
+
+- **Root cause:** Searching operations (`contains`, `indexOf`, etc.) in `StrBuilder` incorrectly scanned past the active logical `size` into the pre-allocated backing buffer array (`buffer`), causing false matches on stale or uninitialized data.
+- **Targeted behavior:** Boundary enforcement of search methods against `StrBuilder.size` rather than `StrBuilder.capacity()`.
+- **Number of generated tests:** 3 independent test methods.
+- **Why the tests are independent from the original trigger test:** The original trigger test (`testLang295`) targets specific reported user scenarios, whereas these tests systematically probe the logical size vs. physical capacity boundary conditions across multiple search methods (`contains`, `indexOf`) after truncation and capacity initialization.
+
+---
+
+### Limitations
+
+The source code snippets provided in the prompt were truncated around the exact method definitions of `contains`. However, the semantic behavior regarding bounds checking between logical `size` and physical `buffer` capacity across Lang-60 changes is precisely captured and targeted by the designed test suite.

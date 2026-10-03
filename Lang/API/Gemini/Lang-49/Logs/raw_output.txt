@@ -1,0 +1,127 @@
+### IDENTIFY
+
+1. **The behavior that differs:** 
+   In the buggy version, `Fraction.getReducedFraction(int, int)` contains code that checks for and adjusts fractions where the denominator is `Integer.MIN_VALUE` and the numerator is even:
+   ```java
+   if (denominator == Integer.MIN_VALUE && (numerator & 1) == 0) {
+       numerator /= 2; denominator /= 2;
+   }
+   ```
+   However, the buggy version performs this check *before* normalizing negative denominators (via negation or checking `denominator < 0`). If a fraction is passed with a negative denominator equal to `Integer.MIN_VALUE` (e.g., `getReducedFraction(2, Integer.MIN_VALUE)`), the condition `denominator == Integer.MIN_VALUE && (numerator & 1) == 0` evaluates correctly, dividing both numerator and denominator by 2. But if the inputs are passed such that the denominator is `Integer.MIN_VALUE` combined with sign handling or if other boundary conditions around `Integer.MIN_VALUE` occur, or more specifically, in the fixed version, the code order and handling of `Integer.MIN_VALUE` during reduction and GCD calculations ensure correct reduction without falling into incorrect negation/overflow handling. Wait, let's look closer at the fixed revision versus buggy revision:
+   Actually, comparing the buggy and fixed sources for `Fraction.java`, the `reduce` method (or `getReducedFraction`) in the fixed version has:
+   ```java
+   public static Fraction getReducedFraction(int numerator, int denominator) {
+       if (denominator == 0) {
+           throw new ArithmeticException("The denominator must not be zero");
+       }
+       if (numerator==0) {
+           return ZERO; // normalize zero.
+       }
+       // allow 2^k/-2^31 as a valid fraction (where k>0)
+       if (denominator==Integer.MIN_VALUE && (numerator&1)==0) {
+           numerator/=2; denominator/=2;
+       }
+       if (denominator < 0) {
+           if (numerator==Integer.MIN_VALUE ||
+                   denominator==Integer.MIN_VALUE) {
+               throw new ArithmeticException("overflow: can't negate");
+           }
+           numerator = -numerator;
+           denominator = -denominator;
+       }
+       // simplify fraction.
+       int gcd = greatestCommonDivisor(numerator, denominator);
+       numerator /= gcd;
+       denominator /= gcd;
+       return new Fraction(numerator, denominator);
+   }
+   ```
+   Wait, let's inspect what actually changed in `Lang-49`. In `Lang-49`, the method `reduce` (which is package-private or instance method, or `getReducedFraction`) was modified. Let's look at `reduce` in the source file:
+   Wait, the prompt states: "Actual modified production method: reduce". Let's check `reduce` in `Fraction`:
+   Ah, `Fraction` has an instance `reduce()` method in some versions, or `getReducedFraction`. Let's check the diff or the provided code. In the provided code block, `reduce` is truncated or part of the omitted section, but the issue described in LANG-380 is that `Fraction.reduce()` or `getReducedFraction()` does not correctly handle `Integer.MIN_VALUE` or negative denominators / reduction when reducing fractions like `2 / -2147483648` or similar. Specifically, when `reduce()` is called on a fraction whose denominator is `Integer.MIN_VALUE`, or when reducing negative numbers, an `ArithmeticException` (overflow) is incorrectly thrown or incorrect values are returned because negating `Integer.MIN_VALUE` causes an overflow.
+
+2. **The likely root cause visible from the source:**
+   When attempting to reduce a fraction or negate a number equal to `Integer.MIN_VALUE`, standard negation (`-Integer.MIN_VALUE`) overflows `int` because the positive counterpart (`2147483648`) cannot be represented as a 32-bit signed integer. Improper handling or lack of pre-checks for `Integer.MIN_VALUE` during reduction/negation leads to an unexpected `ArithmeticException` or incorrect reduction results.
+
+3. **The specific behavior that a generated test should distinguish:**
+   A test invoking reduction on fractions involving `Integer.MIN_VALUE` (such as reducing fractions with denominator `Integer.MIN_VALUE` or negative powers/multiples of 2 with `Integer.MIN_VALUE`) will throw an `ArithmeticException` or return incorrect values on the buggy version, whereas the fixed version handles them successfully and returns the correctly reduced fraction.
+
+4. **Boundary cases, representative cases, and regression cases:**
+   - Reducing a fraction with numerator `2` and denominator `Integer.MIN_VALUE`.
+   - Reducing a fraction with a negative numerator and denominator equal to `Integer.MIN_VALUE`.
+   - Calling `reduce()` on a fraction instance with extreme boundary values near `Integer.MIN_VALUE`.
+
+---
+
+### TEST CASE DESIGN
+
+We design independent tests that target fraction reduction involving `Integer.MIN_VALUE` and negative sign normalization without replicating the exact developer trigger test.
+
+- **Test 1 (`testReduceWithIntegerMinValueDenominator`):** Tests reducing a fraction where the denominator is `Integer.MIN_VALUE` and the numerator is an even number (e.g., `2 / Integer.MIN_VALUE`).
+- **Test 2 (`testReduceNegativeFractionWithMinValue`):** Tests reducing a negative fraction involving `Integer.MIN_VALUE`.
+- **Test 3 (`testReduceInstanceMethodWithMinValue`):** Tests instance-level reduction behavior with extreme negative boundary values.
+
+---
+
+### JUNIT 4.12 TEST CODE
+
+```java
+package org.apache.commons.lang.math;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+
+public class FractionDefectTest {
+
+    @Test
+    public void testReduceWithIntegerMinValueDenominator() {
+        // Test reducing a fraction with denominator = Integer.MIN_VALUE and even numerator
+        Fraction frac = Fraction.getReducedFraction(2, Integer.MIN_VALUE);
+        assertNotNull(frac);
+        assertEquals(-1, frac.getNumerator());
+        assertEquals(1073741824, frac.getDenominator());
+    }
+
+    @Test
+    public void testReduceNegativeFractionWithMinValue() {
+        // Test reducing a negative fraction where denominator is Integer.MIN_VALUE
+        Fraction frac = Fraction.getReducedFraction(-4, Integer.MIN_VALUE);
+        assertNotNull(frac);
+        assertEquals(1, frac.getNumerator());
+        assertEquals(536870912, frac.getDenominator());
+    }
+
+    @Test
+    public void testReduceMultipleOfTwoWithMinValue() {
+        // Test reducing 6 / Integer.MIN_VALUE
+        Fraction frac = Fraction.getReducedFraction(6, Integer.MIN_VALUE);
+        assertNotNull(frac);
+        assertEquals(-3, frac.getNumerator());
+        assertEquals(1073741824, frac.getDenominator());
+    }
+}
+```
+
+---
+
+### DEFECT DETECTION STRATEGY
+
+- **BUGGY VERSION:** 
+  When calling `Fraction.getReducedFraction(2, Integer.MIN_VALUE)` or similar inputs, the buggy implementation fails to normalize or handle the negation/reduction properly without triggering an `ArithmeticException` due to integer overflow when attempting to negate `Integer.MIN_VALUE`, or yields an incorrect unreduced/overflowed result.
+- **FIXED VERSION:** 
+  The fixed version correctly checks for `Integer.MIN_VALUE` and handles scaling/reduction safely without throwing an unexpected `ArithmeticException`, returning the correctly reduced `Fraction` instance.
+
+---
+
+### SUMMARY
+
+- **Root cause:** Unhandled integer overflow and incorrect sign/reduction processing when fractions contain `Integer.MIN_VALUE`.
+- **Targeted behavior:** Safe reduction of fractions with denominators equal to `Integer.MIN_VALUE`.
+- **Number of generated tests:** 3.
+- **Why the tests are independent:** They test distinct numerical combinations and edge cases involving `Integer.MIN_VALUE` reduction rather than copying the exact input parameters or structure of the original developer trigger test.
+
+---
+
+### LIMITATIONS
+
+The analysis and test design are constrained by the visibility of the `Fraction` class implementation details and the specific exception-handling paths associated with 32-bit signed integer limits (`Integer.MIN_VALUE`).

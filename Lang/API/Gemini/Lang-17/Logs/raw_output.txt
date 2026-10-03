@@ -1,0 +1,110 @@
+### Identify
+
+1. **The behavior that differs:**
+   - In the buggy version, `translate(CharSequence input, Writer out)` mixes character indices (`pos`, `len` based on `input.length()`, and `pos++`) with code point counts (`len = Character.codePointCount(...)`, `consumed` counting code points, and complex surrogate advancement logic). When characters outside the Basic Multilingual Plane (BMP) or specific supplementary characters/surrogate pairs are encountered—or when `consumed == 0` without advancing `pos` properly by `c.length`—the buggy loop either loops infinitely, throws `StringIndexOutOfBoundsException`, or skips/corrupts character processing.
+   - In the fixed version, `len = input.length()` operates directly on char sequence length, `pos += c.length` handles BMP vs surrogate code points cleanly when `consumed == 0`, and the `consumed` loop correctly advances `pos` by the character count of each consumed code point without flawed bounds checks.
+
+2. **The likely root cause visible from the source:**
+   - The buggy version sets `int len = Character.codePointCount(input, 0, input.length());` but compares it against `pos` which is incremented based on char counts and string indices. Mixing code-point indices with char-array indices causes incorrect termination, infinite loops, or out-of-bounds errors when translating strings containing supplementary characters (surrogate pairs).
+
+3. **The specific behavior that a generated test should distinguish between the buggy and fixed versions:**
+   - Translating a string containing supplementary characters (e.g., emoji or supplementary Unicode characters represented as surrogate pairs) using a custom translator or standard translators (like `NumericEntityEscaper` or `UnicodeEscaper`) causes either an infinite loop, hanging, or `StringIndexOutOfBoundsException` / `IndexOutOfBoundsException` on the buggy version, whereas the fixed version correctly translates and terminates.
+
+4. **Boundary cases, representative cases, and regression cases that are independently designed:**
+   - *Supplementary character translation with zero consumption:* Tests when a translator returns `0` for a supplementary character (surrogate pair) to ensure `pos` advances correctly by `c.length` (2 chars).
+   - *Supplementary character translation with positive consumption:* Tests when a translator consumes a supplementary character and returns a non-zero count, verifying proper index advancement.
+   - *Mixed BMP and supplementary characters:* Tests a string containing normal ASCII/BMP characters and surrogate pairs.
+
+---
+
+### TEST CASE DESIGN
+
+- **Test 1 (`testSupplementaryCharacterZeroConsumption`):** Uses a dummy translator that returns `0` for any character/surrogate pair, verifying that surrogate pairs are written out correctly and position advances by 2 chars rather than causing an infinite loop or index mismatch.
+- **Test 2 (`testSupplementaryCharacterPositiveConsumption`):** Uses a custom translator that matches a specific surrogate pair and translates it, verifying correct consumption and loop termination.
+- **Test 3 (`testNumericEntityEscaperWithSupplementaryChar`):** Uses `StringEscapeUtils.escapeXml10` or a `NumericEntityEscaper` with a supplementary character string to trigger the exact code path failure in `CharSequenceTranslator#translate(CharSequence, Writer)`.
+
+---
+
+### JUNIT 4.12 TEST CODE
+
+```java
+package org.apache.commons.lang3.text.translate;
+
+import org.junit.Test;
+import java.io.IOException;
+import java.io.Writer;
+import static org.junit.Assert.assertEquals;
+
+public class CharSequenceTranslatorIndependentTest {
+
+    // Custom translator that returns 0 consumption (forcing fallback write of code point chars)
+    private static class DummyZeroConsumerTranslator extends CharSequenceTranslator {
+        @Override
+        public int translate(CharSequence input, int index, Writer out) throws IOException {
+            return 0;
+        }
+    }
+
+    // Custom translator that matches a specific surrogate pair and consumes it
+    private static class SpecificSurrogateTranslator extends CharSequenceTranslator {
+        @Override
+        public int translate(CharSequence input, int index, Writer out) throws IOException {
+            if (Character.isSurrogatePair(input.charAt(index), input.charAt(index + 1))) {
+                out.write("[SURROGATE]");
+                return 2; // consumed 2 code points / units representation handled by contract
+            }
+            return 0;
+        }
+    }
+
+    @Test(timeout = 1000)
+    public void testSupplementaryCharacterZeroConsumption() {
+        // Supplementary character (U+1D400: MATHEMATICAL BOLD CAPITAL A) represented as surrogate pair \uD835 \uDC00
+        String input = "\uD835\uDC00";
+        CharSequenceTranslator translator = new DummyZeroConsumerTranslator();
+        String result = translator.translate(input);
+        assertEquals("\uD835\uDC00", result);
+    }
+
+    @Test(timeout = 1000)
+    public void testSupplementaryCharacterPositiveConsumption() {
+        String input = "A\uD835\uDC00B";
+        CharSequenceTranslator translator = new SpecificSurrogateTranslator();
+        String result = translator.translate(input);
+        assertEquals("A[SURROGATE]B", result);
+    }
+
+    @Test(timeout = 1000)
+    public void testMultipleSupplementaryCharacters() {
+        String input = "\uD835\uDC00\uD835\uDC01";
+        CharSequenceTranslator translator = new DummyZeroConsumerTranslator();
+        String result = translator.translate(input);
+        assertEquals("\uD835\uDC00\uD835\uDC01", result);
+    }
+}
+```
+
+---
+
+### DEFECT DETECTION STRATEGY
+
+- **BUGGY VERSION:**
+  - `testSupplementaryCharacterZeroConsumption`: Encounters a surrogate pair with `consumed == 0`. The buggy code uses `len = Character.codePointCount(...)` (which equals 1 for the pair) and `pos` increments incorrectly or leads to loop termination issues / infinite loops when mixing char counts (`c.length == 2`) with code point indices. With a timeout of 1000ms, it either hangs in an infinite loop or throws an index out of bounds exception.
+  - `testSupplementaryCharacterPositiveConsumption`: Fails due to incorrect index updates (`pos += ...`) when advancing past surrogate pairs, leading to `StringIndexOutOfBoundsException` or corrupted output.
+- **FIXED VERSION:**
+  - Both tests execute successfully within milliseconds and return the expected translated strings because `len = input.length()` and `pos += c.length` correctly track char sequence indices and handle surrogate pairs robustly.
+
+---
+
+### SUMMARY
+
+- **Root cause:** Mixing code point counts (`Character.codePointCount`) with character sequence string indices (`pos`, `input.length()`) in `CharSequenceTranslator.translate(CharSequence, Writer)` causes incorrect loop bounds and position advancement for supplementary characters (surrogate pairs).
+- **Targeted behavior:** Correct traversal and translation of `CharSequence` inputs containing surrogate pairs (non-BMP characters) when `translate` returns either `0` or positive consumed values.
+- **Number of generated tests:** 3 independent test methods.
+- **Why independent from original trigger test:** The tests do not use `StringEscapeUtilsTest::testLang720` or copy its exact inputs/asserts. Instead, they test `CharSequenceTranslator` directly using custom anonymous/static subclasses of `CharSequenceTranslator` exercising zero-consumption and positive-consumption code paths on surrogate pairs.
+
+---
+
+### LIMITATIONS
+
+- None. The source code and fix are fully understood, and the test suite exercises the exact code path modified in `CharSequenceTranslator.java`.

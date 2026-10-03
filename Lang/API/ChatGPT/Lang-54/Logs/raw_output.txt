@@ -1,0 +1,385 @@
+## 1. The behavior that differs
+
+The defect is in `LocaleUtils.toLocale(String)` when the locale string contains a **language + empty country + variant**, for example:
+
+```text
+en__X
+fr__EURO
+```
+
+The intended format is:
+
+```text
+language__variant
+```
+
+which corresponds to:
+
+```java
+new Locale("en", "", "X")
+```
+
+### BUGGY version
+
+The buggy implementation always expects positions 3 and 4 to be uppercase country characters:
+
+```java
+char ch3 = str.charAt(3);
+char ch4 = str.charAt(4);
+
+if (ch3 < 'A' || ch3 > 'Z' || ch4 < 'A' || ch4 > 'Z') {
+    throw new IllegalArgumentException(...);
+}
+```
+
+For `en__X`, position 3 is `_`, so the method throws `IllegalArgumentException`.
+
+### FIXED version
+
+The fixed implementation first checks whether position 3 is `_`:
+
+```java
+if (ch3 == '_') {
+    return new Locale(str.substring(0, 2), "", str.substring(4));
+}
+```
+
+Therefore:
+
+```text
+en__X
+```
+
+is correctly converted to:
+
+```java
+new Locale("en", "", "X")
+```
+
+---
+
+## 2. The likely root cause visible from the source
+
+The root cause is that the BUGGY implementation assumes every locale longer than two characters must contain a **two-letter country code**.
+
+It does not account for the valid structure:
+
+```text
+language__variant
+```
+
+where the country is empty.
+
+The FIXED implementation adds an explicit branch:
+
+```java
+if (ch3 == '_') {
+    return new Locale(str.substring(0, 2), "", str.substring(4));
+}
+```
+
+So the defect is essentially:
+
+> **Missing handling for an empty country code followed by a locale variant.**
+
+The important boundary is the **double underscore**:
+
+```text
+language__variant
+        ^^
+```
+
+---
+
+## 3. The specific behavior that a generated test should distinguish between the buggy and fixed versions
+
+The generated tests should verify that a valid locale string with:
+
+* a two-letter lowercase language,
+* an empty country,
+* a non-empty variant,
+
+is successfully converted instead of rejected.
+
+For example:
+
+| Input        | Expected behavior          |
+| ------------ | -------------------------- |
+| `"en__X"`    | `Locale("en", "", "X")`    |
+| `"fr__EURO"` | `Locale("fr", "", "EURO")` |
+
+These are especially useful because they exercise the exact new branch in the FIXED implementation.
+
+The first case is also a **boundary case** because the variant has only one character.
+
+---
+
+## 4. Boundary cases, representative cases, and regression cases
+
+### A. Boundary cases
+
+**Test 1 — minimum-length variant**
+
+```text
+en__X
+```
+
+This checks that a one-character variant after an empty country is accepted.
+
+Expected:
+
+```java
+new Locale("en", "", "X")
+```
+
+**Test 2 — longer variant**
+
+```text
+fr__EURO
+```
+
+This checks that the behavior is not limited to a one-character variant.
+
+Expected:
+
+```java
+new Locale("fr", "", "EURO")
+```
+
+### B. Representative case
+
+A normal locale containing both country and variant:
+
+```text
+de_DE_X
+```
+
+Expected:
+
+```java
+new Locale("de", "DE", "X")
+```
+
+This verifies that the existing country+variant behavior still works.
+
+### C. Regression cases
+
+Normal two-character and five-character locales should continue working:
+
+```text
+ja
+en_US
+```
+
+Also, `null` should continue returning `null` because that behavior is explicitly documented and unaffected by the defect.
+
+These regression tests are intentionally different from the defect cases and help ensure that fixing the double-underscore case does not break ordinary locale parsing.
+
+---
+
+## 5. Complete JUnit 4.12 test class
+
+```java
+package org.apache.commons.lang;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
+
+import java.util.Locale;
+
+import org.junit.Test;
+
+public class LocaleUtilsLang54Test {
+
+    @Test
+    public void testLocaleWithEmptyCountryAndSingleCharacterVariant() {
+        Locale result = LocaleUtils.toLocale("en__X");
+
+        assertEquals("en", result.getLanguage());
+        assertEquals("", result.getCountry());
+        assertEquals("X", result.getVariant());
+    }
+
+    @Test
+    public void testLocaleWithEmptyCountryAndLongVariant() {
+        Locale result = LocaleUtils.toLocale("fr__EURO");
+
+        assertEquals("fr", result.getLanguage());
+        assertEquals("", result.getCountry());
+        assertEquals("EURO", result.getVariant());
+    }
+
+    @Test
+    public void testLocaleWithCountryAndVariantStillWorks() {
+        Locale result = LocaleUtils.toLocale("de_DE_X");
+
+        assertEquals("de", result.getLanguage());
+        assertEquals("DE", result.getCountry());
+        assertEquals("X", result.getVariant());
+    }
+
+    @Test
+    public void testTwoCharacterLanguageLocaleStillWorks() {
+        Locale result = LocaleUtils.toLocale("ja");
+
+        assertEquals("ja", result.getLanguage());
+        assertEquals("", result.getCountry());
+        assertEquals("", result.getVariant());
+    }
+
+    @Test
+    public void testFiveCharacterLanguageCountryLocaleStillWorks() {
+        Locale result = LocaleUtils.toLocale("en_US");
+
+        assertEquals("en", result.getLanguage());
+        assertEquals("US", result.getCountry());
+        assertEquals("", result.getVariant());
+    }
+
+    @Test
+    public void testNullInputStillReturnsNull() {
+        assertNull(LocaleUtils.toLocale(null));
+    }
+}
+```
+
+---
+
+## 6. Defect detection strategy
+
+### Test 1 — `en__X`
+
+**BUGGY VERSION:**
+
+* `ch3` is `_`
+* BUGGY expects an uppercase country character at position 3
+* Throws `IllegalArgumentException`
+* Therefore the test **fails**
+
+**FIXED VERSION:**
+
+* Detects `ch3 == '_'`
+* Creates `new Locale("en", "", "X")`
+* Assertions pass
+* Therefore the test **passes**
+
+**Defect-detecting:** Yes.
+
+---
+
+### Test 2 — `fr__EURO`
+
+**BUGGY VERSION:**
+
+* The second underscore is interpreted as an invalid country character
+* Throws `IllegalArgumentException`
+* Test fails
+
+**FIXED VERSION:**
+
+* Recognizes the empty country
+* Creates `Locale("fr", "", "EURO")`
+* Assertions pass
+
+**Defect-detecting:** Yes.
+
+---
+
+### Test 3 — `de_DE_X`
+
+**BUGGY VERSION:**
+
+* Normal language + country + variant format
+* Returns `Locale("de", "DE", "X")`
+* Test passes
+
+**FIXED VERSION:**
+
+* Same behavior
+* Test passes
+
+**Defect-detecting:** No. This is a regression test.
+
+---
+
+### Test 4 — `ja`
+
+**BUGGY VERSION:**
+
+* Two-character language is handled by the existing `len == 2` branch
+* Test passes
+
+**FIXED VERSION:**
+
+* Same behavior
+* Test passes
+
+**Defect-detecting:** No. Regression test.
+
+---
+
+### Test 5 — `en_US`
+
+**BUGGY VERSION:**
+
+* Standard language + country format
+* Returns `Locale("en", "US")`
+* Test passes
+
+**FIXED VERSION:**
+
+* Same behavior
+* Test passes
+
+**Defect-detecting:** No. Regression test.
+
+---
+
+### Test 6 — `null`
+
+**BUGGY VERSION:**
+
+```java
+if (str == null) {
+    return null;
+}
+```
+
+Test passes.
+
+**FIXED VERSION:**
+
+Same behavior.
+
+Test passes.
+
+**Defect-detecting:** No. Regression test.
+
+---
+
+## Summary
+
+* **Root cause:** `LocaleUtils.toLocale()` in the BUGGY version does not handle the valid `language__variant` format where the country is empty.
+* **Targeted behavior:** A string such as `"en__X"` should produce `Locale("en", "", "X")` rather than throw `IllegalArgumentException`.
+* **Number of generated tests:** **6**
+* **Defect-detecting tests:** **2** — the empty-country variant cases.
+* **Regression tests:** **4** — normal language, country, country+variant, and null behavior.
+* The tests are independent of the trigger because they use **different locale inputs and different assertions**, derived directly from the source-level difference rather than reproducing the trigger implementation.
+
+The strongest defect checks are therefore:
+
+```text
+en__X     → BUGGY: IllegalArgumentException
+             FIXED: Locale("en", "", "X")
+
+fr__EURO  → BUGGY: IllegalArgumentException
+             FIXED: Locale("fr", "", "EURO")
+```
+
+---
+
+## Limitations
+
+The analysis is based on the supplied BUGGY and FIXED implementations and the documented `toLocale` behavior. The source clearly establishes the missing `language__variant` branch, so the two defect-detecting tests are directly justified.
+
+One limitation is that the exact Java/Defects4J runtime environment was not provided here. The tests therefore avoid relying on the system's installed locale list or locale-specific availability and inspect the resulting `Locale` fields directly. This makes them less dependent on the host environment.

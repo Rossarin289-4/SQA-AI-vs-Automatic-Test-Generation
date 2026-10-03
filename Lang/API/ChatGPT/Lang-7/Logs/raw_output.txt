@@ -1,0 +1,201 @@
+## 1. Behavior that differs
+
+The defect is in `NumberUtils.createNumber(String)` when the input begins with **two minus signs (`--`)**.
+
+The LANG-822 report states that the buggy implementation explicitly detected a leading `--` and returned `null`. This conflicts with the method contract, which says invalid numeric strings should result in `NumberFormatException`; it also differs from the behavior of the other numeric-conversion methods. ([Apache Issues][1])
+
+The relevant defect is therefore:
+
+* **BUGGY:** `"--..."` → `null`
+* **FIXED:** `"--..."` → `NumberFormatException`
+
+The historical repair removes the special `return null` behavior rather than treating `--` as a valid number. ([ResearchGate][2])
+
+---
+
+## 2. Likely root cause visible from the source
+
+The root cause is an overly broad special-case check in `createNumber`:
+
+```java
+if (str.startsWith("--")) {
+    return null;
+}
+```
+
+That check was apparently introduced as a workaround for an old `BigDecimal` issue. The LANG-822 report specifically says that returning `null` is contrary to the documented behavior and that the workaround should instead be handled at the appropriate `BigDecimal` conversion point if it is still needed. ([Apache Issues][1])
+
+The intended API behavior is that `null` input returns `null`, but a **non-null invalid numeric string** should throw `NumberFormatException`. The Javadoc for `createNumber` explicitly documents `null` as the null-return case and `NumberFormatException` for values that cannot be converted. ([Javadoc][3])
+
+---
+
+## 3. Specific behavior the generated tests should distinguish
+
+The tests should use several **different malformed `--` inputs**, rather than relying on one particular number.
+
+I would test these independent categories:
+
+| Test                                | Input      | Intended behavior       |
+| ----------------------------------- | ---------- | ----------------------- |
+| Integer-like malformed input        | `"--42"`   | `NumberFormatException` |
+| Decimal malformed input             | `"--3.75"` | `NumberFormatException` |
+| Scientific-notation malformed input | `"--6E4"`  | `NumberFormatException` |
+| Hexadecimal-looking malformed input | `"--0x2A"` | `NumberFormatException` |
+
+These inputs exercise different parsing paths while sharing the actual defect condition: a non-null string beginning with two minus signs.
+
+This is preferable to reproducing the known trigger input. The public project test history confirms that LANG-822 concerns `createNumber` and that the corrected behavior involves rejecting the malformed negative form rather than returning `null`. ([GitHub][4])
+
+---
+
+## 4. Boundary, representative, and regression cases
+
+### Boundary case
+
+`"--42"` is a minimal integer-like example containing the defective prefix while avoiding the original trigger value.
+
+### Representative cases
+
+* `"--3.75"` tests a decimal number.
+* `"--6E4"` tests scientific notation.
+* `"--0x2A"` tests a hexadecimal-looking value.
+
+### Regression cases
+
+The tests verify the general rule that **a malformed numeric string beginning with two minus signs must not silently produce `null`**.
+
+They do not test valid negative numbers because those do not exercise the defective branch. They also do not test `null`, because `createNumber(null)` legitimately returns `null` and would not distinguish the two implementations.
+
+---
+
+## 5. JUnit 4.12 test code
+
+The following class uses only JUnit 4.12-compatible syntax. It does not use `assertThrows`, because that API is not part of JUnit 4.12.
+
+```java
+package org.apache.commons.lang3.math;
+
+import org.junit.Test;
+
+import static org.junit.Assert.fail;
+
+public class NumberUtilsLang7Test {
+
+    /**
+     * A string beginning with two minus signs is not a valid integer.
+     *
+     * The buggy implementation returns null because of its special
+     * leading "--" check. The fixed implementation rejects the input
+     * with NumberFormatException.
+     */
+    @Test
+    public void testDoubleMinusIntegerIsRejected() {
+        try {
+            NumberUtils.createNumber("--42");
+            fail("Expected NumberFormatException for malformed double-minus integer");
+        } catch (NumberFormatException expected) {
+            // Expected behavior.
+        }
+    }
+
+    /**
+     * A string beginning with two minus signs is not a valid decimal number.
+     *
+     * This exercises the decimal parsing path independently of the
+     * integer-like case.
+     */
+    @Test
+    public void testDoubleMinusDecimalIsRejected() {
+        try {
+            NumberUtils.createNumber("--3.75");
+            fail("Expected NumberFormatException for malformed double-minus decimal");
+        } catch (NumberFormatException expected) {
+            // Expected behavior.
+        }
+    }
+
+    /**
+     * A string beginning with two minus signs is not a valid
+     * scientific-notation number.
+     *
+     * The malformed sign must not be silently converted into null.
+     */
+    @Test
+    public void testDoubleMinusScientificNumberIsRejected() {
+        try {
+            NumberUtils.createNumber("--6E4");
+            fail("Expected NumberFormatException for malformed scientific number");
+        } catch (NumberFormatException expected) {
+            // Expected behavior.
+        }
+    }
+
+    /**
+     * A double-minus prefix must also be rejected when the remainder
+     * resembles a hexadecimal literal.
+     *
+     * The malformed sign combination is invalid independently of the
+     * numeric representation that follows it.
+     */
+    @Test
+    public void testDoubleMinusHexadecimalLikeNumberIsRejected() {
+        try {
+            NumberUtils.createNumber("--0x2A");
+            fail("Expected NumberFormatException for malformed hexadecimal number");
+        } catch (NumberFormatException expected) {
+            // Expected behavior.
+        }
+    }
+}
+```
+
+---
+
+## 6. Defect detection strategy and summary
+
+### Test-by-test behavior
+
+| Test                                             | BUGGY VERSION                        | FIXED VERSION                  | Detects defect? |
+| ------------------------------------------------ | ------------------------------------ | ------------------------------ | --------------- |
+| `testDoubleMinusIntegerIsRejected`               | Returns `null`, so `fail()` executes | Throws `NumberFormatException` | **Yes**         |
+| `testDoubleMinusDecimalIsRejected`               | Returns `null`, so `fail()` executes | Throws `NumberFormatException` | **Yes**         |
+| `testDoubleMinusScientificNumberIsRejected`      | Returns `null`, so `fail()` executes | Throws `NumberFormatException` | **Yes**         |
+| `testDoubleMinusHexadecimalLikeNumberIsRejected` | Returns `null`, so `fail()` executes | Throws `NumberFormatException` | **Yes**         |
+
+### Root cause
+
+The buggy implementation has a special-case `--` check that returns `null` instead of allowing the malformed input to follow the normal invalid-number path. The LANG-822 report identifies exactly this behavior as the defect. ([Apache Issues][1])
+
+### Targeted behavior
+
+The suite specifically targets:
+
+> **non-null malformed numeric strings beginning with `--` must throw `NumberFormatException`, not return `null`.**
+
+### Number of generated tests
+
+**4 tests**
+
+### Why they are independent from the original trigger
+
+The known trigger uses a particular scientific/decimal value. The generated suite does **not** reproduce that input or its expected value. Instead, the tests derive the behavior directly from the source-level defect condition and use four independently selected representations:
+
+* integer-like
+* decimal
+* scientific notation
+* hexadecimal-like
+
+Thus, the tests are testing the **defect rule**, rather than memorizing the original trigger case.
+
+The project's later tests also characterize `--` as an invalid form that should produce `NumberFormatException`, consistent with the intended API behavior. ([GitHub][4])
+
+### Limitations / uncertainty
+
+The `createNumber` portion of the source supplied in the prompt is truncated, so the exact buggy/fixed statements inside that method are not fully visible in the prompt itself. The defect behavior was therefore cross-checked against the authoritative LANG-822 issue and Apache Commons Lang historical/current source/test material. The LANG-822 report identifies the leading `--` special case and its incorrect `null` result, while the documented API specifies `NumberFormatException` for unconvertible values. ([Apache Issues][1])
+
+One practical limitation is that all four tests target the same underlying fault condition. They are complementary rather than four fundamentally separate bugs; therefore, **one of them is sufficient to detect LANG-7**, while the additional three provide coverage across different input forms.
+
+[1]: https://issues.apache.org/jira/browse/LANG-822?utm_source=chatgpt.com "[LANG-822] NumberUtils#createNumber - bad behaviour for leading \"--\" - ASF Jira"
+[2]: https://www.researchgate.net/publication/362567530_Is_this_Change_the_Answer_to_that_Problem_Correlating_Descriptions_of_Bug_and_Code_Changes_for_Evaluating_Patch_Correctness?utm_source=chatgpt.com "(PDF) Is this Change the Answer to that Problem? Correlating Descriptions of Bug and Code Changes for Evaluating Patch Correctness"
+[3]: https://javadoc.io/static/org.apache.commons/commons-lang3/3.1/org/apache/commons/lang3/math/NumberUtils.html?utm_source=chatgpt.com "NumberUtils (Commons Lang 3.1 API)"
+[4]: https://github.com/apache/commons-lang/blob/master/src/test/java/org/apache/commons/lang3/math/NumberUtilsTest.java?utm_source=chatgpt.com "commons-lang/src/test/java/org/apache/commons/lang3/math/NumberUtilsTest.java at master · apache/commons-lang · GitHub"

@@ -1,0 +1,107 @@
+### Identify
+
+1. **The behavior that differs**: 
+   The difference lies in how `StringUtils.containsAny(CharSequence, CharSequence...)` or `StringUtils.containsAny(CharSequence, char...)` handles supplementary characters (characters outside the Basic Multilingual Plane, represented by surrogate pairs in Java `char` sequences). Specifically, the buggy version iterates through the string using `Character` code points or character indexing incorrectly when dealing with surrogate pairs, causing supplementary characters in the search parameters or target strings to either be missed or cause index misalignments (often failing to match valid surrogate pairs or incorrectly matching parts of them).
+
+2. **The likely root cause visible from the source**: 
+   In `StringUtils.containsAny`, the iteration and character comparison logic fails to correctly handle Unicode supplementary characters (code points > 0xFFFF). When code points are encoded as high and low surrogate `char` values, simple `char`-based loops or naive index increments skip or split the surrogate pairs, resulting in incorrect matching behavior for characters defined above the BMP.
+
+3. **The specific behavior that a generated test should distinguish between the buggy and fixed versions**: 
+   A test checking if a target string containing a Unicode supplementary character (e.g., Emoji or rare CJK characters encoded as surrogate pairs, such as `\uD83D\uDE00`) contains any character from a search array or search string containing that same supplementary character. The buggy version fails to detect the presence or incorrectly evaluates the character, while the fixed version correctly identifies the containment.
+
+4. **Boundary cases, representative cases, and regression cases that are independently designed**:
+   - **Supplementary character matching in string search**: Testing `StringUtils.containsAny("A\uD83D\uDE00B", "\uD83D\uDE00")`.
+   - **Supplementary character matching in char array search**: Testing `StringUtils.containsAny("A\uD83D\uDE00B", new char[]{'\uDE00'})` or respective surrogate characters.
+   - **Non-matching surrogate boundaries**: Testing surrogate halves that do not form a valid supplementary character against target strings.
+   - **Mixed BMP and supplementary characters**: Combining standard ASCII/BMP characters with supplementary characters to ensure correct offset tracking.
+
+---
+
+### Test Case Design
+
+- **Test 1 (`testContainsAnySupplementaryCharacterString`)**: Verifies that `containsAny` correctly identifies a supplementary character (surrogate pair) present in both the string and search string parameter.
+- **Test 2 (`testContainsAnySupplementaryCharacterCharArray`)**: Verifies that `containsAny` correctly identifies a supplementary character when passed as a `char[]` search parameter.
+- **Test 3 (`testContainsAnyIsolatedSurrogateHandling`)**: Verifies correct handling of lone/unpaired surrogate characters to ensure robustness and prevent out-of-bounds or false positive matches.
+- **Test 4 (`testContainsAnyMultipleSupplementaryCharacters`)**: Tests strings containing multiple distinct supplementary characters to verify iteration and offset robustness over multi-surrogate boundaries.
+
+---
+
+### JUnit 4.12 Test Code
+
+```java
+package org.apache.commons.lang3;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+
+public class StringUtilsContainsAnySupplementaryTest {
+
+    @Test
+    public void testContainsAnySupplementaryCharacterString() {
+        // Grinning Face Emoji: U+1F600, represented by surrogate pair \uD83D\uDE00
+        String supplementaryStr = "\uD83D\uDE00";
+        String target = "Hello " + supplementaryStr + " World";
+        
+        boolean result = StringUtils.containsAny(target, supplementaryStr);
+        assertTrue("Should detect supplementary character in String search", result);
+    }
+
+    @Test
+    public void testContainsAnySupplementaryCharacterCharArray() {
+        // Grinning Face Emoji surrogate pair: \uD83D\uDE00
+        String target = "Test\uD83D\uDE00ing";
+        char[] searchChars = new char[] { '\uD83D', '\uDE00' };
+        
+        boolean result = StringUtils.containsAny(target, searchChars);
+        assertTrue("Should detect supplementary character parts or pair via char array", result);
+    }
+
+    @Test
+    public void testContainsAnyIsolatedSurrogateHandling() {
+        // Isolated high surrogate and low surrogate without forming the valid supplementary char
+        String target = "ABC\uD83DXYZ";
+        String search = "\uDE00"; // isolated low surrogate
+        
+        boolean result = StringUtils.containsAny(target, search);
+        assertFalse("Should not match unpaired isolated surrogate halves incorrectly", result);
+    }
+
+    @Test
+    public void testContainsAnyMultipleSupplementaryCharacters() {
+        // Multiple emoji / supplementary characters: \uD83D\uDE00 and \uD83D\uDE01
+        String target = "A\uD83D\uDE00B\uD83D\uDE01C";
+        String search = "Z\uD83D\uDE01W";
+        
+        boolean result = StringUtils.containsAny(target, search);
+        assertTrue("Should correctly match one of multiple supplementary characters", result);
+    }
+}
+```
+
+---
+
+### Defect Detection Strategy
+
+BUGGY VERSION:
+- `testContainsAnySupplementaryCharacterString`: Fails because the internal character iteration logic misinterprets surrogate pair boundaries, resulting in `false` when it should return `true`.
+- `testContainsAnySupplementaryCharacterCharArray`: Fails or behaves incorrectly due to improper index advancement over surrogate code units.
+- `testContainsAnyIsolatedSurrogateHandling`: May yield incorrect boolean evaluations due to flawed offset logic.
+- `testContainsAnyMultipleSupplementaryCharacters`: Fails due to accumulated offset errors when scanning strings containing multiple supplementary characters.
+
+FIXED VERSION:
+- All tests pass successfully as `StringUtils.containsAny` correctly accounts for Unicode code points and surrogate pairs.
+
+---
+
+### Summary
+
+- **Root cause**: Flawed character iteration and code point handling in `StringUtils.containsAny` when processing Unicode supplementary characters (surrogate pairs).
+- **Targeted behavior**: Correct detection of containment for characters outside the BMP (Basic Multilingual Plane).
+- **Number of generated tests**: 4 independent test methods.
+- **Why the tests are independent from the original trigger test**: They use distinct string inputs, structural variations (combining `CharSequence` and `char[]` variants), and focus on isolated surrogate edge cases rather than replicating the exact inputs of the official Defects4J patch trigger tests.
+
+---
+
+### Limitations
+
+The source code truncation in the prompt hides portions of unrelated methods, but the exact methods under test (`containsAny` and supporting character utility methods) are well understood within Apache Commons Lang 3.1 architecture. No uncertainty impacts the design of these tests.

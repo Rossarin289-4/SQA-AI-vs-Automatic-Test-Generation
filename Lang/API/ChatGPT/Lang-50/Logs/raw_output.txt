@@ -1,0 +1,468 @@
+## 1. Behavior that differs
+
+The defect is in how `FastDateFormat.getDateInstance(int style, TimeZone timeZone, Locale locale)` builds its cache key.
+
+### BUGGY version
+
+When `locale == null`, the buggy implementation does this in the wrong order:
+
+1. Creates the cache key using only `style` (and possibly `timeZone`).
+2. Looks in `cDateInstanceCache`.
+3. **Only if there is no cached formatter**, it changes `locale` to `Locale.getDefault()`.
+
+Therefore, changing the JVM default locale after a formatter has already been cached can incorrectly reuse the formatter created for the previous default locale.
+
+The Apache Commons Lang 2.4 release notes explicitly describe LANG-368 as:
+
+> “FastDateFormat getDateInstance() and getDateTimeInstance() assume Locale.getDefault() won't change.” ([Apache Commons][1])
+
+### FIXED version
+
+The fixed implementation resolves the default locale **before constructing the cache key**:
+
+```java
+if (locale == null) {
+    locale = Locale.getDefault();
+}
+
+key = new Pair(key, locale);
+```
+
+So the cache distinguishes:
+
+```text
+(style, Locale.US)
+(style, Locale.GERMANY)
+```
+
+instead of treating both as simply:
+
+```text
+(style)
+```
+
+---
+
+## 2. Likely root cause visible from the source
+
+The root cause is **incorrect cache-key construction when the caller relies on the JVM default locale**.
+
+Buggy:
+
+```java
+Object key = new Integer(style);
+
+...
+
+if (locale != null) {
+    key = new Pair(key, locale);
+}
+
+FastDateFormat format = (FastDateFormat) cDateInstanceCache.get(key);
+
+if (format == null) {
+    if (locale == null) {
+        locale = Locale.getDefault();
+    }
+```
+
+The locale used to actually construct the formatter is therefore **not necessarily represented in the cache key**.
+
+Fixed:
+
+```java
+if (locale == null) {
+    locale = Locale.getDefault();
+}
+
+key = new Pair(key, locale);
+```
+
+This makes the cache key correspond to the actual locale used to create the formatter.
+
+---
+
+## 3. Specific behavior the generated test should distinguish
+
+The most direct observable behavior is:
+
+> Calling `getDateInstance(style)` after changing `Locale.getDefault()` must produce a formatter appropriate for the **new** default locale.
+
+For example:
+
+```text
+Default locale = Locale.US
+    ↓
+getDateInstance(SHORT)
+    ↓
+formatter uses US date pattern
+
+Default locale = Locale.GERMANY
+    ↓
+getDateInstance(SHORT)
+    ↓
+formatter must now use German date pattern
+```
+
+The buggy implementation can return the first formatter from its cache, while the fixed implementation creates/returns a formatter associated with the new locale.
+
+A good assertion is to compare `FastDateFormat.getPattern()` with the pattern that Java's own `DateFormat.getDateInstance(style, locale)` supplies. This avoids hard-coding locale-specific strings unnecessarily.
+
+---
+
+## 4. Boundary, representative, and regression cases
+
+I would use **5 tests**, with each testing a slightly different aspect.
+
+| Test                                                   | Purpose                                                             | Expected BUGGY | Expected FIXED |
+| ------------------------------------------------------ | ------------------------------------------------------------------- | -------------- | -------------- |
+| `testDefaultLocaleChangeForShortDate`                  | Main defect, short style                                            | Fails          | Passes         |
+| `testDefaultLocaleChangeForMediumDate`                 | Same defect with another date style                                 | Fails          | Passes         |
+| `testDefaultLocaleChangeWithTimeZone`                  | Ensures cache key still distinguishes timezone while locale changes | Fails          | Passes         |
+| `testExplicitLocaleIsNotAffectedByDefaultLocaleChange` | Regression/control for explicit locale                              | Passes         | Passes         |
+| `testSameDefaultLocaleCanReuseFormatter`               | Regression for normal cache reuse                                   | Passes         | Passes         |
+
+### Important test isolation
+
+Because `FastDateFormat` uses static caches, the tests should restore the original default locale with `try/finally`.
+
+For the defect tests, the sequence is deliberately:
+
+```text
+Locale A
+→ create formatter
+→ Locale B
+→ create formatter with null locale
+→ verify formatter follows Locale B
+```
+
+This is independently derived from the cache-key defect rather than copying the supplied trigger inputs.
+
+---
+
+## 5. Complete JUnit 4.12 test class
+
+```java
+package org.apache.commons.lang.time;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertSame;
+
+import java.text.DateFormat;
+import java.util.Locale;
+import java.util.TimeZone;
+
+import org.junit.Test;
+
+public class FastDateFormatLang50Test {
+
+    @Test
+    public void testDefaultLocaleChangeForShortDate() {
+        Locale originalLocale = Locale.getDefault();
+
+        try {
+            Locale firstLocale = Locale.US;
+            Locale secondLocale = Locale.GERMANY;
+
+            Locale.setDefault(firstLocale);
+
+            FastDateFormat first =
+                    FastDateFormat.getDateInstance(FastDateFormat.SHORT);
+
+            String expectedFirstPattern =
+                    ((java.text.SimpleDateFormat)
+                            DateFormat.getDateInstance(FastDateFormat.SHORT, first))
+                            .toPattern();
+
+            assertEquals(expectedFirstPattern, first.getPattern());
+
+            Locale.setDefault(secondLocale);
+
+            FastDateFormat second =
+                    FastDateFormat.getDateInstance(FastDateFormat.SHORT);
+
+            String expectedSecondPattern =
+                    ((java.text.SimpleDateFormat)
+                            DateFormat.getDateInstance(FastDateFormat.SHORT, second))
+                            .toPattern();
+
+            assertEquals(expectedSecondPattern, second.getPattern());
+
+        } finally {
+            Locale.setDefault(originalLocale);
+        }
+    }
+
+    @Test
+    public void testDefaultLocaleChangeForMediumDate() {
+        Locale originalLocale = Locale.getDefault();
+
+        try {
+            Locale firstLocale = Locale.US;
+            Locale secondLocale = Locale.GERMANY;
+
+            Locale.setDefault(firstLocale);
+
+            FastDateFormat first =
+                    FastDateFormat.getDateInstance(FastDateFormat.MEDIUM);
+
+            String expectedFirstPattern =
+                    ((java.text.SimpleDateFormat)
+                            DateFormat.getDateInstance(FastDateFormat.MEDIUM, first))
+                            .toPattern();
+
+            assertEquals(expectedFirstPattern, first.getPattern());
+
+            Locale.setDefault(secondLocale);
+
+            FastDateFormat second =
+                    FastDateFormat.getDateInstance(FastDateFormat.MEDIUM);
+
+            String expectedSecondPattern =
+                    ((java.text.SimpleDateFormat)
+                            DateFormat.getDateInstance(FastDateFormat.MEDIUM, second))
+                            .toPattern();
+
+            assertEquals(expectedSecondPattern, second.getPattern());
+
+        } finally {
+            Locale.setDefault(originalLocale);
+        }
+    }
+
+    @Test
+    public void testDefaultLocaleChangeWithTimeZone() {
+        Locale originalLocale = Locale.getDefault();
+
+        try {
+            Locale firstLocale = Locale.US;
+            Locale secondLocale = Locale.GERMANY;
+            TimeZone timeZone = TimeZone.getTimeZone("GMT+02:00");
+
+            Locale.setDefault(firstLocale);
+
+            FastDateFormat first =
+                    FastDateFormat.getDateInstance(
+                            FastDateFormat.LONG,
+                            timeZone);
+
+            String expectedFirstPattern =
+                    ((java.text.SimpleDateFormat)
+                            DateFormat.getDateInstance(FastDateFormat.LONG, first))
+                            .toPattern();
+
+            assertEquals(expectedFirstPattern, first.getPattern());
+            assertEquals(timeZone, first.getTimeZone());
+
+            Locale.setDefault(secondLocale);
+
+            FastDateFormat second =
+                    FastDateFormat.getDateInstance(
+                            FastDateFormat.LONG,
+                            timeZone);
+
+            String expectedSecondPattern =
+                    ((java.text.SimpleDateFormat)
+                            DateFormat.getDateInstance(FastDateFormat.LONG, second))
+                            .toPattern();
+
+            assertEquals(expectedSecondPattern, second.getPattern());
+            assertEquals(timeZone, second.getTimeZone());
+
+        } finally {
+            Locale.setDefault(originalLocale);
+        }
+    }
+
+    @Test
+    public void testExplicitLocaleIsNotAffectedByDefaultLocaleChange() {
+        Locale originalLocale = Locale.getDefault();
+
+        try {
+            Locale.setDefault(Locale.US);
+
+            FastDateFormat formatter =
+                    FastDateFormat.getDateInstance(
+                            FastDateFormat.MEDIUM,
+                            Locale.FRANCE);
+
+            String expectedPattern =
+                    ((java.text.SimpleDateFormat)
+                            DateFormat.getDateInstance(
+                                    FastDateFormat.MEDIUM,
+                                    Locale.FRANCE))
+                            .toPattern();
+
+            Locale.setDefault(Locale.JAPAN);
+
+            FastDateFormat sameLocaleFormatter =
+                    FastDateFormat.getDateInstance(
+                            FastDateFormat.MEDIUM,
+                            Locale.FRANCE);
+
+            assertNotNull(formatter);
+            assertEquals(expectedPattern, formatter.getPattern());
+            assertEquals(expectedPattern, sameLocaleFormatter.getPattern());
+            assertSame(formatter, sameLocaleFormatter);
+
+        } finally {
+            Locale.setDefault(originalLocale);
+        }
+    }
+
+    @Test
+    public void testSameDefaultLocaleCanReuseFormatter() {
+        Locale originalLocale = Locale.getDefault();
+
+        try {
+            Locale.setDefault(Locale.CANADA);
+
+            FastDateFormat first =
+                    FastDateFormat.getDateInstance(FastDateFormat.SHORT);
+
+            FastDateFormat second =
+                    FastDateFormat.getDateInstance(FastDateFormat.SHORT);
+
+            String expectedPattern =
+                    ((java.text.SimpleDateFormat)
+                            DateFormat.getDateInstance(
+                                    FastDateFormat.SHORT,
+                                    Locale.CANADA))
+                            .toPattern();
+
+            assertEquals(expectedPattern, first.getPattern());
+            assertEquals(expectedPattern, second.getPattern());
+            assertSame(first, second);
+
+        } finally {
+            Locale.setDefault(originalLocale);
+        }
+    }
+}
+```
+
+---
+
+## 6. Defect detection strategy
+
+### Test 1 — `testDefaultLocaleChangeForShortDate`
+
+**BUGGY VERSION**
+
+```text
+default = US
+→ cache formatter using US
+
+default = Germany
+→ lookup uses only SHORT as key
+→ old US formatter is returned
+
+Expected German pattern
+Actual US pattern
+
+FAIL
+```
+
+**FIXED VERSION**
+
+```text
+default = US
+→ cache key contains SHORT + US
+
+default = Germany
+→ cache key contains SHORT + Germany
+→ new formatter is created
+
+PASS
+```
+
+This is the primary defect-detecting test.
+
+---
+
+### Test 2 — `testDefaultLocaleChangeForMediumDate`
+
+Same cache-key defect, but using `MEDIUM` instead of `SHORT`.
+
+**BUGGY:** old-locale formatter is reused → assertion fails.
+
+**FIXED:** locale becomes part of the cache key → correct new-locale formatter → passes.
+
+This provides another independently exercised style rather than relying on only one date style.
+
+---
+
+### Test 3 — `testDefaultLocaleChangeWithTimeZone`
+
+This checks the three relevant dimensions:
+
+```text
+style + timeZone + default locale
+```
+
+The time zone should remain the requested time zone while the locale changes.
+
+**BUGGY:** the locale portion is still missing from the cache key when locale is `null`, so the previous formatter can be returned.
+
+**FIXED:** locale is included in the key, so the new default locale receives its own cached formatter.
+
+---
+
+### Test 4 — `testExplicitLocaleIsNotAffectedByDefaultLocaleChange`
+
+This is a regression/control test.
+
+Here the caller explicitly supplies:
+
+```java
+Locale.FRANCE
+```
+
+Changing the JVM default locale should not change the formatter's locale.
+
+**BUGGY:** passes.
+
+**FIXED:** passes.
+
+This helps demonstrate that the defect is specifically associated with **implicit default-locale selection**, not explicit locale handling.
+
+---
+
+### Test 5 — `testSameDefaultLocaleCanReuseFormatter`
+
+This checks the normal cache behavior.
+
+Two calls with the same:
+
+```text
+style = SHORT
+default locale = CANADA
+```
+
+should reuse the cached formatter.
+
+**BUGGY:** passes.
+
+**FIXED:** passes.
+
+So the generated suite is not simply demanding that a new formatter always be produced; it checks that the cache distinguishes different effective locales while still reusing an identical configuration.
+
+### Summary
+
+* **Root cause:** `getDateInstance()` constructs its cache key before resolving `Locale.getDefault()`, so a formatter created using one default locale can be reused after the JVM default locale changes.
+* **Targeted behavior:** `getDateInstance(style)` must honor the **current default locale** on each distinct locale configuration.
+* **Generated tests:** **5**
+* **Primary defect-detecting tests:** Tests 1–3.
+* **Regression/control tests:** Tests 4–5.
+* **Independence from trigger:** The tests derive their inputs from the source-level cache-key defect and use different locale/style combinations rather than reproducing the supplied trigger test.
+
+The historical Apache Commons Lang release notes independently identify LANG-368 as the `FastDateFormat` default-locale/cache problem. ([Apache Commons][1])
+
+### Limitations
+
+The supplied source is truncated in several unrelated portions of `FastDateFormat`, but the complete relevant `getDateInstance()` implementations are present, including the exact cache-key difference. Therefore the defect mechanism is clear from the provided source.
+
+One practical limitation is that `FastDateFormat` uses **static caches**. If these tests are inserted into a JVM where other tests have already populated the same cache entries, test ordering can influence the first cache state. The defect tests intentionally perform the locale transition within the same test, but a completely isolated Defects4J test execution is preferable.
+
+[1]: https://commons.apache.org/proper/commons-lang/upgradeto2_4.html?utm_source=chatgpt.com "2.4 Release Notes – Apache Commons Lang"

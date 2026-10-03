@@ -1,0 +1,242 @@
+## 1. Behavior ที่แตกต่างกัน
+
+Defect ของ **Lang-36 / LANG-521** อยู่ที่ `NumberUtils.createNumber(String)` โดยเฉพาะกรณี **ตัวเลขที่มี decimal point อยู่ท้ายสุด เช่น `7.`**
+
+จาก fixed revision `26bc3fe...` มีการแก้เพียงจุดสำคัญใน `createNumber`:
+
+```java
+if (!Character.isDigit(lastChar))
+```
+
+เปลี่ยนเป็น
+
+```java
+if (!Character.isDigit(lastChar) && lastChar != '.')
+```
+
+ดังนั้น BUGGY จะมอง `.` ตัวสุดท้ายเหมือนเป็น **type qualifier** ทั้งที่จริงควรถือว่าเป็น decimal point ที่ถูกต้อง ([GitHub][1])
+
+JIRA ของ LANG-521 ระบุโดยตรงว่าเลขที่ลงท้ายด้วย decimal point เช่น `2.` ควรถูกยอมรับเป็น number และ `createNumber` ควรทำงานกับรูปแบบนี้ด้วย ([Apache Issues][2])
+
+---
+
+## 2. Likely root cause
+
+Root cause คือ logic ใน `createNumber()` ตรวจว่าอักขระตัวสุดท้ายไม่ใช่ digit แล้วถือว่าเป็น **type specifier** โดยไม่ได้แยกกรณี `.` ออก
+
+### BUGGY
+
+```java
+if (!Character.isDigit(lastChar)) {
+```
+
+เมื่อ input เป็น
+
+```text
+7.
+```
+
+`lastChar` คือ `.` จึงเข้า branch นี้
+
+ทำให้ `.` ถูกตีความผิดว่าเป็น type qualifier และสุดท้าย parsing ไม่ได้ตามที่ควร
+
+### FIXED
+
+```java
+if (!Character.isDigit(lastChar) && lastChar != '.') {
+```
+
+จึงไม่ถือ `.` ท้ายสุดเป็น type qualifier และปล่อยให้ decimal parsing จัดการต่อ
+
+Commit ระบุชัดว่าเป็นการแก้ `createNumber(String)` เพื่อรองรับ `"2."` และเปลี่ยนแปลงนี้เกิดใน method ที่เราต้องทดสอบโดยตรง ([GitHub][1])
+
+---
+
+## 3. Specific behavior ที่ test ต้องแยกให้ได้
+
+พฤติกรรมที่ต้องการตรวจคือ:
+
+> `NumberUtils.createNumber()` ต้องสามารถสร้าง `Float` จากเลขที่มี decimal point แต่ไม่มี digit หลัง decimal point ได้
+
+เช่น input ที่ออกแบบใหม่:
+
+```text
+7.
+-8.
+```
+
+Expected:
+
+```java
+NumberUtils.createNumber("7.")  -> Float.valueOf("7.")
+NumberUtils.createNumber("-8.") -> Float.valueOf("-8.")
+```
+
+เหตุผลที่ใช้ `7.` และ `-8.` แทน `2.` คือเป็นการออกแบบ input ใหม่จาก behavior ของ defect ไม่ได้คัดลอก input จาก trigger test
+
+Historical project information ก็ยืนยันว่าเมื่อแก้ LANG-521 แล้ว `createNumber` รองรับ trailing decimal point และคืนค่า `Float` สำหรับกรณีนี้ ([Apache Issues][2])
+
+---
+
+## 4. Boundary / Representative / Regression cases
+
+ผมเลือกทั้งหมด **5 tests** โดยไม่ทำซ้ำ semantic เดียวกันมากเกินไป
+
+| Test | Input    | จุดประสงค์                           | BUGGY  | FIXED  |
+| ---- | -------- | ------------------------------------ | ------ | ------ |
+| 1    | `"7."`   | positive trailing decimal            | ❌ fail | ✅ pass |
+| 2    | `"-8."`  | negative trailing decimal            | ❌ fail | ✅ pass |
+| 3    | `"0."`   | boundary ที่ค่าตัวเลขเป็น zero       | ❌ fail | ✅ pass |
+| 4    | `"7.25"` | regression: decimal ปกติ             | ✅ pass | ✅ pass |
+| 5    | `".75"`  | regression: ไม่มี digit ก่อน decimal | ✅ pass | ✅ pass |
+
+### ทำไมเลือก `"0."` เพิ่ม
+
+`0.` เป็น boundary ของ decimal representation เพราะค่าก่อน decimal เป็นค่าต่ำสุดในกลุ่ม non-negative และยังต้องยอมรับ trailing decimal point เหมือนกัน
+
+### ทำไมมี `"7.25"` และ `".75"`
+
+เพื่อป้องกันไม่ให้ test suite ตรวจแค่ exception/failure อย่างเดียว แต่ตรวจว่า fix ไม่ทำให้รูปแบบ decimal ที่เดิมใช้งานได้เสียไปด้วย
+
+Javadoc ของ `createNumber` ระบุว่า method รองรับ decimal point และเลข floating-point หลายรูปแบบ ([Apache Commons][3])
+
+---
+
+## 5. Complete JUnit 4.12 test class
+
+```java
+package org.apache.commons.lang3.math;
+
+import static org.junit.Assert.assertEquals;
+
+import org.junit.Test;
+
+public class NumberUtilsLang36Test {
+
+    @Test
+    public void testCreateNumberPositiveTrailingDecimalPoint() {
+        Number result = NumberUtils.createNumber("7.");
+
+        assertEquals(Float.valueOf("7."), result);
+        assertEquals(Float.class, result.getClass());
+    }
+
+    @Test
+    public void testCreateNumberNegativeTrailingDecimalPoint() {
+        Number result = NumberUtils.createNumber("-8.");
+
+        assertEquals(Float.valueOf("-8."), result);
+        assertEquals(Float.class, result.getClass());
+    }
+
+    @Test
+    public void testCreateNumberZeroWithTrailingDecimalPoint() {
+        Number result = NumberUtils.createNumber("0.");
+
+        assertEquals(Float.valueOf("0."), result);
+        assertEquals(Float.class, result.getClass());
+    }
+
+    @Test
+    public void testCreateNumberRegularDecimalStillWorks() {
+        Number result = NumberUtils.createNumber("7.25");
+
+        assertEquals(Float.valueOf("7.25"), result);
+        assertEquals(Float.class, result.getClass());
+    }
+
+    @Test
+    public void testCreateNumberLeadingDecimalPointStillWorks() {
+        Number result = NumberUtils.createNumber(".75");
+
+        assertEquals(Float.valueOf(".75"), result);
+        assertEquals(Float.class, result.getClass());
+    }
+}
+```
+
+---
+
+## 6. Defect Detection Strategy + Summary
+
+### Expected behavior
+
+| Test                                            | BUGGY version                    | FIXED version                  |
+| ----------------------------------------------- | -------------------------------- | ------------------------------ |
+| `testCreateNumberPositiveTrailingDecimalPoint`  | ❌ Fail — `NumberFormatException` | ✅ Pass — returns `Float(7.0)`  |
+| `testCreateNumberNegativeTrailingDecimalPoint`  | ❌ Fail — `NumberFormatException` | ✅ Pass — returns `Float(-8.0)` |
+| `testCreateNumberZeroWithTrailingDecimalPoint`  | ❌ Fail — `NumberFormatException` | ✅ Pass — returns `Float(0.0)`  |
+| `testCreateNumberRegularDecimalStillWorks`      | ✅ Pass                           | ✅ Pass                         |
+| `testCreateNumberLeadingDecimalPointStillWorks` | ✅ Pass                           | ✅ Pass                         |
+
+ดังนั้น expected suite result คือ:
+
+```text
+BUGGY:
+3 defect-detecting tests fail
+2 regression tests pass
+
+FIXED:
+5 tests pass
+```
+
+### Root cause สรุป
+
+BUGGY มี condition:
+
+```java
+if (!Character.isDigit(lastChar))
+```
+
+ซึ่งตีความ `.` ท้ายสุดผิดเป็น type qualifier
+
+FIXED แก้เป็น:
+
+```java
+if (!Character.isDigit(lastChar) && lastChar != '.')
+```
+
+ทำให้ trailing decimal point ถูกส่งไปจัดการโดย decimal-number logic ตามปกติ ([GitHub][1])
+
+### Targeted behavior
+
+ทดสอบว่า:
+
+```text
+7.
+-8.
+0.
+```
+
+สามารถถูกแปลงเป็น `Float` ได้
+
+### จำนวน test
+
+**5 tests**
+
+* 3 defect-oriented tests
+* 2 regression tests
+
+### ทำไม independent จาก trigger
+
+ไม่ได้ใช้:
+
+* input `"2."` จาก trigger
+* ชื่อ method ของ trigger
+* implementation ของ trigger
+* assertion จาก trigger
+
+แต่ derive จาก **source-level difference** โดยตรงว่า `.` ตัวสุดท้ายถูกจัดการผิดใน BUGGY และต้องได้รับการยอมรับใน FIXED
+
+---
+
+## Limitations
+
+* Source ที่ให้มาใน prompt ถูกตัดช่วง implementation ตรงกลางของ `createNumber()` จึงไม่เห็น parsing branch ทั้งหมดแบบครบทุกบรรทัด
+* อย่างไรก็ตาม fixed revision ที่ระบุสามารถตรวจสอบ diff ได้โดยตรง และ diff แสดงชัดว่าการแก้ defect คือการเพิ่มเงื่อนไข `lastChar != '.'` ใน `createNumber()` ([GitHub][1])
+* JIRA LANG-521 และ commit history ยืนยันว่า intended behavior คือรองรับเลขที่ลงท้ายด้วย decimal point และ `createNumber` ควรคืน `Float` สำหรับกรณีนี้ ([Apache Issues][2])
+* ดังนั้น **3 test แรกมีความมั่นใจสูงว่าเป็น defect-detecting tests** ส่วน 2 test หลังเป็น regression tests เพื่อยืนยันว่า behavior อื่นไม่ถูกกระทบ
+
+[1]: https://github.com/apache/commons-lang/commit/26bc3fe010d5154d3ccac526ec22c429fc3af499 "isNumber(String) and createNumber(String) both modified to support \"2… · apache/commons-lang@26bc3fe · GitHub"
+[2]: https://issues.apache.org/jira/browse/LANG-521?utm_source=chatgpt.com "[LANG-521] NumberUtils.isNumber() Should Return True for Valid Number with a Trailing Decimal Place - ASF Jira"
+[3]: https://commons.apache.org/proper/commons-lang/javadocs/api-3.5/org/apache/commons/lang3/math/NumberUtils.html?utm_source=chatgpt.com "NumberUtils (Apache Commons Lang 3.5 API)"

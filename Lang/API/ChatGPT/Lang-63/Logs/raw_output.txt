@@ -1,0 +1,503 @@
+## 1. SOURCE CODE ANALYSIS
+
+### 1.1 Behavior that differs
+
+The important difference is inside `formatPeriod()` when the initially calculated `days` value becomes negative.
+
+**BUGGY version:**
+
+```java
+while (days < 0) {
+    days += 31;
+    months -= 1;
+}
+```
+
+The buggy implementation always assumes that the month being borrowed from contains **31 days**.
+
+**FIXED version:**
+
+```java
+while (days < 0) {
+    days += start.getActualMaximum(Calendar.DAY_OF_MONTH);
+    months -= 1;
+    start.add(Calendar.MONTH, 1);
+}
+```
+
+The fixed implementation uses the **actual number of days in the relevant month**, so February contributes 28 or 29 days rather than always 31.
+
+This is particularly important when a period crosses a month boundary and the day-of-month of the end date is smaller than the day-of-month of the start date.
+
+### 1.2 Likely root cause
+
+The root cause is the hard-coded:
+
+```java
+days += 31;
+```
+
+A calendar month does not always contain 31 days.
+
+For example:
+
+* February 2005 → 28 days
+* February 2004 → 29 days
+* April → 30 days
+* January → 31 days
+
+Therefore, borrowing a month when calculating a period can produce an incorrect day count.
+
+The fixed implementation obtains the actual maximum number of days from the calendar instead. This matches the source-level change and is the key behavior to target. ([GitHub][1])
+
+### 1.3 Behavior the tests should distinguish
+
+The generated tests should create periods where:
+
+1. The total period is at least 28 days so that the buggy method enters its calendar-based calculation.
+2. `end.dayOfMonth < start.dayOfMonth`, causing `days < 0`.
+3. The month being borrowed has fewer than 31 days.
+4. The format explicitly includes months and days, so the incorrect borrowing is observable.
+
+A strong example is:
+
+* Start: February 28, 2005
+* End: April 1, 2005
+* Format: `"M d"`
+
+The correct decomposition is:
+
+```text
+1 month, 1 day
+```
+
+The buggy implementation effectively borrows 31 days from February:
+
+```text
+1 month, 4 days
+```
+
+This is independently derived from the `days += 31` defect rather than from the trigger test.
+
+---
+
+## 2. TEST CASE DESIGN
+
+I would use **4 tests** covering different calendar boundaries.
+
+| Test | Boundary                | Expected fixed behavior | Buggy behavior |
+| ---- | ----------------------- | ----------------------- | -------------- |
+| 1    | February, non-leap year | `1 1`                   | `1 4`          |
+| 2    | February, leap year     | `1 2`                   | `1 3`          |
+| 3    | 30-day month            | `1 1`                   | `1 2`          |
+| 4    | Normal 31-day month     | `1 1`                   | `1 1`          |
+
+### Test 1 — February in a non-leap year
+
+Start:
+
+```text
+2005-02-28
+```
+
+End:
+
+```text
+2005-04-01
+```
+
+Format:
+
+```text
+"M d"
+```
+
+The period is 32 days, so it does not take the short-duration path.
+
+When `days` becomes negative, February has only 28 days.
+
+Expected:
+
+```text
+1 1
+```
+
+The buggy `+31` calculation produces:
+
+```text
+1 4
+```
+
+### Test 2 — February in a leap year
+
+Start:
+
+```text
+2004-02-29
+```
+
+End:
+
+```text
+2004-04-01
+```
+
+February has 29 days.
+
+Expected:
+
+```text
+1 2
+```
+
+The buggy implementation uses 31 instead of 29 and therefore produces:
+
+```text
+1 4
+```
+
+Actually, with the initial difference:
+
+```text
+days = 1 - 29 = -28
+months = 2
+```
+
+Buggy:
+
+```text
+-28 + 31 = 3 days
+months = 1
+```
+
+So the buggy result is:
+
+```text
+1 3
+```
+
+This makes the leap-year case especially useful because it checks that the implementation uses **29**, not merely "February is shorter than 31."
+
+### Test 3 — 30-day month
+
+Use April as the month being borrowed from:
+
+```text
+2005-04-30 → 2005-06-01
+```
+
+Expected:
+
+```text
+1 1
+```
+
+The buggy implementation uses 31:
+
+```text
+1 2
+```
+
+This verifies that the problem is not specific to February.
+
+### Test 4 — 31-day month regression/control
+
+Use a genuine 31-day month:
+
+```text
+2005-01-31 → 2005-03-01
+```
+
+Expected:
+
+```text
+1 1
+```
+
+Both versions should produce the same result because January really does contain 31 days.
+
+This is a useful regression/control test because it demonstrates that the intended behavior is not simply "never use 31"; rather, the number of days must correspond to the actual month.
+
+---
+
+## 3. JUNIT 4.12 TEST CODE
+
+```java
+package org.apache.commons.lang.time;
+
+import static org.junit.Assert.assertEquals;
+
+import java.util.Calendar;
+import java.util.TimeZone;
+
+import org.junit.Test;
+
+public class DurationFormatUtilsLang63Test {
+
+    private static final TimeZone UTC = TimeZone.getTimeZone("UTC");
+
+    private long millis(int year, int month, int day) {
+        Calendar calendar = Calendar.getInstance(UTC);
+        calendar.clear();
+        calendar.set(year, month, day, 0, 0, 0);
+        return calendar.getTimeInMillis();
+    }
+
+    @Test
+    public void testFormatPeriodBorrowingFromFebruaryNonLeapYear() {
+        long start = millis(2005, Calendar.FEBRUARY, 28);
+        long end = millis(2005, Calendar.APRIL, 1);
+
+        assertEquals("1 1",
+                DurationFormatUtils.formatPeriod(start, end, "M d", true, UTC));
+    }
+
+    @Test
+    public void testFormatPeriodBorrowingFromFebruaryLeapYear() {
+        long start = millis(2004, Calendar.FEBRUARY, 29);
+        long end = millis(2004, Calendar.APRIL, 1);
+
+        assertEquals("1 2",
+                DurationFormatUtils.formatPeriod(start, end, "M d", true, UTC));
+    }
+
+    @Test
+    public void testFormatPeriodBorrowingFromThirtyDayMonth() {
+        long start = millis(2005, Calendar.APRIL, 30);
+        long end = millis(2005, Calendar.JUNE, 1);
+
+        assertEquals("1 1",
+                DurationFormatUtils.formatPeriod(start, end, "M d", true, UTC));
+    }
+
+    @Test
+    public void testFormatPeriodBorrowingFromThirtyOneDayMonth() {
+        long start = millis(2005, Calendar.JANUARY, 31);
+        long end = millis(2005, Calendar.MARCH, 1);
+
+        assertEquals("1 1",
+                DurationFormatUtils.formatPeriod(start, end, "M d", true, UTC));
+    }
+}
+```
+
+---
+
+## 4. DEFECT DETECTION STRATEGY
+
+### Test 1 — Non-leap February
+
+Input:
+
+```text
+2005-02-28 → 2005-04-01
+```
+
+Format:
+
+```text
+"M d"
+```
+
+**BUGGY VERSION:**
+
+* Initial day difference = `1 - 28 = -27`
+* Buggy code adds `31`
+* `-27 + 31 = 4`
+* Result approximately:
+
+```text
+1 4
+```
+
+Therefore the assertion expecting `"1 1"` **fails**.
+
+**FIXED VERSION:**
+
+* February has 28 days.
+* `-27 + 28 = 1`
+* Result:
+
+```text
+1 1
+```
+
+The assertion **passes**.
+
+**Defect-detecting: YES**
+
+---
+
+### Test 2 — Leap February
+
+Input:
+
+```text
+2004-02-29 → 2004-04-01
+```
+
+**BUGGY VERSION:**
+
+* Initial day difference = `1 - 29 = -28`
+* Adds 31
+* `-28 + 31 = 3`
+
+Result:
+
+```text
+1 3
+```
+
+Assertion expects `"1 2"`, so it **fails**.
+
+**FIXED VERSION:**
+
+* February 2004 has 29 days.
+* `-28 + 29 = 1`
+* After the calendar adjustment, the resulting period is:
+
+```text
+1 month, 2 days
+```
+
+So the assertion **passes**.
+
+**Defect-detecting: YES**
+
+---
+
+### Test 3 — 30-day month
+
+Input:
+
+```text
+2005-04-30 → 2005-06-01
+```
+
+**BUGGY VERSION:**
+
+* Initial day difference = `1 - 30 = -29`
+* Adds 31
+* `-29 + 31 = 2`
+
+Result:
+
+```text
+1 2
+```
+
+Assertion expects `"1 1"`, so it **fails**.
+
+**FIXED VERSION:**
+
+April contains 30 days:
+
+```text
+-29 + 30 = 1
+```
+
+Result:
+
+```text
+1 1
+```
+
+Assertion **passes**.
+
+**Defect-detecting: YES**
+
+---
+
+### Test 4 — 31-day month regression/control
+
+Input:
+
+```text
+2005-01-31 → 2005-03-01
+```
+
+January actually has 31 days.
+
+**BUGGY VERSION:**
+
+Using `+31` happens to be correct.
+
+Result:
+
+```text
+1 1
+```
+
+Assertion **passes**.
+
+**FIXED VERSION:**
+
+The actual month length is also 31.
+
+Result:
+
+```text
+1 1
+```
+
+Assertion **passes**.
+
+**Defect-detecting: NO — regression/control test**
+
+This test is intentionally included to verify that the test suite is checking the month-length calculation rather than simply expecting every borrowing operation to behave differently.
+
+---
+
+## 5. SUMMARY
+
+### Root cause
+
+The buggy `formatPeriod()` assumes every month has 31 days:
+
+```java
+days += 31;
+```
+
+This produces incorrect period decomposition when the month being borrowed from has fewer than 31 days.
+
+The fixed implementation uses the calendar's actual maximum number of days for the relevant month. ([GitHub][1])
+
+### Targeted behavior
+
+The tests target:
+
+* borrowing days from February in a non-leap year,
+* borrowing days from February in a leap year,
+* borrowing days from a 30-day month,
+* and a 31-day month as a regression/control case.
+
+### Number of generated tests
+
+**4 JUnit 4.12 tests**
+
+* 3 defect-oriented tests
+* 1 regression/control test
+
+### Why they are independent
+
+The tests do not invoke or reproduce the supplied `testJiraLang281` trigger.
+
+They derive their inputs directly from the source-level defect:
+
+> `days += 31`
+
+The test cases deliberately select calendar months whose actual lengths are **28, 29, and 30 days**, plus a genuine 31-day month for control.
+
+---
+
+## 6. LIMITATIONS
+
+* The supplied source is sufficient to identify the core defect because the buggy/fixed implementations clearly show the change from a hard-coded `31` to calendar-aware month length.
+* Exact execution results should still be confirmed by running the generated class against both:
+
+  * `Lang-63-buggy`
+  * `Lang-63-fixed`
+* Calendar calculations are explicitly forced to **UTC** in the tests so that timezone/DST behavior does not introduce unrelated differences.
+* The test suite intentionally focuses on the modified `formatPeriod()` behavior rather than testing unrelated formatting functionality.
+
+[1]: https://github.com/apache/commons-lang/blob/master/src/main/java/org/apache/commons/lang3/time/DurationFormatUtils.java?utm_source=chatgpt.com "commons-lang/src/main/java/org/apache/commons/lang3/time/DurationFormatUtils.java at master · apache/commons-lang · GitHub"

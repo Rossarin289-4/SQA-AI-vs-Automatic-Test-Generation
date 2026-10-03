@@ -1,0 +1,404 @@
+## 1. SOURCE CODE ANALYSIS
+
+### 1.1 Behavior that differs
+
+The important difference is in both `unescape(String)` and `unescape(Writer, String)` when the input contains a **numeric character reference** such as:
+
+* `&#123;`
+* `&#x7B;`
+
+In the **BUGGY** version, the numeric value is parsed and immediately converted to `char`.
+
+```java
+entityValue = Integer.parseInt(...);
+...
+buf.append((char) (entityValue));
+```
+
+There is **no check that the value fits into a Java `char`**.
+
+In the **FIXED** version, after parsing:
+
+```java
+if (entityValue > 0xFFFF) {
+    entityValue = -1;
+}
+```
+
+So values above `65535` are treated as invalid entities and are preserved literally.
+
+### 1.2 Likely root cause
+
+The root cause is that `unescape` accepts an arbitrary integer from a numeric entity and casts it to a 16-bit `char`.
+
+Java `char` can represent only:
+
+```text
+0x0000 .. 0xFFFF
+0 .. 65535
+```
+
+Therefore, for example, a value such as `65536` cannot be represented directly as one `char`.
+
+The buggy implementation effectively performs:
+
+```java
+(char) 65536
+```
+
+which wraps the value instead of rejecting the numeric entity.
+
+The fixed implementation explicitly checks:
+
+```java
+entityValue > 0xFFFF
+```
+
+before performing the conversion.
+
+### 1.3 Behavior the tests should distinguish
+
+The generated tests should establish this rule:
+
+> **Numeric entities whose value is greater than `0xFFFF` must not be converted into a character; they should remain unchanged in the output.**
+
+At the same time, the boundary value `0xFFFF` should still be accepted.
+
+This gives us a useful boundary:
+
+| Input value |  Decimal | Expected              |
+| ----------- | -------: | --------------------- |
+| `0xFFFF`    |    65535 | Convert to `\uFFFF`   |
+| `0x10000`   |    65536 | Keep entity unchanged |
+| `0x11170`   |    70000 | Keep entity unchanged |
+| `0xFFFFFF`  | 16777215 | Keep entity unchanged |
+
+The hexadecimal and decimal paths should both be tested because the source parses them through different branches.
+
+---
+
+## 2. TEST CASE DESIGN
+
+I would use **5 complementary tests**.
+
+### Test 1 — Decimal value just above `char` maximum
+
+Input:
+
+```text
+"start&#65536;end"
+```
+
+Expected:
+
+```text
+"start&#65536;end"
+```
+
+This directly tests the smallest invalid value above `0xFFFF`.
+
+---
+
+### Test 2 — Hexadecimal value just above `char` maximum
+
+Input:
+
+```text
+"left&#x10000;right"
+```
+
+Expected:
+
+```text
+"left&#x10000;right"
+```
+
+This exercises the hexadecimal parsing branch independently from the decimal branch.
+
+---
+
+### Test 3 — Larger decimal value
+
+Input:
+
+```text
+"A&#70000;B"
+```
+
+Expected:
+
+```text
+"A&#70000;B"
+```
+
+This verifies that the fix is not only for the exact boundary value `65536`.
+
+---
+
+### Test 4 — Valid upper boundary
+
+Input:
+
+```text
+"X&#65535;Y"
+```
+
+Expected:
+
+```text
+"X\uFFFFY"
+```
+
+This is an important boundary/regression test. We do **not** want the fix to reject every large numeric entity; `65535` is still representable by `char`.
+
+---
+
+### Test 5 — Writer overload
+
+The source contains the same numeric conversion logic in:
+
+```java
+unescape(Writer writer, String string)
+```
+
+Therefore, test the writer-based API with a value above `0xFFFF`.
+
+Input:
+
+```text
+"before&#x10001;after"
+```
+
+Expected output:
+
+```text
+"before&#x10001;after"
+```
+
+This checks that the corresponding fixed behavior is present in the Writer implementation too.
+
+---
+
+## 3. JUNIT 4.12 TEST CODE
+
+The test class stays in the same package so it can directly instantiate the package-private `Entities` class.
+
+```java
+package org.apache.commons.lang;
+
+import static org.junit.Assert.assertEquals;
+
+import java.io.StringWriter;
+import java.io.IOException;
+
+import org.junit.Test;
+
+public class EntitiesLang62Test {
+
+    @Test
+    public void testUnescapeKeepsDecimalValueJustAboveCharMaximum() {
+        Entities entities = new Entities();
+
+        String input = "start&#65536;end";
+
+        assertEquals("start&#65536;end", entities.unescape(input));
+    }
+
+    @Test
+    public void testUnescapeKeepsHexValueJustAboveCharMaximum() {
+        Entities entities = new Entities();
+
+        String input = "left&#x10000;right";
+
+        assertEquals("left&#x10000;right", entities.unescape(input));
+    }
+
+    @Test
+    public void testUnescapeKeepsLargerDecimalValue() {
+        Entities entities = new Entities();
+
+        String input = "A&#70000;B";
+
+        assertEquals("A&#70000;B", entities.unescape(input));
+    }
+
+    @Test
+    public void testUnescapeAcceptsMaximumCharValue() {
+        Entities entities = new Entities();
+
+        String input = "X&#65535;Y";
+
+        assertEquals("X\uFFFFY", entities.unescape(input));
+    }
+
+    @Test
+    public void testUnescapeWriterKeepsHexValueAboveCharMaximum()
+            throws IOException {
+        Entities entities = new Entities();
+        StringWriter writer = new StringWriter();
+
+        String input = "before&#x10001;after";
+
+        entities.unescape(writer, input);
+
+        assertEquals("before&#x10001;after", writer.toString());
+    }
+}
+```
+
+---
+
+## 4. DEFECT DETECTION STRATEGY
+
+### Test 1 — Decimal `65536`
+
+**Input:** `start&#65536;end`
+
+**BUGGY VERSION:**
+
+* Parses `65536`.
+* Casts it to `char`.
+* `65536` wraps to character value `0`.
+* The entity is therefore incorrectly converted.
+* **Expected: FAIL**
+
+**FIXED VERSION:**
+
+* Parses `65536`.
+* Detects `65536 > 0xFFFF`.
+* Sets `entityValue = -1`.
+* Preserves `&#65536;`.
+* **Expected: PASS**
+
+This is a strong defect-detecting test.
+
+---
+
+### Test 2 — Hexadecimal `0x10000`
+
+**Input:** `left&#x10000;right`
+
+**BUGGY VERSION:**
+
+* Parses hexadecimal `10000` as decimal value `65536`.
+* Casts it to `char`.
+* Incorrectly converts the entity.
+* **Expected: FAIL**
+
+**FIXED VERSION:**
+
+* Parses `65536`.
+* Rejects it because it is greater than `0xFFFF`.
+* Keeps the original entity.
+* **Expected: PASS**
+
+This independently covers the hexadecimal branch.
+
+---
+
+### Test 3 — Larger decimal value
+
+**Input:** `A&#70000;B`
+
+**BUGGY VERSION:**
+
+* Parses `70000`.
+* Converts it to `char`.
+* Produces an incorrect character instead of preserving the entity.
+* **Expected: FAIL**
+
+**FIXED VERSION:**
+
+* `70000 > 65535`.
+* Numeric entity is considered invalid.
+* Original entity is retained.
+* **Expected: PASS**
+
+This confirms the problem is a range issue rather than a single special value.
+
+---
+
+### Test 4 — Maximum valid `char`
+
+**Input:** `X&#65535;Y`
+
+**BUGGY VERSION:**
+
+* `65535` is representable by `char`.
+* Conversion is valid.
+* **Expected: PASS**
+
+**FIXED VERSION:**
+
+* `65535` is **not greater than** `0xFFFF`.
+* It is still converted.
+* **Expected: PASS**
+
+This is a regression/boundary test and should pass on both versions.
+
+---
+
+### Test 5 — Writer overload
+
+**Input:** `before&#x10001;after`
+
+**BUGGY VERSION:**
+
+* Parses `0x10001` as `65537`.
+* Casts it to `char`.
+* Incorrectly converts the entity.
+* **Expected: FAIL**
+
+**FIXED VERSION:**
+
+* Parses `65537`.
+* Rejects the value because it exceeds `0xFFFF`.
+* Writes the original entity text.
+* **Expected: PASS**
+
+This verifies the same boundary rule through the `Writer`-based `unescape` implementation.
+
+### Expected overall result
+
+| Test                       | BUGGY | FIXED | Defect-detecting? |
+| -------------------------- | ----- | ----- | ----------------- |
+| Decimal just above maximum | FAIL  | PASS  | Yes               |
+| Hex just above maximum     | FAIL  | PASS  | Yes               |
+| Larger decimal value       | FAIL  | PASS  | Yes               |
+| Maximum valid `char`       | PASS  | PASS  | No — regression   |
+| Writer overload            | FAIL  | PASS  | Yes               |
+
+So the suite contains **4 defect-detecting tests and 1 boundary regression test**.
+
+---
+
+## 5. SUMMARY
+
+* **Root cause:** `unescape` converts numeric entity values to `char` without checking whether the value exceeds `0xFFFF`.
+* **Buggy behavior:** values greater than `65535` wrap when converted to Java `char`.
+* **Fixed behavior:** values greater than `0xFFFF` are treated as invalid and the original entity text is preserved.
+* **Generated tests:** **5**
+
+  * 4 specifically designed to fail on the buggy implementation.
+  * 1 boundary regression test for the maximum valid `char` value.
+* The tests are independent of the original trigger because they use different inputs, different values, and different arrangements of surrounding text rather than reproducing the trigger implementation.
+* Both decimal and hexadecimal numeric parsing are covered.
+* The `Writer` overload is also checked because it contains the same vulnerable conversion logic.
+
+---
+
+## 6. LIMITATIONS
+
+The supplied source is very large and truncated in unrelated portions, but the relevant `unescape` implementations are fully visible, including the exact behavioral change:
+
+```java
+if (entityValue > 0xFFFF) {
+    entityValue = -1;
+}
+```
+
+Therefore, the defect mechanism and expected behavior are clear from the provided BUGGY/FIXED comparison.
+
+One practical limitation is that the exact Defects4J build/test configuration is not provided here, so the expected BUGGY/FIXED outcomes are derived from the source-level difference rather than an actual execution against the two workspaces. The decisive criterion remains:
+
+**BUGGY fails + FIXED passes.**

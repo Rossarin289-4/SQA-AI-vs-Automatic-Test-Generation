@@ -1,0 +1,300 @@
+## 1. Behavior that differs
+
+`LANG-432` concerns **locale-dependent case-insensitive matching** in `StringUtils.containsIgnoreCase`.
+
+The intended behavior is that case-insensitive containment should not depend on the JVM's default locale. The JIRA description explicitly identifies the problem as using locale-sensitive `String.to*Case()` operations for case-insensitive comparisons. ([Apache Issues][1])
+
+For example, under the Turkish locale, lowercase `i` and uppercase `I` have special casing rules. A case-insensitive search should still treat the corresponding upper/lowercase forms consistently.
+
+The affected API is:
+
+```java
+StringUtils.containsIgnoreCase(String str, String searchStr)
+```
+
+The historical API documentation states that case-insensitivity is intended to follow the semantics of `String.equalsIgnoreCase(String)`, rather than locale-specific transformations. ([Javadoc][2])
+
+---
+
+## 2. Likely root cause visible from the source
+
+The defect is caused by implementing case-insensitive matching through **locale-sensitive string case conversion**.
+
+Conceptually, the buggy implementation behaves like:
+
+```java
+str.toUpperCase().indexOf(searchStr.toUpperCase()) >= 0
+```
+
+or an equivalent locale-sensitive `toLowerCase()` approach.
+
+That is problematic because `String.toUpperCase()` without an explicit locale uses the JVM default locale.
+
+For Turkish, for example:
+
+```text
+"i".toUpperCase(Turkish)  -> "İ"
+"I".toUpperCase(Turkish)  -> "I"
+```
+
+Therefore a string containing `"I"` can fail to match a search string containing `"i"` even though the operation is supposed to ignore case.
+
+The corrected implementation uses character-region comparison rather than converting the complete strings according to the default locale. Historical Commons Lang implementations use `regionMatches(true, ...)` for this purpose. 
+
+---
+
+## 3. Specific behavior and independently designed test cases
+
+The generated tests should distinguish:
+
+> **Case-insensitive containment must produce the same logical result even when the JVM default locale is Turkish.**
+
+I would use **5 complementary tests**.
+
+| Test | Scenario                                              | Expected |
+| ---- | ----------------------------------------------------- | -------- |
+| 1    | Mixed-case word containing `I/i` under Turkish locale | `true`   |
+| 2    | Longer text with `I/i` in the middle                  | `true`   |
+| 3    | Lowercase search against uppercase text               | `true`   |
+| 4    | Similar-looking but genuinely different text          | `false`  |
+| 5    | Locale-independent ordinary case-insensitive match    | `true`   |
+
+The important defect-triggering tests deliberately change the **default locale to Turkish**, perform the normal public API call, and restore the original locale afterward.
+
+The values below are independently chosen and do not reproduce the supplied trigger test.
+
+---
+
+## 4. Complete JUnit 4.12 test class
+
+```java
+package org.apache.commons.lang;
+
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+
+import java.util.Locale;
+
+import org.junit.Test;
+
+public class StringUtilsLang40Test {
+
+    @Test
+    public void testContainsIgnoreCaseIsNotAffectedByTurkishLocale() {
+        Locale original = Locale.getDefault();
+
+        try {
+            Locale.setDefault(new Locale("tr", "TR"));
+
+            assertTrue(
+                StringUtils.containsIgnoreCase("DIGITAL", "digital")
+            );
+        } finally {
+            Locale.setDefault(original);
+        }
+    }
+
+    @Test
+    public void testContainsIgnoreCaseWithMixedTextUnderTurkishLocale() {
+        Locale original = Locale.getDefault();
+
+        try {
+            Locale.setDefault(new Locale("tr", "TR"));
+
+            assertTrue(
+                StringUtils.containsIgnoreCase(
+                    "The SILVER Device",
+                    "silver"
+                )
+            );
+        } finally {
+            Locale.setDefault(original);
+        }
+    }
+
+    @Test
+    public void testContainsIgnoreCaseWithUppercaseTextAndLowercaseSearch() {
+        Locale original = Locale.getDefault();
+
+        try {
+            Locale.setDefault(new Locale("tr", "TR"));
+
+            assertTrue(
+                StringUtils.containsIgnoreCase(
+                    "MINIMUM VALUE",
+                    "minimum"
+                )
+            );
+        } finally {
+            Locale.setDefault(original);
+        }
+    }
+
+    @Test
+    public void testContainsIgnoreCaseDoesNotMatchDifferentLetters() {
+        Locale original = Locale.getDefault();
+
+        try {
+            Locale.setDefault(new Locale("tr", "TR"));
+
+            assertFalse(
+                StringUtils.containsIgnoreCase(
+                    "DIGITAL",
+                    "digitalx"
+                )
+            );
+        } finally {
+            Locale.setDefault(original);
+        }
+    }
+
+    @Test
+    public void testContainsIgnoreCaseNormalCaseInsensitiveMatch() {
+        Locale original = Locale.getDefault();
+
+        try {
+            Locale.setDefault(new Locale("tr", "TR"));
+
+            assertTrue(
+                StringUtils.containsIgnoreCase(
+                    "Computer Science",
+                    "SCIENCE"
+                )
+            );
+        } finally {
+            Locale.setDefault(original);
+        }
+    }
+}
+```
+
+---
+
+## 5. Defect detection strategy
+
+### Test 1 — `testContainsIgnoreCaseIsNotAffectedByTurkishLocale`
+
+Input:
+
+```text
+str       = "DIGITAL"
+searchStr = "digital"
+locale    = Turkish
+```
+
+**BUGGY:** expected to return `false` because locale-sensitive uppercasing can transform the lowercase `i` characters differently.
+
+**FIXED:** expected to return `true`.
+
+This is the strongest defect-oriented test because it directly exercises the locale-sensitive `I/i` case distinction.
+
+---
+
+### Test 2 — `testContainsIgnoreCaseWithMixedTextUnderTurkishLocale`
+
+Input:
+
+```text
+"The SILVER Device"
+"silver"
+```
+
+**BUGGY:** expected `false` under Turkish locale because the case conversion can make the lowercase `i` incompatible with uppercase `I`.
+
+**FIXED:** expected `true`.
+
+This checks the same underlying defect in a longer, more realistic string rather than a minimal one-character example.
+
+---
+
+### Test 3 — `testContainsIgnoreCaseWithUppercaseTextAndLowercaseSearch`
+
+Input:
+
+```text
+"MINIMUM VALUE"
+"minimum"
+```
+
+**BUGGY:** expected `false` under Turkish locale.
+
+**FIXED:** expected `true`.
+
+This provides another independently selected occurrence pattern containing multiple `I/i` characters.
+
+---
+
+### Test 4 — `testContainsIgnoreCaseDoesNotMatchDifferentLetters`
+
+Input:
+
+```text
+"DIGITAL"
+"digitalx"
+```
+
+**BUGGY:** expected `false`.
+
+**FIXED:** expected `false`.
+
+This is primarily a regression/boundary test. It makes sure fixing the locale problem does not cause a non-existing substring to be reported as present.
+
+---
+
+### Test 5 — `testContainsIgnoreCaseNormalCaseInsensitiveMatch`
+
+Input:
+
+```text
+"Computer Science"
+"SCIENCE"
+```
+
+**BUGGY:** expected `true` in this particular case.
+
+**FIXED:** expected `true`.
+
+This is a regression test for ordinary case-insensitive containment that does not depend on the problematic Turkish `I/i` conversion.
+
+### Expected overall result
+
+| Version   | Test 1 | Test 2 | Test 3 | Test 4 | Test 5 |
+| --------- | ------ | ------ | ------ | ------ | ------ |
+| **BUGGY** | ❌      | ❌      | ❌      | ✅      | ✅      |
+| **FIXED** | ✅      | ✅      | ✅      | ✅      | ✅      |
+
+Therefore the first three tests are the primary **defect-detecting tests**.
+
+The key difference is not simply "case-insensitive matching"; it is specifically:
+
+> **case-insensitive matching must remain correct when the JVM default locale has Turkish casing rules.**
+
+This is consistent with LANG-432's documented problem with locale-sensitive `String.to*Case()` operations. ([Apache Issues][1])
+
+---
+
+## 6. Summary and limitations
+
+### Summary
+
+* **Root cause:** `containsIgnoreCase` used locale-sensitive case conversion for a comparison that should be locale-independent.
+* **Targeted behavior:** case-insensitive substring matching involving `I/i` while the default locale is Turkish.
+* **Number of generated tests:** **5**
+* **Primary defect-detecting tests:** **3**
+* **Regression/boundary tests:** **2**
+* The tests directly call `StringUtils.containsIgnoreCase`.
+* No reflection is used.
+* No production code is modified.
+* The supplied trigger test is not invoked.
+* The test inputs are independently selected rather than copied from the trigger.
+
+The historical Commons Lang API defines `containsIgnoreCase` as case-insensitive containment, and the later implementation uses region-based case-insensitive matching rather than locale-dependent whole-string conversion. ([Javadoc][2])
+
+### Limitations
+
+The supplied source was truncated before the actual `containsIgnoreCase` method, so the exact buggy method body is not visible in the prompt. The root-cause analysis therefore relies on the LANG-432 description and the historical Commons Lang implementation surrounding this defect. The JIRA itself explicitly identifies locale-sensitive `String.to*Case()` as the issue. ([Apache Issues][1])
+
+Because of that, the expected BUGGY failures above are based on the documented LANG-432 defect rather than a direct execution of the two supplied workspaces.
+
+[1]: https://issues.apache.org/jira/browse/LANG-432?utm_source=chatgpt.com "[LANG-432] Fix case-insensitive string handling - ASF Jira"
+[2]: https://javadoc.io/static/commons-lang/commons-lang/2.6/org/apache/commons/lang/StringUtils.html?utm_source=chatgpt.com "StringUtils (Commons Lang 2.6 API)"

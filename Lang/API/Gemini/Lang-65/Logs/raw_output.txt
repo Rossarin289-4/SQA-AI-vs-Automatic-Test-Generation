@@ -1,0 +1,165 @@
+### Identify
+
+1. **The behavior that differs**:
+   In the buggy version, when `DateUtils.modify(Calendar val, int field, boolean round)` is executed, the truncation block for lower calendar fields (milliseconds, seconds, and minutes) is completely empty. As a result, when truncating or rounding a calendar or date object to a higher field (such as `Calendar.DATE` or `Calendar.HOUR_OF_DAY`), the lower fields (minutes, seconds, milliseconds) are left unchanged rather than being zeroed out. In the fixed version, those lower fields are explicitly cleared/truncated using calculated millisecond offsets on the underlying `Date` object.
+
+2. **The likely root cause visible from the source**:
+   The `modify` method contains commented-out placeholder comments (`// truncate milliseconds`, `// truncate seconds`, `// truncate minutes`) with no implementation code under them in the buggy version. Consequently, clearing smaller fields during truncation/rounding is omitted.
+
+3. **The specific behavior that a generated test should distinguish between the buggy and fixed versions**:
+   A test should truncate a `Date` or `Calendar` object containing non-zero minutes, seconds, and milliseconds to a higher calendar field (e.g., `Calendar.DATE` or `Calendar.HOUR_OF_DAY`). The fixed version will return a date where the minutes, seconds, and milliseconds are zeroed out, whereas the buggy version will retain the original minutes, seconds, and milliseconds values.
+
+4. **Boundary cases, representative cases, and regression cases that are independently designed**:
+   - *Truncation to Calendar.DATE*: Tests that hours, minutes, seconds, and milliseconds are all set to 0.
+   - *Truncation to Calendar.HOUR_OF_DAY*: Tests that minutes, seconds, and milliseconds are set to 0 while hours are preserved.
+   - *Truncation to Calendar.MINUTE*: Tests that seconds and milliseconds are set to 0 while minutes and hours are preserved.
+   - *Round vs. Truncate behavior*: Ensures rounding works properly with the new manual time-subtraction logic when values are above or below the midpoint thresholds.
+
+---
+
+### Test Case Design
+
+- **`testTruncateToDateClearsTimeFields`**: Constructs a date with specific non-zero hours, minutes, seconds, and milliseconds, truncates it to `Calendar.DATE`, and asserts that the resulting time corresponds strictly to midnight (00:00:00.000).
+- **`testTruncateToHourClearsSubMinuteAndSecondFields`**: Constructs a date with non-zero minutes, seconds, and milliseconds, truncates it to `Calendar.HOUR_OF_DAY`, and asserts that minutes, seconds, and milliseconds are all zeroed out while the hour is retained.
+- **`testTruncateToMinuteClearsSecondsAndMilliseconds`**: Constructs a date with non-zero seconds and milliseconds, truncates it to `Calendar.MINUTE`, and asserts that seconds and milliseconds are zeroed while minutes are retained.
+- **`testRoundDownToDate`**: Tests rounding behavior when time is below the midpoint of the day (e.g., 11:59:59.999), ensuring it rounds down to the start of the current day.
+- **`testRoundUpToDate`**: Tests rounding behavior when time is at or above the midpoint of the day (e.g., 12:00:00.000), ensuring it rounds up to the next day.
+
+---
+
+### JUnit 4.12 Test Code
+
+```java
+package org.apache.commons.lang.time;
+
+import static org.junit.Assert.assertEquals;
+
+import java.util.Calendar;
+import java.util.Date;
+import java.util.TimeZone;
+
+import org.junit.Test;
+
+public class DateUtilsLang65Test {
+
+    @Test
+    public void testTruncateToDateClearsTimeFields() {
+        Calendar cal = Calendar.getInstance(TimeZone.getDefault());
+        cal.set(2020, Calendar.JANUARY, 15, 14, 30, 45);
+        cal.set(Calendar.MILLISECOND, 888);
+
+        Date truncated = DateUtils.truncate(cal.getTime(), Calendar.DATE);
+
+        Calendar resultCal = Calendar.getInstance(TimeZone.getDefault());
+        resultCal.setTime(truncated);
+
+        assertEquals(2020, resultCal.get(Calendar.YEAR));
+        assertEquals(Calendar.JANUARY, resultCal.get(Calendar.MONTH));
+        assertEquals(15, resultCal.get(Calendar.DATE));
+        assertEquals(0, resultCal.get(Calendar.HOUR_OF_DAY));
+        assertEquals(0, resultCal.get(Calendar.MINUTE));
+        assertEquals(0, resultCal.get(Calendar.SECOND));
+        assertEquals(0, resultCal.get(Calendar.MILLISECOND));
+    }
+
+    @Test
+    public void testTruncateToHourClearsSubMinuteAndSecondFields() {
+        Calendar cal = Calendar.getInstance(TimeZone.getDefault());
+        cal.set(2020, Calendar.JANUARY, 15, 14, 30, 45);
+        cal.set(Calendar.MILLISECOND, 888);
+
+        Date truncated = DateUtils.truncate(cal.getTime(), Calendar.HOUR_OF_DAY);
+
+        Calendar resultCal = Calendar.getInstance(TimeZone.getDefault());
+        resultCal.setTime(truncated);
+
+        assertEquals(2020, resultCal.get(Calendar.YEAR));
+        assertEquals(Calendar.JANUARY, resultCal.get(Calendar.MONTH));
+        assertEquals(15, resultCal.get(Calendar.DATE));
+        assertEquals(14, resultCal.get(Calendar.HOUR_OF_DAY));
+        assertEquals(0, resultCal.get(Calendar.MINUTE));
+        assertEquals(0, resultCal.get(Calendar.SECOND));
+        assertEquals(0, resultCal.get(Calendar.MILLISECOND));
+    }
+
+    @Test
+    public void testTruncateToMinuteClearsSecondsAndMilliseconds() {
+        Calendar cal = Calendar.getInstance(TimeZone.getDefault());
+        cal.set(2020, Calendar.JANUARY, 15, 14, 30, 45);
+        cal.set(Calendar.MILLISECOND, 888);
+
+        Date truncated = DateUtils.truncate(cal.getTime(), Calendar.MINUTE);
+
+        Calendar resultCal = Calendar.getInstance(TimeZone.getDefault());
+        resultCal.setTime(truncated);
+
+        assertEquals(2020, resultCal.get(Calendar.YEAR));
+        assertEquals(Calendar.JANUARY, resultCal.get(Calendar.MONTH));
+        assertEquals(15, resultCal.get(Calendar.DATE));
+        assertEquals(14, resultCal.get(Calendar.HOUR_OF_DAY));
+        assertEquals(30, resultCal.get(Calendar.MINUTE));
+        assertEquals(0, resultCal.get(Calendar.SECOND));
+        assertEquals(0, resultCal.get(Calendar.MILLISECOND));
+    }
+
+    @Test
+    public void testRoundDownToDate() {
+        Calendar cal = Calendar.getInstance(TimeZone.getDefault());
+        cal.set(2020, Calendar.JANUARY, 15, 11, 59, 59);
+        cal.set(Calendar.MILLISECOND, 999);
+
+        Calendar result = Calendar.getInstance(TimeZone.getDefault());
+        result.setTime(DateUtils.round(cal.getTime(), Calendar.DATE));
+
+        assertEquals(2020, result.get(Calendar.YEAR));
+        assertEquals(Calendar.JANUARY, result.get(Calendar.MONTH));
+        assertEquals(15, result.get(Calendar.DATE));
+        assertEquals(0, result.get(Calendar.HOUR_OF_DAY));
+        assertEquals(0, result.get(Calendar.MINUTE));
+        assertEquals(0, result.get(Calendar.SECOND));
+        assertEquals(0, result.get(Calendar.MILLISECOND));
+    }
+
+    @Test
+    public void testRoundUpToDate() {
+        Calendar cal = Calendar.getInstance(TimeZone.getDefault());
+        cal.set(2020, Calendar.JANUARY, 15, 12, 0, 0);
+        cal.set(Calendar.MILLISECOND, 0);
+
+        Calendar result = Calendar.getInstance(TimeZone.getDefault());
+        result.setTime(DateUtils.round(cal.getTime(), Calendar.DATE));
+
+        assertEquals(2020, result.get(Calendar.YEAR));
+        assertEquals(Calendar.JANUARY, result.get(Calendar.MONTH));
+        assertEquals(16, result.get(Calendar.DATE));
+        assertEquals(0, result.get(Calendar.HOUR_OF_DAY));
+        assertEquals(0, result.get(Calendar.MINUTE));
+        assertEquals(0, result.get(Calendar.SECOND));
+        assertEquals(0, result.get(Calendar.MILLISECOND));
+    }
+}
+```
+
+---
+
+### Defect Detection Strategy
+
+- **BUGGY VERSION**:
+  - `DateUtils.truncate(date, Calendar.DATE)` leaves minutes, seconds, and milliseconds intact. For instance, a date at `14:30:45.888` remains at `14:30:45.888` (or incorrectly modified only by higher-level field offsets without clearing sub-fields). Consequently, assertions expecting `0` for hours, minutes, seconds, and milliseconds will fail.
+- **FIXED VERSION**:
+  - `DateUtils.truncate(date, Calendar.DATE)` correctly subtracts millisecond equivalents of milliseconds, seconds, minutes, and hours using the newly implemented manual truncation block, returning midnight `00:00:00.000`. All assertions pass successfully.
+
+---
+
+### Summary
+
+- **Root cause**: The `modify` method omitted the implementation code required to manually truncate milliseconds, seconds, and minutes.
+- **Targeted behavior**: Proper truncation and clearing of lower-order calendar time fields when truncating or rounding to higher-order fields.
+- **Number of generated tests**: 5
+- **Why the tests are independent from the original trigger test**: They verify distinct truncation levels (`Calendar.DATE`, `Calendar.HOUR_OF_DAY`, `Calendar.MINUTE`) and rounding boundaries (`round` down vs `round` up) using synthesized dates, avoiding duplication of the developer's trigger test logic.
+
+---
+
+### Limitations
+
+No significant limitations or uncertainties; the missing time truncation implementation in the buggy source code is directly observable and fully testable via public `truncate` and `round` API methods.

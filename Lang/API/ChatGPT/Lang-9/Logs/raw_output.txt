@@ -1,0 +1,247 @@
+## 1. Behavior that differs
+
+The defect is in `FastDateParser.init()` while parsing the **format pattern**.
+
+The buggy version parses the pattern piece-by-piece using `formatPattern`. If parsing stops before reaching the end of the supplied pattern, it simply continues and builds a parser from the successfully parsed prefix.
+
+The fixed version adds this check after the loop:
+
+```java
+if (patternMatcher.regionStart() != patternMatcher.regionEnd()) {
+    throw new IllegalArgumentException(...);
+}
+```
+
+So the behavioral difference is:
+
+| Input pattern situation                          | BUGGY                | FIXED                      |
+| ------------------------------------------------ | -------------------- | -------------------------- |
+| Completely valid pattern                         | accepted             | accepted                   |
+| Pattern contains an unterminated/unparsed suffix | incorrectly accepted | `IllegalArgumentException` |
+| Pattern is only partially consumed by the parser | incorrectly accepted | rejected                   |
+
+This matches the description of LANG-832: `FastDateParser` did not handle unterminated quotes in the same way as `SimpleDateFormat`. ([Apache Issues][1])
+
+---
+
+## 2. Likely root cause visible from the source
+
+The root cause is **missing validation that the entire input pattern was consumed**.
+
+In the buggy `init()`:
+
+```java
+for (;;) {
+    ...
+    if(!patternMatcher.lookingAt()) {
+        nextStrategy = null;
+        break;
+    }
+    ...
+}
+if(currentStrategy.addRegex(this, regex)) {
+    collector.add(currentStrategy);
+}
+```
+
+When `lookingAt()` becomes false, the loop exits, but the code does not check whether there is still unparsed text remaining.
+
+Therefore, a pattern such as a valid prefix followed by an unmatched quote can be partially parsed and silently accepted.
+
+The fixed implementation adds:
+
+```java
+if (patternMatcher.regionStart() != patternMatcher.regionEnd()) {
+    throw new IllegalArgumentException(...);
+}
+```
+
+This makes `init()` reject a pattern whenever the parser stopped before reaching the end.
+
+The Apache Jira report specifically describes the problem as FastDateParser accepting an unterminated-quote pattern that should fail. ([Apache Issues][1])
+
+---
+
+## 3. Specific behavior the generated tests should distinguish
+
+The generated tests should exercise **malformed patterns that have a valid prefix followed by an unmatched quote**.
+
+The important oracle is:
+
+> If `FastDateParser` cannot consume the entire format pattern, construction must throw `IllegalArgumentException`.
+
+I would use several independently designed malformed patterns rather than reproducing the known trigger.
+
+### Test categories
+
+1. **Literal followed by an unmatched quote**
+
+   * Example: `"'A'b'"`
+
+2. **Longer date pattern followed by an unmatched quote**
+
+   * Example: `"yyyy-MM-dd'"`
+
+3. **Quoted literal followed by a field and an unmatched quote**
+
+   * Example: `"'Q'yyyy'"`
+
+These all exercise the same source-level condition, but through different pattern structures.
+
+The tests do **not** need to assert a parsed date. The defect happens during `init()`, before normal date parsing.
+
+---
+
+## 4. Boundary, representative, and regression cases
+
+### Boundary case
+
+A completely valid quoted pattern should still be accepted:
+
+```text
+'Q'yyyy
+```
+
+This checks that the new validation does not reject legitimate patterns.
+
+### Representative defect cases
+
+| Test | Pattern         | Expected                   |
+| ---- | --------------- | -------------------------- |
+| 1    | `"'A'b'"`       | `IllegalArgumentException` |
+| 2    | `"yyyy-MM-dd'"` | `IllegalArgumentException` |
+| 3    | `"'Q'yyyy'"`    | `IllegalArgumentException` |
+
+These patterns are independently derived from the source behavior rather than from the supplied trigger test.
+
+### Regression case
+
+A valid pattern containing a quoted literal:
+
+```text
+'Q'yyyy
+```
+
+should successfully construct a `FastDateParser`.
+
+This is useful because the fix adds stricter pattern validation. We want to verify that it rejects **unconsumed malformed input**, not valid quoted patterns.
+
+---
+
+## 5. JUnit 4.12 test code
+
+The following class directly tests `FastDateParser.init()` through the normal constructor. It uses the same package so the protected constructor can be accessed without reflection.
+
+```java
+package org.apache.commons.lang3.time;
+
+import java.util.Locale;
+import java.util.TimeZone;
+
+import org.junit.Test;
+
+public class FastDateParserLang9Test {
+
+    private static final TimeZone UTC = TimeZone.getTimeZone("UTC");
+    private static final Locale LOCALE = Locale.US;
+
+    @Test
+    public void testRejectsUnterminatedQuoteAfterLiteralAndField() {
+        try {
+            new FastDateParser("'A'b'", UTC, LOCALE);
+        } catch (IllegalArgumentException expected) {
+            return;
+        }
+
+        throw new AssertionError(
+                "Expected IllegalArgumentException for a pattern with an unparsed trailing quote");
+    }
+
+    @Test
+    public void testRejectsUnterminatedQuoteAfterDatePattern() {
+        try {
+            new FastDateParser("yyyy-MM-dd'", UTC, LOCALE);
+        } catch (IllegalArgumentException expected) {
+            return;
+        }
+
+        throw new AssertionError(
+                "Expected IllegalArgumentException for a pattern with an unparsed trailing quote");
+    }
+
+    @Test
+    public void testRejectsUnterminatedQuoteAfterQuotedLiteralAndYear() {
+        try {
+            new FastDateParser("'Q'yyyy'", UTC, LOCALE);
+        } catch (IllegalArgumentException expected) {
+            return;
+        }
+
+        throw new AssertionError(
+                "Expected IllegalArgumentException for a pattern with an unparsed trailing quote");
+    }
+
+    @Test
+    public void testAcceptsFullyConsumedQuotedLiteralPattern() {
+        new FastDateParser("'Q'yyyy", UTC, LOCALE);
+    }
+}
+```
+
+### Expected behavior
+
+| Test                                                    | BUGGY VERSION                      | FIXED VERSION                                |
+| ------------------------------------------------------- | ---------------------------------- | -------------------------------------------- |
+| `testRejectsUnterminatedQuoteAfterLiteralAndField`      | **FAIL** — parser returns normally | **PASS** — throws `IllegalArgumentException` |
+| `testRejectsUnterminatedQuoteAfterDatePattern`          | **FAIL** — parser returns normally | **PASS** — throws `IllegalArgumentException` |
+| `testRejectsUnterminatedQuoteAfterQuotedLiteralAndYear` | **FAIL** — parser returns normally | **PASS** — throws `IllegalArgumentException` |
+| `testAcceptsFullyConsumedQuotedLiteralPattern`          | **PASS**                           | **PASS**                                     |
+
+Thus the first three are defect-detecting tests under the experiment definition: **BUGGY fails, FIXED passes**.
+
+The fourth is a regression/boundary test. It is not expected to distinguish the two versions, but it protects against an overly aggressive fix.
+
+---
+
+## 6. Defect detection strategy, summary, and limitations
+
+### Defect detection strategy
+
+The central invariant being tested is:
+
+> `FastDateParser.init()` must consume the complete supplied format pattern.
+
+For the malformed patterns, the buggy implementation stops when `lookingAt()` can no longer match, but does not verify that the parser reached the end. Consequently, construction succeeds.
+
+The fixed implementation checks:
+
+```java
+patternMatcher.regionStart() != patternMatcher.regionEnd()
+```
+
+and throws `IllegalArgumentException` when characters remain.
+
+Therefore:
+
+* **BUGGY:** malformed patterns are incorrectly accepted.
+* **FIXED:** malformed patterns are rejected with `IllegalArgumentException`.
+* **Valid pattern:** both versions accept it.
+
+### Summary
+
+* **Root cause:** `init()` in the buggy version did not verify that the entire format pattern had been consumed.
+* **Targeted behavior:** reject partially parsed/unterminated-quote format patterns.
+* **Number of generated tests:** **4**
+
+  * 3 defect-detecting malformed-pattern tests.
+  * 1 valid-pattern regression/boundary test.
+* **Independence:** the tests use newly derived patterns such as `"'A'b'"`, `"yyyy-MM-dd'"`, and `"'Q'yyyy'"`; they do not reproduce the supplied trigger test or its exact input/expected values.
+* **API usage:** tests call `FastDateParser` normally and do not use reflection or modify production code.
+
+### Limitations
+
+The source supplied in the prompt is sufficient to identify the relevant fix: the fixed version adds an explicit check for unconsumed pattern text. The Jira report independently confirms that LANG-832 concerns incorrectly accepted unterminated-quote patterns. ([Apache Issues][1])
+
+One limitation is that the exact original trigger implementations were intentionally not used, so the tests are designed from the **source-level invariant** rather than attempting to reproduce the historical trigger. The valid-pattern test also cannot itself detect the defect; its purpose is to ensure the stricter validation does not reject valid input.
+
+[1]: https://issues.apache.org/jira/browse/LANG-832?utm_source=chatgpt.com "[LANG-832] FastDateParser does not handle unterminated quotes correctly - ASF Jira"
