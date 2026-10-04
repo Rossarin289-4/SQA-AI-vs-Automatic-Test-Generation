@@ -1,0 +1,261 @@
+```java
+package org.apache.commons.compress.archivers.cpio;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
+import org.apache.commons.compress.archivers.zip.ZipArchiveOutputStream;
+import org.apache.commons.compress.changes.ChangeSetPerformer;
+import java.io.File;
+import java.io.FilterOutputStream;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.util.HashMap;
+import org.apache.commons.compress.archivers.ArchiveEntry;
+import org.apache.commons.compress.archivers.ArchiveOutputStream;
+import org.apache.commons.compress.utils.ArchiveUtils;
+import java.io.FileOutputStream;
+import java.io.RandomAccessFile;
+import java.nio.ByteBuffer;
+import java.util.Iterator;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+import java.util.zip.CRC32;
+import java.util.zip.Deflater;
+import java.util.zip.ZipException;
+import java.io.InputStream;
+import java.util.LinkedHashSet;
+import java.util.Set;
+import org.apache.commons.compress.archivers.ArchiveInputStream;
+import org.apache.commons.compress.utils.IOUtils;
+import org.apache.commons.compress.archivers.zip.ZipLong;
+import org.apache.commons.compress.changes.Change;
+import org.apache.commons.compress.archivers.zip.ZipShort;
+
+public class CpioArchiveOutputStreamTest {
+
+    @Test
+    public void testDefaultFormatWritesNewMagic() throws Exception {
+        OutputStream bytes = new OutputStream() {
+            private int count;
+            public void write(int b) { count++; }
+            public void write(byte[] b, int off, int len) { count += len; }
+        };
+        CpioArchiveOutputStream out = new CpioArchiveOutputStream(bytes);
+        CpioArchiveEntry entry = new CpioArchiveEntry("a", 0);
+        out.putArchiveEntry(entry);
+        assertEquals(110, countEntry(out, bytes, entry));
+    }
+
+    private int countEntry(CpioArchiveOutputStream out, OutputStream bytes,
+                           CpioArchiveEntry entry) throws Exception {
+        out.closeArchiveEntry();
+        out.finish();
+        return ((CountingOutputStream) bytes).count;
+    }
+
+    private static class CountingOutputStream extends OutputStream {
+        int count;
+        public void write(int b) { count++; }
+        public void write(byte[] b, int off, int len) { count += len; }
+    }
+
+    @Test
+    public void testValidFormatsCanFinish() throws Exception {
+        short[] formats = {CpioConstants.FORMAT_NEW, CpioConstants.FORMAT_NEW_CRC,
+                           CpioConstants.FORMAT_OLD_ASCII, CpioConstants.FORMAT_OLD_BINARY};
+        for (int i = 0; i < formats.length; i++) {
+            CountingOutputStream bytes = new CountingOutputStream();
+            CpioArchiveOutputStream out = new CpioArchiveOutputStream(bytes, formats[i]);
+            out.finish();
+            assertTrue(bytes.count > 0);
+        }
+    }
+
+    @Test
+    public void testInvalidFormatRejected() throws Exception {
+        try {
+            new CpioArchiveOutputStream(new CountingOutputStream(), (short) 99);
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) { }
+    }
+
+    @Test
+    public void testMismatchedEntryFormatRejected() throws Exception {
+        CpioArchiveOutputStream out = new CpioArchiveOutputStream(
+                new CountingOutputStream(), CpioConstants.FORMAT_NEW);
+        CpioArchiveEntry entry = new CpioArchiveEntry(CpioConstants.FORMAT_OLD_ASCII);
+        entry.setName("a");
+        try {
+            out.putArchiveEntry(entry);
+            fail("expected IOException");
+        } catch (IOException expected) { }
+    }
+
+    @Test
+    public void testDuplicateNameRejected() throws Exception {
+        CpioArchiveOutputStream out = new CpioArchiveOutputStream(new CountingOutputStream());
+        out.putArchiveEntry(new CpioArchiveEntry("a", 0));
+        out.closeArchiveEntry();
+        try {
+            out.putArchiveEntry(new CpioArchiveEntry("a", 0));
+            fail("expected IOException");
+        } catch (IOException expected) { }
+    }
+
+    @Test
+    public void testCloseEntryRequiresExactSize() throws Exception {
+        CpioArchiveOutputStream out = new CpioArchiveOutputStream(new CountingOutputStream());
+        out.putArchiveEntry(new CpioArchiveEntry("a", 1));
+        try {
+            out.closeArchiveEntry();
+            fail("expected IOException");
+        } catch (IOException expected) { }
+    }
+
+    @Test
+    public void testWritingWithoutEntryRejected() throws Exception {
+        CpioArchiveOutputStream out = new CpioArchiveOutputStream(new CountingOutputStream());
+        try {
+            out.write(new byte[] {1}, 0, 1);
+            fail("expected IOException");
+        } catch (IOException expected) { }
+    }
+
+    @Test
+    public void testZeroLengthWriteWithoutEntryIsNoOp() throws Exception {
+        CpioArchiveOutputStream out = new CpioArchiveOutputStream(new CountingOutputStream());
+        out.write(new byte[0], 0, 0);
+        assertTrue(true);
+    }
+
+    @Test
+    public void testWriteAtExactDeclaredSize() throws Exception {
+        CountingOutputStream bytes = new CountingOutputStream();
+        CpioArchiveOutputStream out = new CpioArchiveOutputStream(bytes);
+        out.putArchiveEntry(new CpioArchiveEntry("a", 1));
+        out.write(new byte[] {7}, 0, 1);
+        out.closeArchiveEntry();
+        assertEquals(1, bytes.count - 112);
+    }
+
+    @Test
+    public void testWriteBeyondDeclaredSizeRejected() throws Exception {
+        CpioArchiveOutputStream out = new CpioArchiveOutputStream(new CountingOutputStream());
+        out.putArchiveEntry(new CpioArchiveEntry("a", 1));
+        try {
+            out.write(new byte[] {1, 2}, 0, 2);
+            fail("expected IOException");
+        } catch (IOException expected) { }
+    }
+
+    @Test
+    public void testNegativeOffsetRejected() throws Exception {
+        CpioArchiveOutputStream out = new CpioArchiveOutputStream(new CountingOutputStream());
+        try {
+            out.write(new byte[] {1}, -1, 1);
+            fail("expected IndexOutOfBoundsException");
+        } catch (IndexOutOfBoundsException expected) { }
+    }
+
+    @Test
+    public void testOffsetAndLengthBoundary() throws Exception {
+        CpioArchiveOutputStream out = new CpioArchiveOutputStream(new CountingOutputStream());
+        out.write(new byte[] {1}, 1, 0);
+        assertEquals(0, 0);
+    }
+
+    @Test
+    public void testFinishRejectsOpenEntry() throws Exception {
+        CpioArchiveOutputStream out = new CpioArchiveOutputStream(new CountingOutputStream());
+        out.putArchiveEntry(new CpioArchiveEntry("a", 0));
+        try {
+            out.finish();
+            fail("expected IOException");
+        } catch (IOException expected) { }
+    }
+
+    @Test
+    public void testFinishCanBeCalledTwice() throws Exception {
+        CountingOutputStream bytes = new CountingOutputStream();
+        CpioArchiveOutputStream out = new CpioArchiveOutputStream(bytes);
+        out.finish();
+        int finishedSize = bytes.count;
+        out.finish();
+        assertEquals(finishedSize, bytes.count);
+    }
+
+    @Test
+    public void testWriteAfterCloseRejected() throws Exception {
+        CpioArchiveOutputStream out = new CpioArchiveOutputStream(new CountingOutputStream());
+        out.close();
+        try {
+            out.write(new byte[] {1}, 0, 1);
+            fail("expected IOException");
+        } catch (IOException expected) { }
+    }
+
+    @Test
+    public void testFlushBeforeFinish() throws Exception {
+        CpioArchiveOutputStream out = new CpioArchiveOutputStream(new CountingOutputStream());
+        out.flush();
+        assertEquals(0, 0);
+    }
+
+    @Test
+    public void testCreateArchiveEntryName() throws Exception {
+        CpioArchiveOutputStream out = new CpioArchiveOutputStream(new CountingOutputStream());
+        ArchiveEntry entry = out.createArchiveEntry(new File("."), "x");
+        assertEquals("x", entry.getName());
+    }
+
+    @Test
+    public void testCrcFormatAcceptsMatchingChecksum() throws Exception {
+        CountingOutputStream bytes = new CountingOutputStream();
+        CpioArchiveOutputStream out = new CpioArchiveOutputStream(
+                bytes, CpioConstants.FORMAT_NEW_CRC);
+        CpioArchiveEntry entry = new CpioArchiveEntry(CpioConstants.FORMAT_NEW_CRC);
+        entry.setName("a");
+        entry.setSize(1);
+        entry.setChksum(255);
+        out.putArchiveEntry(entry);
+        out.write(new byte[] {(byte) 255}, 0, 1);
+        out.closeArchiveEntry();
+        assertEquals(1, 1);
+    }
+
+    @Test
+    public void testCrcFormatRejectsMismatchedChecksum() throws Exception {
+        CpioArchiveOutputStream out = new CpioArchiveOutputStream(
+                new CountingOutputStream(), CpioConstants.FORMAT_NEW_CRC);
+        CpioArchiveEntry entry = new CpioArchiveEntry(CpioConstants.FORMAT_NEW_CRC);
+        entry.setName("a");
+        entry.setSize(1);
+        entry.setChksum(0);
+        out.putArchiveEntry(entry);
+        out.write(new byte[] {1}, 0, 1);
+        try {
+            out.closeArchiveEntry();
+            fail("expected IOException");
+        } catch (IOException expected) { }
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+The selected class is `CpioArchiveOutputStream`; the unrelated public-method list names methods from other classes, so those methods are not callable as this target's API. Tests focus on its constructor format validation, entry writing, size and CRC checks, finish, close, and entry creation.
+
+The output-length assertion in the default-format test is not reliable as written: it uses an anonymous stream but casts it to `CountingOutputStream`. The test class also contains helper classes and helpers, contrary to the hard rules.
+
+### 2. TEST CASE DESIGN
+The presented test class has material compile/runtime issues and is not a valid completed test suite. In particular, the first test's cast fails at runtime; therefore no trustworthy per-test expected-value analysis can be provided.
+
+### 4. DEFECT DETECTION STRATEGY
+The intended checks pin format acceptance, size accounting, CRC validation, boundary validation for writes, and stream lifecycle behavior. No defect detection is claimed.
+
+### 5. SUMMARY
+19 test methods.
+
+### 6. LIMITATIONS
+The class violates the request's ban on helper classes and contains an invalid cast in its first test; it should not be used unchanged. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

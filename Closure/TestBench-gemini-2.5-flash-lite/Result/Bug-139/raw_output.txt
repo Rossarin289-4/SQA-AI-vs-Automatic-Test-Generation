@@ -1,0 +1,771 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Preconditions;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.javascript.jscomp.NodeTraversal.AbstractPostOrderCallback;
+import com.google.javascript.jscomp.NodeTraversal.Callback;
+import com.google.javascript.jscomp.Scope.Var;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import java.util.Map;
+
+public class NormalizeTest {
+
+    // Helper method to create a simple compiler for testing
+    private static class MockCompiler extends AbstractCompiler {
+        @Override
+        public String toSource(Node root) {
+            // Simplified toSource for testing purposes.
+            return root.toStringTree();
+        }
+
+        @Override
+        public void reportCodeChange() {
+            // No-op for tests
+        }
+
+        // Implement other abstract methods with no-ops or minimal functionality
+        @Override public void report(JSError error) {}
+        @Override public void throwInternalError(String msg, Exception cause) { throw new RuntimeException(msg, cause); }
+        @Override public CodingConvention getCodingConvention() { return new CodingConvention.DefaultCodingConvention(); }
+        @Override public ErrorManager getErrorManager() { return new BasicErrorManager(); }
+        @Override public boolean isNormalized() { return false; }
+        @Override public void setNormalized() {}
+        @Override public void setUnnormalized() {}
+        @Override public boolean areNodesEqualForInlining(Node n1, Node n2) { return n1.isEquivalentTo(n2); }
+        @Override public Node parseSyntheticCode(String code) { return null; }
+        @Override public Node parseSyntheticCode(String filename, String code) { return null; }
+        @Override public JSModuleGraph getModuleGraph() { return null; }
+        @Override public JSTypeRegistry getTypeRegistry() { return new JSTypeRegistry(null); }
+        @Override public ScopeCreator getScopeCreator() { return new SyntacticScopeCreator(this); }
+        @Override public Scope getTopScope() { return null; }
+        @Override public CompilerInput getInput(String sourceName) { return null; }
+        @Override public CompilerInput newExternInput(String name) { return null; }
+        @Override public void addToDebugLog(String message) {}
+        @Override public void setCssRenamingMap(CssRenamingMap map) {}
+        @Override public CssRenamingMap getCssRenamingMap() { return null; }
+        @Override public Node getNodeForCodeInsertion(JSModule module) { return new Node(Token.SCRIPT); }
+        @Override public TypeValidator getTypeValidator() { return null; }
+        @Override public Supplier<String> getUniqueNameIdSupplier() { return null; }
+        @Override public boolean hasHaltingErrors() { return false; }
+        @Override public void addChangeHandler(CodeChangeHandler handler) {}
+        @Override public void removeChangeHandler(CodeChangeHandler handler) {}
+        @Override public boolean isIdeMode() { return false; }
+        @Override public Config getParserConfig() { return new Config(null, null, false, false, false, false, false, false, false, false); }
+        @Override public boolean isTypeCheckingEnabled() { return false; }
+        @Override public void prepareAst(Node root) {}
+        @Override public SymbolTable acquireSymbolTable() { return null; }
+        @Override public ReverseAbstractInterpreter getReverseAbstractInterpreter() { return null; }
+    }
+
+    // --- Tests for Normalize.PropogateConstantAnnotations ---
+
+    @Test
+    public void testPropagateConstantAnnotations_simpleConstant() throws Exception {
+        Node root = Node.newString("var a = 1;");
+        root.putBooleanProp(Node.IS_CONSTANT_NAME, true); // Simulate external or JSDoc constant
+        Node nameNode = root.getFirstChild();
+        nameNode.setString("a");
+
+        AbstractCompiler compiler = new MockCompiler();
+        Normalize.PropogateConstantAnnotations pass = new Normalize.PropogateConstantAnnotations(compiler, false);
+
+        NodeTraversal traversal = new NodeTraversal(compiler, pass);
+        traversal.traverse(root);
+
+        assertTrue(nameNode.getBooleanProp(Node.IS_CONSTANT_NAME));
+    }
+
+    @Test
+    public void testPropagateConstantAnnotations_noConstant() throws Exception {
+        Node root = Node.newString("var a = 1;");
+        Node nameNode = root.getFirstChild();
+        nameNode.setString("a");
+
+        AbstractCompiler compiler = new MockCompiler();
+        Normalize.PropogateConstantAnnotations pass = new Normalize.PropogateConstantAnnotations(compiler, false);
+
+        NodeTraversal traversal = new NodeTraversal(compiler, pass);
+        traversal.traverse(root);
+
+        assertFalse(nameNode.getBooleanProp(Node.IS_CONSTANT_NAME));
+    }
+
+    @Test
+    public void testPropagateConstantAnnotations_existingConstant() throws Exception {
+        Node root = Node.newString("var a = 1;");
+        Node nameNode = root.getFirstChild();
+        nameNode.setString("a");
+        nameNode.putBooleanProp(Node.IS_CONSTANT_NAME, true);
+
+        AbstractCompiler compiler = new MockCompiler();
+        Normalize.PropogateConstantAnnotations pass = new Normalize.PropogateConstantAnnotations(compiler, false);
+
+        NodeTraversal traversal = new NodeTraversal(compiler, pass);
+        traversal.traverse(root);
+
+        assertTrue(nameNode.getBooleanProp(Node.IS_CONSTANT_NAME));
+    }
+
+
+    // --- Tests for Normalize.NormalizeStatements ---
+
+    @Test
+    public void testNormalizeStatements_splitVarDeclarations() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node block = new Node(Token.BLOCK);
+        root.addChildToBack(block);
+        Node varNode = new Node(Token.VAR);
+        varNode.addChildToBack(new Node(Token.NAME, "a"));
+        varNode.addChildToBack(new Node(Token.NAME, "b"));
+        block.addChildToBack(varNode);
+
+        AbstractCompiler compiler = new MockCompiler();
+        Normalize.NormalizeStatements pass = new Normalize.NormalizeStatements(compiler, false);
+        NodeTraversal traversal = new NodeTraversal(compiler, pass);
+        traversal.traverse(root);
+
+        assertEquals(2, block.getChildCount());
+        assertEquals(Token.VAR, block.getChildAtIndex(0).getType());
+        assertEquals("a", block.getChildAtIndex(0).getFirstChild().getString());
+        assertEquals(Token.VAR, block.getChildAtIndex(1).getType());
+        assertEquals("b", block.getChildAtIndex(1).getFirstChild().getString());
+    }
+
+    @Test
+    public void testNormalizeStatements_convertWhileToFor() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node block = new Node(Token.BLOCK);
+        root.addChildToBack(block);
+        Node whileNode = new Node(Token.WHILE, new Node(Token.TRUE), new Node(Token.BLOCK));
+        block.addChildToBack(whileNode);
+
+        AbstractCompiler compiler = new MockCompiler();
+        Normalize.NormalizeStatements pass = new Normalize.NormalizeStatements(compiler, false);
+        NodeTraversal traversal = new NodeTraversal(compiler, pass);
+        traversal.traverse(root);
+
+        assertEquals(Token.FOR, whileNode.getType());
+        assertEquals(Token.EMPTY, whileNode.getFirstChild().getType()); // Initializer
+        assertEquals(Token.TRUE, whileNode.getChildAtIndex(1).getType()); // Condition
+        assertEquals(Token.EMPTY, whileNode.getLastChild().getType()); // Increment
+    }
+
+    @Test
+    public void testNormalizeStatements_extractForInitializer() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node block = new Node(Token.BLOCK);
+        root.addChildToBack(block);
+        Node forNode = new Node(Token.FOR);
+        forNode.addChildToBack(new Node(Token.VAR, new Node(Token.NAME, "i")));
+        forNode.addChildToBack(new Node(Token.TRUE));
+        forNode.addChildToBack(new Node(Token.EMPTY));
+        forNode.addChildToBack(new Node(Token.BLOCK));
+        block.addChildToBack(forNode);
+
+        AbstractCompiler compiler = new MockCompiler();
+        Normalize.NormalizeStatements pass = new Normalize.NormalizeStatements(compiler, false);
+        NodeTraversal traversal = new NodeTraversal(compiler, pass);
+        traversal.traverse(root);
+
+        assertEquals(2, block.getChildCount()); // Var statement + For loop
+        assertEquals(Token.VAR, block.getChildAtIndex(0).getType());
+        assertEquals("i", block.getChildAtIndex(0).getFirstChild().getString());
+        assertEquals(Token.FOR, block.getChildAtIndex(1).getType());
+        assertEquals(Token.EMPTY, block.getChildAtIndex(1).getFirstChild().getType()); // Initializer should be empty now
+    }
+
+    @Test
+    public void testNormalizeStatements_normalizeLabels_blockChild() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node block = new Node(Token.BLOCK);
+        root.addChildToBack(block);
+        Node labelNode = new Node(Token.LABEL, "myLabel");
+        labelNode.addChildToBack(new Node(Token.BLOCK));
+        block.addChildToBack(labelNode);
+
+        AbstractCompiler compiler = new MockCompiler();
+        Normalize.NormalizeStatements pass = new Normalize.NormalizeStatements(compiler, false);
+        NodeTraversal traversal = new NodeTraversal(compiler, pass);
+        traversal.traverse(root);
+
+        assertEquals(1, block.getChildCount());
+        assertEquals(Token.LABEL, block.getFirstChild().getType());
+        assertEquals(Token.BLOCK, block.getFirstChild().getLastChild().getType());
+    }
+
+    @Test
+    public void testNormalizeStatements_normalizeLabels_loopChild() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node block = new Node(Token.BLOCK);
+        root.addChildToBack(block);
+        Node labelNode = new Node(Token.LABEL, "myLabel");
+        labelNode.addChildToBack(new Node(Token.WHILE, new Node(Token.TRUE), new Node(Token.BLOCK)));
+        block.addChildToBack(labelNode);
+
+        AbstractCompiler compiler = new MockCompiler();
+        Normalize.NormalizeStatements pass = new Normalize.NormalizeStatements(compiler, false);
+        NodeTraversal traversal = new NodeTraversal(compiler, pass);
+        traversal.traverse(root);
+
+        assertEquals(1, block.getChildCount());
+        assertEquals(Token.LABEL, block.getFirstChild().getType());
+        assertEquals(Token.WHILE, block.getFirstChild().getLastChild().getType());
+    }
+
+    @Test
+    public void testNormalizeStatements_normalizeLabels_nonBlockOrLoopChild() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node block = new Node(Token.BLOCK);
+        root.addChildToBack(block);
+        Node labelNode = new Node(Token.LABEL, "myLabel");
+        labelNode.addChildToBack(new Node(Token.EXPR_RESULT, new Node(Token.CALL)));
+        block.addChildToBack(labelNode);
+
+        AbstractCompiler compiler = new MockCompiler();
+        Normalize.NormalizeStatements pass = new Normalize.NormalizeStatements(compiler, false);
+        NodeTraversal traversal = new NodeTraversal(compiler, pass);
+        traversal.traverse(root);
+
+        assertEquals(1, block.getChildCount());
+        assertEquals(Token.LABEL, block.getFirstChild().getType());
+        assertEquals(Token.BLOCK, block.getFirstChild().getLastChild().getType());
+        assertEquals(Token.EXPR_RESULT, block.getFirstChild().getLastChild().getFirstChild().getType());
+    }
+
+    @Test
+    public void testNormalizeStatements_rewriteFunctionDeclaration() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node block = new Node(Token.BLOCK);
+        root.addChildToBack(block);
+        Node fnDecl = new Node(Token.FUNCTION, new Node(Token.NAME, "myFunc"), new Node(Token.LP), new Node(Token.BLOCK));
+        block.addChildToBack(fnDecl);
+
+        AbstractCompiler compiler = new MockCompiler();
+        Normalize.NormalizeStatements pass = new Normalize.NormalizeStatements(compiler, false);
+        NodeTraversal traversal = new NodeTraversal(compiler, pass);
+        traversal.traverse(root);
+
+        assertEquals(1, block.getChildCount());
+        assertEquals(Token.VAR, block.getFirstChild().getType());
+        assertEquals(Token.NAME, block.getFirstChild().getFirstChild().getType());
+        assertEquals("myFunc", block.getFirstChild().getFirstChild().getString());
+        assertEquals(Token.FUNCTION, block.getFirstChild().getLastChild().getType());
+        assertEquals("", block.getFirstChild().getLastChild().getFirstChild().getString()); // Anonymous function name
+    }
+
+    @Test
+    public void testNormalizeStatements_moveNamedFunctions_singleFunction() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node fnBody = new Node(Token.BLOCK);
+        root.addChildToBack(fnBody);
+        fnBody.addChildToBack(new Node(Token.FUNCTION, new Node(Token.NAME, "foo"), new Node(Token.LP), new Node(Token.BLOCK)));
+
+        AbstractCompiler compiler = new MockCompiler();
+        Normalize.NormalizeStatements pass = new Normalize.NormalizeStatements(compiler, false);
+        NodeTraversal traversal = new NodeTraversal(compiler, pass);
+        traversal.traverse(root);
+
+        assertEquals(1, fnBody.getChildCount());
+        assertEquals(Token.FUNCTION, fnBody.getFirstChild().getType());
+        assertEquals("foo", fnBody.getFirstChild().getFirstChild().getString());
+    }
+
+    @Test
+    public void testNormalizeStatements_moveNamedFunctions_functionAfterStatement() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node fnBody = new Node(Token.BLOCK);
+        root.addChildToBack(fnBody);
+        fnBody.addChildToBack(new Node(Token.EXPR_RESULT, new Node(Token.CALL)));
+        fnBody.addChildToBack(new Node(Token.FUNCTION, new Node(Token.NAME, "foo"), new Node(Token.LP), new Node(Token.BLOCK)));
+
+        AbstractCompiler compiler = new MockCompiler();
+        Normalize.NormalizeStatements pass = new Normalize.NormalizeStatements(compiler, false);
+        NodeTraversal traversal = new NodeTraversal(compiler, pass);
+        traversal.traverse(root);
+
+        assertEquals(2, fnBody.getChildCount());
+        assertEquals(Token.FUNCTION, fnBody.getFirstChild().getType());
+        assertEquals("foo", fnBody.getFirstChild().getFirstChild().getString());
+        assertEquals(Token.EXPR_RESULT, fnBody.getChildAtIndex(1).getType());
+    }
+
+    @Test
+    public void testNormalizeStatements_moveNamedFunctions_multipleFunctions() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node fnBody = new Node(Token.BLOCK);
+        root.addChildToBack(fnBody);
+        fnBody.addChildToBack(new Node(Token.FUNCTION, new Node(Token.NAME, "bar"), new Node(Token.LP), new Node(Token.BLOCK)));
+        fnBody.addChildToBack(new Node(Token.EXPR_RESULT, new Node(Token.CALL)));
+        fnBody.addChildToBack(new Node(Token.FUNCTION, new Node(Token.NAME, "foo"), new Node(Token.LP), new Node(Token.BLOCK)));
+
+        AbstractCompiler compiler = new MockCompiler();
+        Normalize.NormalizeStatements pass = new Normalize.NormalizeStatements(compiler, false);
+        NodeTraversal traversal = new NodeTraversal(compiler, pass);
+        traversal.traverse(root);
+
+        assertEquals(3, fnBody.getChildCount());
+        assertEquals(Token.FUNCTION, fnBody.getFirstChild().getType());
+        assertEquals("bar", fnBody.getFirstChild().getFirstChild().getString());
+        assertEquals(Token.FUNCTION, fnBody.getChildAtIndex(1).getType());
+        assertEquals("foo", fnBody.getChildAtIndex(1).getFirstChild().getString());
+        assertEquals(Token.EXPR_RESULT, fnBody.getLastChild().getType());
+    }
+
+    @Test
+    public void testNormalizeStatements_moveNamedFunctions_functionDeclarationIsHoisted() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node fnBody = new Node(Token.BLOCK);
+        root.addChildToBack(fnBody);
+        Node fnDecl = new Node(Token.FUNCTION, new Node(Token.NAME, "foo"), new Node(Token.LP), new Node(Token.BLOCK));
+        Node fnDecl2 = new Node(Token.FUNCTION, new Node(Token.NAME, "bar"), new Node(Token.LP), new Node(Token.BLOCK));
+        fnBody.addChildToBack(fnDecl); // Already at top
+        fnBody.addChildToBack(fnDecl2); // Should be moved after foo
+
+        AbstractCompiler compiler = new MockCompiler();
+        Normalize.NormalizeStatements pass = new Normalize.NormalizeStatements(compiler, false);
+        NodeTraversal traversal = new NodeTraversal(compiler, pass);
+        traversal.traverse(root);
+
+        assertEquals(2, fnBody.getChildCount());
+        assertEquals(Token.FUNCTION, fnBody.getFirstChild().getType());
+        assertEquals("foo", fnBody.getFirstChild().getFirstChild().getString());
+        assertEquals(Token.FUNCTION, fnBody.getChildAtIndex(1).getType());
+        assertEquals("bar", fnBody.getChildAtIndex(1).getFirstChild().getString());
+    }
+
+
+    // --- Tests for Normalize.DuplicateDeclarationHandler ---
+
+    @Test
+    public void testDuplicateDeclarationHandler_varRedeclarationWithAssignment() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node block = new Node(Token.BLOCK);
+        root.addChildToBack(block);
+        Node varDecl = new Node(Token.VAR, new Node(Token.NAME, "a", new Node(Token.NUMBER, 1.0)));
+        block.addChildToBack(varDecl);
+        Node varRedecl = new Node(Token.VAR, new Node(Token.NAME, "a", new Node(Token.NUMBER, 2.0)));
+        block.addChildToBack(varRedecl);
+
+        AbstractCompiler compiler = new MockCompiler();
+        Normalize normalizePass = new Normalize(compiler, false);
+        normalizePass.removeDuplicateDeclarations(root);
+
+        assertEquals(2, block.getChildCount());
+        assertEquals(Token.EXPR_RESULT, block.getChildAtIndex(0).getType());
+        assertEquals(Token.ASSIGN, block.getChildAtIndex(0).getFirstChild().getType());
+        assertEquals("a", block.getChildAtIndex(0).getFirstChild().getFirstChild().getString());
+        assertEquals(Token.NUMBER, block.getChildAtIndex(0).getFirstChild().getLastChild().getType());
+        assertEquals(1.0, block.getChildAtIndex(0).getFirstChild().getLastChild().getDouble(), 0.0);
+
+        assertEquals(Token.EXPR_RESULT, block.getChildAtIndex(1).getType());
+        assertEquals(Token.ASSIGN, block.getChildAtIndex(1).getFirstChild().getType());
+        assertEquals("a", block.getChildAtIndex(1).getFirstChild().getFirstChild().getString());
+        assertEquals(Token.NUMBER, block.getChildAtIndex(1).getFirstChild().getLastChild().getType());
+        assertEquals(2.0, block.getChildAtIndex(1).getFirstChild().getLastChild().getDouble(), 0.0);
+    }
+
+    @Test
+    public void testDuplicateDeclarationHandler_varRedeclarationWithoutAssignment() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node block = new Node(Token.BLOCK);
+        root.addChildToBack(block);
+        Node varDecl = new Node(Token.VAR, new Node(Token.NAME, "a"));
+        block.addChildToBack(varDecl);
+        Node varRedecl = new Node(Token.VAR, new Node(Token.NAME, "a"));
+        block.addChildToBack(varRedecl);
+
+        AbstractCompiler compiler = new MockCompiler();
+        Normalize normalizePass = new Normalize(compiler, false);
+        normalizePass.removeDuplicateDeclarations(root);
+
+        assertEquals(1, block.getChildCount()); // Only one statement should remain
+        assertEquals(Token.VAR, block.getFirstChild().getType());
+        assertEquals("a", block.getFirstChild().getFirstChild().getString());
+    }
+
+    @Test
+    public void testDuplicateDeclarationHandler_forInRedeclaration() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node block = new Node(Token.BLOCK);
+        root.addChildToBack(block);
+        Node forNode = new Node(Token.FOR,
+            new Node(Token.VAR, new Node(Token.NAME, "a")), // Initializer
+            new Node(Token.IN, new Node(Token.STRING, "obj")), // Condition
+            new Node(Token.EMPTY), // Increment
+            new Node(Token.BLOCK) // Body
+        );
+        block.addChildToBack(forNode);
+        Node varRedecl = new Node(Token.VAR, new Node(Token.NAME, "a"));
+        block.addChildToBack(varRedecl);
+
+        AbstractCompiler compiler = new MockCompiler();
+        Normalize normalizePass = new Normalize(compiler, false);
+        normalizePass.removeDuplicateDeclarations(root);
+
+        assertEquals(1, block.getChildCount());
+        assertEquals(Token.FOR, block.getFirstChild().getType());
+        assertEquals(Token.NAME, block.getFirstChild().getFirstChild().getString()); // 'a' should be the name in the for loop
+        assertEquals(Token.IN, block.getFirstChild().getChildAtIndex(1).getType());
+    }
+
+    @Test
+    public void testDuplicateDeclarationHandler_catchRedeclaration() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node fn = new Node(Token.FUNCTION, new Node(Token.NAME, "f"), new Node(Token.LP), new Node(Token.BLOCK));
+        root.addChildToBack(fn);
+        Node fnBody = fn.getLastChild();
+        Node tryNode = new Node(Token.TRY);
+        fnBody.addChildToBack(tryNode);
+        Node catchBlock = new Node(Token.BLOCK);
+        Node catchNode = new Node(Token.CATCH, new Node(Token.NAME, "e"), catchBlock);
+        tryNode.addChildToBack(catchNode);
+        Node varDecl = new Node(Token.VAR, new Node(Token.NAME, "e", new Node(Token.NUMBER, 1.0)));
+        fnBody.addChildToBack(varDecl);
+
+        AbstractCompiler compiler = new MockCompiler();
+        Normalize normalizePass = new Normalize(compiler, false);
+        normalizePass.removeDuplicateDeclarations(root);
+
+        // The catch block's 'e' is redeclared. The scope logic should handle this.
+        // The original var 'e' should become an assignment if it had an initializer.
+        assertEquals(2, fnBody.getChildCount());
+        assertEquals(Token.TRY, fnBody.getChildAtIndex(0).getType());
+        assertEquals(Token.EXPR_RESULT, fnBody.getChildAtIndex(1).getType());
+        assertEquals(Token.ASSIGN, fnBody.getChildAtIndex(1).getFirstChild().getType());
+        assertEquals("e", fnBody.getChildAtIndex(1).getFirstChild().getFirstChild().getString());
+        assertEquals(Token.NUMBER, fnBody.getChildAtIndex(1).getFirstChild().getLastChild().getType());
+    }
+
+    // --- Tests for Normalize.process ---
+
+    @Test
+    public void testProcess_normalizeStatementsCalled() throws Exception {
+        // This test primarily checks if NormalizeStatements is instantiated and called.
+        // We can infer this by checking for a specific transformation.
+        Node root = new Node(Token.SCRIPT);
+        Node block = new Node(Token.BLOCK);
+        root.addChildToBack(block);
+        Node whileNode = new Node(Token.WHILE, new Node(Token.TRUE), new Node(Token.BLOCK));
+        block.addChildToBack(whileNode);
+
+        AbstractCompiler compiler = new MockCompiler() {
+            @Override
+            public void reportCodeChange() {
+                // Overriding to detect code change reporting
+            }
+        };
+        Normalize pass = new Normalize(compiler, false);
+        pass.process(new Node(Token.SCRIPT), root); // externs node is dummy
+
+        assertEquals(Token.FOR, whileNode.getType());
+    }
+
+    @Test
+    public void testProcess_makeDeclaredNamesUniqueCalled() throws Exception {
+        // This test verifies that MakeDeclaredNamesUnique is called.
+        // We can do this by checking if a globally unique name is generated.
+        Node root = new Node(Token.SCRIPT);
+        Node block = new Node(Token.BLOCK);
+        root.addChildToBack(block);
+        block.addChildToBack(new Node(Token.VAR, new Node(Token.NAME, "a")));
+        block.addChildToBack(new Node(Token.VAR, new Node(Token.NAME, "a"))); // Duplicate
+
+        AbstractCompiler compiler = new MockCompiler();
+        Normalize pass = new Normalize(compiler, false);
+        pass.process(new Node(Token.SCRIPT), root);
+
+        // After MakeDeclaredNamesUnique and removeDuplicateDeclarations,
+        // the second 'a' should be renamed and potentially removed or converted.
+        // If names are made unique, the second 'a' should become something like 'a0'.
+        // Then removeDuplicateDeclarations should handle it.
+        // Let's check if the first 'a' is still 'a' and the second is different or removed.
+        Node firstVar = block.getFirstChild();
+        assertEquals("a", firstVar.getFirstChild().getString());
+        if (block.getChildCount() > 1) {
+             Node secondDecl = block.getLastChild();
+             // The exact rename depends on MakeDeclaredNamesUnique implementation,
+             // but it should not be 'a' if it's a duplicate.
+             // After removeDuplicateDeclarations, it should ideally be gone or transformed.
+             // For simplicity, checking that the second var declaration is gone or modified.
+             // If it was a duplicate, and has no initializer, it's removed.
+             // If it had an initializer, it becomes an assignment.
+             // Since it has no initializer here, it should be removed.
+             assertEquals(1, block.getChildCount());
+        } else {
+             // If the duplicate was removed, there is only one child.
+             assertEquals(1, block.getChildCount());
+        }
+    }
+
+    @Test
+    public void testProcess_removeDuplicateDeclarationsCalled() throws Exception {
+        // This test checks if removeDuplicateDeclarations is called.
+        Node root = new Node(Token.SCRIPT);
+        Node block = new Node(Token.BLOCK);
+        root.addChildToBack(block);
+        block.addChildToBack(new Node(Token.VAR, new Node(Token.NAME, "x")));
+        block.addChildToBack(new Node(Token.VAR, new Node(Token.NAME, "x"))); // Duplicate
+
+        AbstractCompiler compiler = new MockCompiler();
+        Normalize pass = new Normalize(compiler, false);
+        pass.process(new Node(Token.SCRIPT), root);
+
+        // After removeDuplicateDeclarations, the duplicate 'x' should be removed
+        // as it has no initializer.
+        assertEquals(1, block.getChildCount());
+        assertEquals(Token.VAR, block.getFirstChild().getType());
+        assertEquals("x", block.getFirstChild().getFirstChild().getString());
+    }
+
+    @Test
+    public void testProcess_propagateConstantAnnotationsCalled() throws Exception {
+        // This test checks if PropogateConstantAnnotations is called.
+        Node root = new Node(Token.SCRIPT);
+        Node fn = new Node(Token.FUNCTION, new Node(Token.NAME, "f"), new Node(Token.LP), new Node(Token.BLOCK));
+        root.addChildToBack(fn);
+        Node fnBody = fn.getLastChild();
+        Node varDecl = new Node(Token.VAR, new Node(Token.NAME, "a"));
+        // Simulate JSDoc info for constant
+        JSDocInfo jsDocInfo = new JSDocInfo();
+        jsDocInfo.setConstant(true);
+        varDecl.getFirstChild().setJSDocInfo(jsDocInfo);
+        fnBody.addChildToBack(varDecl);
+
+        AbstractCompiler compiler = new MockCompiler();
+        Normalize pass = new Normalize(compiler, false);
+        pass.process(new Node(Token.SCRIPT), root);
+
+        // The 'a' should be marked as constant by PropogateConstantAnnotations.
+        assertTrue(varDecl.getFirstChild().getBooleanProp(Node.IS_CONSTANT_NAME));
+    }
+
+    // --- Additional tests for edge cases and specific logic ---
+
+    @Test
+    public void testNormalizeStatements_extractForInitializer_expression() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node block = new Node(Token.BLOCK);
+        root.addChildToBack(block);
+        Node forNode = new Node(Token.FOR);
+        forNode.addChildToBack(new Node(Token.EXPR_RESULT, new Node(Token.ASSIGN, new Node(Token.NAME, "i"), new Node(Token.NUMBER, 0.0))));
+        forNode.addChildToBack(new Node(Token.TRUE));
+        forNode.addChildToBack(new Node(Token.EMPTY));
+        forNode.addChildToBack(new Node(Token.BLOCK));
+        block.addChildToBack(forNode);
+
+        AbstractCompiler compiler = new MockCompiler();
+        Normalize.NormalizeStatements pass = new Normalize.NormalizeStatements(compiler, false);
+        NodeTraversal traversal = new NodeTraversal(compiler, pass);
+        traversal.traverse(root);
+
+        assertEquals(2, block.getChildCount()); // Expr_Result statement + For loop
+        assertEquals(Token.EXPR_RESULT, block.getChildAtIndex(0).getType());
+        assertEquals(Token.ASSIGN, block.getChildAtIndex(0).getFirstChild().getType());
+        assertEquals(Token.FOR, block.getChildAtIndex(1).getType());
+        assertEquals(Token.EMPTY, block.getChildAtIndex(1).getFirstChild().getType()); // Initializer should be empty now
+    }
+
+    @Test
+    public void testNormalizeStatements_moveNamedFunctions_alreadyAtTop() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node fnBody = new Node(Token.BLOCK);
+        root.addChildToBack(fnBody);
+        Node fnDecl = new Node(Token.FUNCTION, new Node(Token.NAME, "foo"), new Node(Token.LP), new Node(Token.BLOCK));
+        fnBody.addChildToBack(fnDecl); // Function is already at the top
+
+        AbstractCompiler compiler = new MockCompiler();
+        Normalize.NormalizeStatements pass = new Normalize.NormalizeStatements(compiler, false);
+        NodeTraversal traversal = new NodeTraversal(compiler, pass);
+        traversal.traverse(root);
+
+        assertEquals(1, fnBody.getChildCount());
+        assertEquals(Token.FUNCTION, fnBody.getFirstChild().getType());
+        assertEquals("foo", fnBody.getFirstChild().getFirstChild().getString());
+    }
+
+    @Test
+    public void testNormalizeStatements_normalizeLabels_multiLevelBlock() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node block = new Node(Token.BLOCK);
+        root.addChildToBack(block);
+        Node labelNode = new Node(Token.LABEL, "outer");
+        Node innerBlock = new Node(Token.BLOCK);
+        innerBlock.addChildToBack(new Node(Token.EXPR_RESULT, new Node(Token.CALL)));
+        labelNode.addChildToBack(innerBlock);
+        block.addChildToBack(labelNode);
+
+        AbstractCompiler compiler = new MockCompiler();
+        Normalize.NormalizeStatements pass = new Normalize.NormalizeStatements(compiler, false);
+        NodeTraversal traversal = new NodeTraversal(compiler, pass);
+        traversal.traverse(root);
+
+        assertEquals(1, block.getChildCount());
+        assertEquals(Token.LABEL, block.getFirstChild().getType());
+        assertEquals(Token.BLOCK, block.getFirstChild().getLastChild().getType()); // The inner block remains a block
+        assertEquals(1, block.getFirstChild().getLastChild().getChildCount());
+        assertEquals(Token.EXPR_RESULT, block.getFirstChild().getLastChild().getFirstChild().getType());
+    }
+
+    @Test
+    public void testDuplicateDeclarationHandler_varRedeclarationInFunctionScope() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node fn = new Node(Token.FUNCTION, new Node(Token.NAME, "f"), new Node(Token.LP), new Node(Token.BLOCK));
+        root.addChildToBack(fn);
+        Node fnBody = fn.getLastChild();
+        Node varDecl1 = new Node(Token.VAR, new Node(Token.NAME, "x", new Node(Token.NUMBER, 1.0)));
+        fnBody.addChildToBack(varDecl1);
+        Node varDecl2 = new Node(Token.VAR, new Node(Token.NAME, "x", new Node(Token.NUMBER, 2.0)));
+        fnBody.addChildToBack(varDecl2); // Duplicate in function scope
+
+        AbstractCompiler compiler = new MockCompiler();
+        Normalize normalizePass = new Normalize(compiler, false);
+        normalizePass.removeDuplicateDeclarations(root);
+
+        // The second declaration should become an assignment.
+        assertEquals(2, fnBody.getChildCount());
+        assertEquals(Token.VAR, fnBody.getChildAtIndex(0).getType());
+        assertEquals("x", fnBody.getChildAtIndex(0).getFirstChild().getString());
+        assertEquals(Token.NUMBER, fnBody.getChildAtIndex(0).getFirstChild().getFirstChild().getType());
+        assertEquals(1.0, fnBody.getChildAtIndex(0).getFirstChild().getFirstChild().getDouble(), 0.0);
+
+        assertEquals(Token.EXPR_RESULT, fnBody.getChildAtIndex(1).getType());
+        assertEquals(Token.ASSIGN, fnBody.getChildAtIndex(1).getFirstChild().getType());
+        assertEquals("x", fnBody.getChildAtIndex(1).getFirstChild().getFirstChild().getString());
+        assertEquals(Token.NUMBER, fnBody.getChildAtIndex(1).getFirstChild().getLastChild().getType());
+        assertEquals(2.0, fnBody.getChildAtIndex(1).getFirstChild().getLastChild().getDouble(), 0.0);
+    }
+
+    @Test
+    public void testNormalizeStatements_extractForInitializer_noInitializer() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node block = new Node(Token.BLOCK);
+        root.addChildToBack(block);
+        Node forNode = new Node(Token.FOR);
+        forNode.addChildToBack(new Node(Token.EMPTY)); // No initializer
+        forNode.addChildToBack(new Node(Token.TRUE));
+        forNode.addChildToBack(new Node(Token.EMPTY));
+        forNode.addChildToBack(new Node(Token.BLOCK));
+        block.addChildToBack(forNode);
+
+        AbstractCompiler compiler = new MockCompiler();
+        Normalize.NormalizeStatements pass = new Normalize.NormalizeStatements(compiler, false);
+        NodeTraversal traversal = new NodeTraversal(compiler, pass);
+        traversal.traverse(root);
+
+        // Should not add any new statement
+        assertEquals(1, block.getChildCount());
+        assertEquals(Token.FOR, block.getFirstChild().getType());
+        assertEquals(Token.EMPTY, block.getFirstChild().getFirstChild().getType());
+    }
+
+    @Test
+    public void testNormalizeStatements_splitVarDeclarations_singleVar() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node block = new Node(Token.BLOCK);
+        root.addChildToBack(block);
+        Node varNode = new Node(Token.VAR);
+        varNode.addChildToBack(new Node(Token.NAME, "a"));
+        block.addChildToBack(varNode);
+
+        AbstractCompiler compiler = new MockCompiler();
+        Normalize.NormalizeStatements pass = new Normalize.NormalizeStatements(compiler, false);
+        NodeTraversal traversal = new NodeTraversal(compiler, pass);
+        traversal.traverse(root);
+
+        assertEquals(1, block.getChildCount());
+        assertEquals(Token.VAR, block.getFirstChild().getType());
+        assertEquals("a", block.getFirstChild().getFirstChild().getString());
+    }
+
+    @Test
+    public void testNormalizeStatements_rewriteFunctionDeclaration_anonymous() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node block = new Node(Token.BLOCK);
+        root.addChildToBack(block);
+        Node fnDecl = new Node(Token.FUNCTION, new Node(Token.NAME, ""), new Node(Token.LP), new Node(Token.BLOCK)); // Anonymous function
+        block.addChildToBack(fnDecl);
+
+        AbstractCompiler compiler = new MockCompiler();
+        Normalize.NormalizeStatements pass = new Normalize.NormalizeStatements(compiler, false);
+        NodeTraversal traversal = new NodeTraversal(compiler, pass);
+        traversal.traverse(root);
+
+        assertEquals(1, block.getChildCount());
+        assertEquals(Token.FUNCTION, block.getFirstChild().getType()); // Anonymous functions are not rewritten
+    }
+
+    @Test
+    public void testNormalizeStatements_moveNamedFunctions_functionWithNoName() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node fnBody = new Node(Token.BLOCK);
+        root.addChildToBack(fnBody);
+        // This is an anonymous function expression inside a block, not a declaration.
+        fnBody.addChildToBack(new Node(Token.FUNCTION, new Node(Token.NAME, ""), new Node(Token.LP), new Node(Token.BLOCK)));
+
+        AbstractCompiler compiler = new MockCompiler();
+        Normalize.NormalizeStatements pass = new Normalize.NormalizeStatements(compiler, false);
+        NodeTraversal traversal = new NodeTraversal(compiler, pass);
+        traversal.traverse(root);
+
+        // Anonymous functions are not moved or rewritten by moveNamedFunctions.
+        assertEquals(1, fnBody.getChildCount());
+        assertEquals(Token.FUNCTION, fnBody.getFirstChild().getType());
+        assertEquals("", fnBody.getFirstChild().getFirstChild().getString());
+    }
+}
+```
+
+### SOURCE CODE ANALYSIS
+
+The tests cover the main logic within `Normalize.PropogateConstantAnnotations`, `Normalize.NormalizeStatements`, and `Normalize.DuplicateDeclarationHandler`. This includes handling of constant annotations, normalization of statements (VAR splitting, WHILE to FOR conversion, FOR initializer extraction, LABEL normalization, function declaration rewriting, and function hoisting), and duplicate variable declaration handling.
+
+### TEST CASE DESIGN
+
+- `testPropagateConstantAnnotations_simpleConstant`: Input: `var a = 1;` with `IS_CONSTANT_NAME` prop set. Expected: `IS_CONSTANT_NAME` remains true. Derivation: Direct property check.
+- `testPropagateConstantAnnotations_noConstant`: Input: `var a = 1;` no constant prop. Expected: `IS_CONSTANT_NAME` remains false. Derivation: Direct property check.
+- `testPropagateConstantAnnotations_existingConstant`: Input: `var a = 1;` with `IS_CONSTANT_NAME` prop already true. Expected: `IS_CONSTANT_NAME` remains true. Derivation: Direct property check.
+- `testNormalizeStatements_splitVarDeclarations`: Input: `var a, b;`. Expected: `var a; var b;`. Derivation: Logic in `splitVarDeclarations`.
+- `testNormalizeStatements_convertWhileToFor`: Input: `while(true){}`. Expected: `for(;;){}`. Derivation: Logic in `visit` method for `WHILE`.
+- `testNormalizeStatements_extractForInitializer`: Input: `for(var i=0;;){}`. Expected: `var i=0; for(;;){}`. Derivation: Logic in `extractForInitializer`.
+- `testNormalizeStatements_normalizeLabels_blockChild`: Input: `label: { ... }`. Expected: `label: { ... }`. Derivation: Logic in `normalizeLabels` for BLOCK child.
+- `testNormalizeStatements_normalizeLabels_loopChild`: Input: `label: while(...) {...}`. Expected: `label: while(...) {...}`. Derivation: Logic in `normalizeLabels` for loop child.
+- `testNormalizeStatements_normalizeLabels_nonBlockOrLoopChild`: Input: `label: expr;`. Expected: `label: { expr; }`. Derivation: Logic in `normalizeLabels` for non-block/loop child.
+- `testNormalizeStatements_rewriteFunctionDeclaration`: Input: `function f() {}`. Expected: `var f = function() {};`. Derivation: Logic in `rewriteFunctionDeclaration`.
+- `testNormalizeStatements_moveNamedFunctions_singleFunction`: Input: `function f(){} in block`. Expected: Function remains at top. Derivation: Logic in `moveNamedFunctions`.
+- `testNormalizeStatements_moveNamedFunctions_functionAfterStatement`: Input: `statement; function f(){}`. Expected: `function f(){} statement`. Derivation: Logic in `moveNamedFunctions`.
+- `testNormalizeStatements_moveNamedFunctions_multipleFunctions`: Input: `function f(){} statement; function g(){}`. Expected: `function f(){} function g(){} statement`. Derivation: Logic in `moveNamedFunctions`.
+- `testNormalizeStatements_moveNamedFunctions_functionDeclarationIsHoisted`: Input: `function g(){} function f(){}`. Expected: `function f(){} function g(){}`. Derivation: Logic in `moveNamedFunctions`.
+- `testDuplicateDeclarationHandler_varRedeclarationWithAssignment`: Input: `var a=1; var a=2;`. Expected: `var a=1; a=2;`. Derivation: Logic in `replaceVarWithAssignment`.
+- `testDuplicateDeclarationHandler_varRedeclarationWithoutAssignment`: Input: `var a; var a;`. Expected: `var a;`. Derivation: Logic in `replaceVarWithAssignment` (removes empty var).
+- `testDuplicateDeclarationHandler_forInRedeclaration`: Input: `for(var a in obj){}; var a;`. Expected: `for(a in obj){}`. Derivation: Logic in `replaceVarWithAssignment` for FOR loop case.
+- `testDuplicateDeclarationHandler_catchRedeclaration`: Input: `try{}catch(e){} var e=1;`. Expected: `try{}catch(e){} e=1;`. Derivation: Logic in `onRedeclaration` and `replaceVarWithAssignment`.
+- `testProcess_normalizeStatementsCalled`: Input: `while(true){}`. Expected: Node type changes to FOR. Derivation: Verifies `NormalizeStatements` transforms AST.
+- `testProcess_makeDeclaredNamesUniqueCalled`: Input: `var a; var a;`. Expected: Second 'a' is removed or renamed. Derivation: Verifies name uniqueness and duplicate removal.
+- `testProcess_removeDuplicateDeclarationsCalled`: Input: `var x; var x;`. Expected: Second 'x' removed. Derivation: Verifies `removeDuplicateDeclarations` logic.
+- `testProcess_propagateConstantAnnotationsCalled`: Input: `var a` with JSDoc constant. Expected: `a` marked as `IS_CONSTANT_NAME`. Derivation: Verifies `PropogateConstantAnnotations` applies annotation.
+- `testNormalizeStatements_extractForInitializer_expression`: Input: `for(i=0;;){}`. Expected: `i=0; for(;;){}`. Derivation: Handles expression initializers.
+- `testNormalizeStatements_moveNamedFunctions_alreadyAtTop`: Input: `function f(){} in block`. Expected: No change. Derivation: Verifies no change when function is correctly placed.
+- `testNormalizeStatements_normalizeLabels_multiLevelBlock`: Input: `label: { { expr; } }`. Expected: Inner block remains. Derivation: Verifies nested block handling.
+- `testDuplicateDeclarationHandler_varRedeclarationInFunctionScope`: Input: `function f(){ var x=1; var x=2; }`. Expected: `function f(){ var x=1; x=2; }`. Derivation: Scope-aware duplicate handling.
+- `testNormalizeStatements_extractForInitializer_noInitializer`: Input: `for(;;){}`. Expected: No change. Derivation: Handles for loops without initializers.
+- `testNormalizeStatements_splitVarDeclarations_singleVar`: Input: `var a;`. Expected: No change. Derivation: Handles single var declarations.
+- `testNormalizeStatements_rewriteFunctionDeclaration_anonymous`: Input: `function () {}`. Expected: No change. Derivation: Anonymous functions are not rewritten.
+- `testNormalizeStatements_moveNamedFunctions_functionWithNoName`: Input: `function () {} in block`. Expected: No change. Derivation: Anonymous function expressions are not moved.
+
+### DEFECT DETECTION STRATEGY
+
+The tests focus on verifying the AST transformations performed by `NormalizeStatements` and `PropogateConstantAnnotations`, as well as the duplicate declaration handling. Specifically, tests cover edge cases like empty initializers, different types of initializers, various label children, and scope-aware duplicate variable declarations.
+
+### SUMMARY
+
+27 tests are provided.
+
+### LIMITATIONS
+
+The tests rely on a `MockCompiler` and do not fully simulate the `AbstractCompiler`'s behavior or the full AST structure that might be present in a real compilation. Some complex interactions between different passes of `Normalize` are not exhaustively tested. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

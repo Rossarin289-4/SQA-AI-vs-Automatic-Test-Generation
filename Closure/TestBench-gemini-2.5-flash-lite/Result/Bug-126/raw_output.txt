@@ -1,0 +1,485 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Preconditions;
+import com.google.javascript.jscomp.NodeTraversal.AbstractPostOrderCallback;
+import com.google.javascript.rhino.IR;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.jstype.TernaryValue;
+
+public class MinimizeExitPointsTest {
+    @Test
+    public void testMinimizeExits_simpleReturn() throws Exception {
+        Node root = IR.root(IR.function(IR.name("fn"), IR.empty(),
+                IR.block(
+                        IR.returnNode(),
+                        IR.exprResult(IR.number(1))
+                )
+        ));
+        NodeTraversal.traverse(new MockCompiler(), root, new MinimizeExitPoints(new MockCompiler()));
+        assertEquals(1, root.getLastChild().getLastChild().getChildCount());
+        assertEquals(Token.RETURN, root.getLastChild().getLastChild().getFirstChild().getType());
+    }
+
+    @Test
+    public void testMinimizeExits_ifReturn() throws Exception {
+        Node root = IR.root(IR.function(IR.name("fn"), IR.empty(),
+                IR.block(
+                        IR.ifNode(IR.trueNode(), IR.returnNode()),
+                        IR.exprResult(IR.number(1))
+                )
+        ));
+        NodeTraversal.traverse(new MockCompiler(), root, new MinimizeExitPoints(new MockCompiler()));
+        assertEquals(2, root.getLastChild().getLastChild().getChildCount());
+        Node ifNode = root.getLastChild().getLastChild().getFirstChild();
+        assertEquals(Token.IF, ifNode.getType());
+        assertEquals(Token.RETURN, ifNode.getSecondChild().getType()); // then block
+        assertNull(ifNode.getLastChild()); // else block
+    }
+
+    @Test
+    public void testMinimizeExits_ifElseReturn() throws Exception {
+        Node root = IR.root(IR.function(IR.name("fn"), IR.empty(),
+                IR.block(
+                        IR.ifNode(IR.trueNode(), IR.returnNode(), IR.returnNode()),
+                        IR.exprResult(IR.number(1))
+                )
+        ));
+        NodeTraversal.traverse(new MockCompiler(), root, new MinimizeExitPoints(new MockCompiler()));
+        assertEquals(2, root.getLastChild().getLastChild().getChildCount());
+        Node ifNode = root.getLastChild().getLastChild().getFirstChild();
+        assertEquals(Token.IF, ifNode.getType());
+        assertEquals(Token.RETURN, ifNode.getSecondChild().getType()); // then block
+        assertEquals(Token.RETURN, ifNode.getLastChild().getType()); // else block
+    }
+
+    @Test
+    public void testMinimizeExits_ifReturnElseStmt() throws Exception {
+        Node root = IR.root(IR.function(IR.name("fn"), IR.empty(),
+                IR.block(
+                        IR.ifNode(IR.trueNode(), IR.returnNode(), IR.exprResult(IR.number(1))),
+                        IR.exprResult(IR.number(2))
+                )
+        ));
+        NodeTraversal.traverse(new MockCompiler(), root, new MinimizeExitPoints(new MockCompiler()));
+        assertEquals(1, root.getLastChild().getLastChild().getChildCount());
+        Node ifNode = root.getLastChild().getLastChild().getFirstChild();
+        assertEquals(Token.IF, ifNode.getType());
+        assertEquals(Token.RETURN, ifNode.getSecondChild().getType()); // then block
+        assertNull(ifNode.getLastChild()); // else block
+    }
+
+    @Test
+    public void testMinimizeExits_ifStmtElseReturn() throws Exception {
+        Node root = IR.root(IR.function(IR.name("fn"), IR.empty(),
+                IR.block(
+                        IR.ifNode(IR.trueNode(), IR.exprResult(IR.number(1)), IR.returnNode()),
+                        IR.exprResult(IR.number(2))
+                )
+        ));
+        NodeTraversal.traverse(new MockCompiler(), root, new MinimizeExitPoints(new MockCompiler()));
+        assertEquals(1, root.getLastChild().getLastChild().getChildCount());
+        Node ifNode = root.getLastChild().getLastChild().getFirstChild();
+        assertEquals(Token.IF, ifNode.getType());
+        assertEquals(Token.EXPR_RESULT, ifNode.getSecondChild().getType()); // then block
+        assertEquals(Token.RETURN, ifNode.getLastChild().getType()); // else block
+    }
+
+    @Test
+    public void testMinimizeExits_labelBreak() throws Exception {
+        Node root = IR.root(IR.label(IR.labelName("l"),
+                IR.block(
+                        IR.breakNode(IR.string("l")),
+                        IR.exprResult(IR.number(1))
+                )
+        ));
+        NodeTraversal.traverse(new MockCompiler(), root, new MinimizeExitPoints(new MockCompiler()));
+        assertEquals(1, root.getLastChild().getChildCount());
+        assertEquals(Token.BREAK, root.getLastChild().getFirstChild().getType());
+        assertEquals("l", root.getLastChild().getFirstChild().getFirstChild().getString());
+    }
+
+    @Test
+    public void testMinimizeExits_labelBreakWithOtherStmts() throws Exception {
+        Node root = IR.root(IR.label(IR.labelName("l"),
+                IR.block(
+                        IR.exprResult(IR.number(0)),
+                        IR.breakNode(IR.string("l")),
+                        IR.exprResult(IR.number(1))
+                )
+        ));
+        NodeTraversal.traverse(new MockCompiler(), root, new MinimizeExitPoints(new MockCompiler()));
+        assertEquals(2, root.getLastChild().getChildCount());
+        Node breakNode = root.getLastChild().getFirstChild();
+        assertEquals(Token.BREAK, breakNode.getType());
+        assertEquals("l", breakNode.getFirstChild().getString());
+        Node exprResultNode = root.getLastChild().getLastChild();
+        assertEquals(Token.EXPR_RESULT, exprResultNode.getType());
+        assertEquals(1, exprResultNode.getFirstChild().getDouble(), 0);
+    }
+
+    @Test
+    public void testMinimizeExits_forContinue() throws Exception {
+        Node root = IR.root(IR.forNode(IR.empty(), IR.trueNode(), IR.empty(),
+                IR.block(
+                        IR.continueNode(),
+                        IR.exprResult(IR.number(1))
+                )
+        ));
+        NodeTraversal.traverse(new MockCompiler(), root, new MinimizeExitPoints(new MockCompiler()));
+        assertEquals(1, root.getLastChild().getLastChild().getChildCount());
+        assertEquals(Token.CONTINUE, root.getLastChild().getLastChild().getFirstChild().getType());
+    }
+
+    @Test
+    public void testMinimizeExits_whileContinue() throws Exception {
+        Node root = IR.root(IR.whileNode(IR.trueNode(),
+                IR.block(
+                        IR.continueNode(),
+                        IR.exprResult(IR.number(1))
+                )
+        ));
+        NodeTraversal.traverse(new MockCompiler(), root, new MinimizeExitPoints(new MockCompiler()));
+        assertEquals(1, root.getLastChild().getLastChild().getChildCount());
+        assertEquals(Token.CONTINUE, root.getLastChild().getLastChild().getFirstChild().getType());
+    }
+
+    @Test
+    public void testMinimizeExits_doContinue() throws Exception {
+        Node root = IR.root(IR.doNode(
+                IR.block(
+                        IR.continueNode(),
+                        IR.exprResult(IR.number(1))
+                ), IR.trueNode()
+        ));
+        NodeTraversal.traverse(new MockCompiler(), root, new MinimizeExitPoints(new MockCompiler()));
+        assertEquals(1, root.getFirstChild().getLastChild().getChildCount());
+        assertEquals(Token.CONTINUE, root.getFirstChild().getLastChild().getFirstChild().getType());
+    }
+
+    @Test
+    public void testMinimizeExits_doBreakOnFalseCondition() throws Exception {
+        Node root = IR.root(IR.doNode(
+                IR.block(
+                        IR.breakNode(),
+                        IR.exprResult(IR.number(1))
+                ), IR.falseNode()
+        ));
+        NodeTraversal.traverse(new MockCompiler(), root, new MinimizeExitPoints(new MockCompiler()));
+        assertEquals(1, root.getFirstChild().getLastChild().getChildCount());
+        assertEquals(Token.BREAK, root.getFirstChild().getLastChild().getFirstChild().getType());
+    }
+
+    @Test
+    public void testMinimizeExits_multipleIfsInBlock() throws Exception {
+        Node root = IR.root(IR.function(IR.name("fn"), IR.empty(),
+                IR.block(
+                        IR.ifNode(IR.trueNode(), IR.returnNode()),
+                        IR.ifNode(IR.trueNode(), IR.returnNode()),
+                        IR.exprResult(IR.number(1))
+                )
+        ));
+        NodeTraversal.traverse(new MockCompiler(), root, new MinimizeExitPoints(new MockCompiler()));
+        assertEquals(2, root.getLastChild().getLastChild().getChildCount());
+        Node firstIf = root.getLastChild().getLastChild().getFirstChild();
+        assertEquals(Token.IF, firstIf.getType());
+        Node secondIf = root.getLastChild().getLastChild().getLastChild();
+        assertEquals(Token.IF, secondIf.getType());
+        assertEquals(Token.RETURN, firstIf.getSecondChild().getType());
+        assertEquals(Token.RETURN, secondIf.getSecondChild().getType());
+    }
+
+    @Test
+    public void testMinimizeExits_ifWithElseBlock() throws Exception {
+        Node root = IR.root(IR.function(IR.name("fn"), IR.empty(),
+                IR.block(
+                        IR.ifNode(IR.trueNode(), IR.returnNode(),
+                                IR.block(IR.exprResult(IR.number(1))))
+                )
+        ));
+        NodeTraversal.traverse(new MockCompiler(), root, new MinimizeExitPoints(new MockCompiler()));
+        assertEquals(1, root.getLastChild().getLastChild().getChildCount());
+        Node ifNode = root.getLastChild().getLastChild().getFirstChild();
+        assertEquals(Token.IF, ifNode.getType());
+        assertEquals(Token.RETURN, ifNode.getSecondChild().getType());
+        Node elseBlock = ifNode.getLastChild();
+        assertEquals(Token.BLOCK, elseBlock.getType());
+        assertEquals(1, elseBlock.getChildCount());
+        assertEquals(1, elseBlock.getFirstChild().getFirstChild().getDouble(), 0);
+    }
+
+    @Test
+    public void testMinimizeExits_tryCatchFinally() throws Exception {
+        Node root = IR.root(IR.function(IR.name("fn"), IR.empty(),
+                IR.block(
+                        IR.tryFinally(
+                                IR.block(IR.returnNode()),
+                                IR.block(IR.exprResult(IR.number(1)))
+                        )
+                )
+        ));
+        NodeTraversal.traverse(new MockCompiler(), root, new MinimizeExitPoints(new MockCompiler()));
+        Node tryNode = root.getLastChild().getLastChild().getFirstChild();
+        assertEquals(Token.TRY, tryNode.getType());
+        Node tryBlock = tryNode.getFirstChild();
+        assertEquals(Token.RETURN, tryBlock.getFirstChild().getType());
+        // Finally block should not be minimized.
+        Node finallyBlock = tryNode.getLastChild();
+        assertEquals(1, finallyBlock.getChildCount());
+        assertEquals(Token.EXPR_RESULT, finallyBlock.getFirstChild().getType());
+    }
+
+    @Test
+    public void testMinimizeExits_tryCatchWithReturn() throws Exception {
+        Node root = IR.root(IR.function(IR.name("fn"), IR.empty(),
+                IR.block(
+                        IR.tryCatch(
+                                IR.block(IR.returnNode()),
+                                IR.catchNode(IR.name("e"), IR.block(IR.returnNode()))
+                        )
+                )
+        ));
+        NodeTraversal.traverse(new MockCompiler(), root, new MinimizeExitPoints(new MockCompiler()));
+        Node tryNode = root.getLastChild().getLastChild().getFirstChild();
+        assertEquals(Token.TRY, tryNode.getType());
+        Node tryBlock = tryNode.getFirstChild();
+        assertEquals(Token.RETURN, tryBlock.getFirstChild().getType());
+        Node catchBlock = tryNode.getLastChild().getLastChild();
+        assertEquals(Token.RETURN, catchBlock.getFirstChild().getType());
+    }
+
+    @Test
+    public void testMinimizeExits_breakWithoutLabel() throws Exception {
+        Node root = IR.root(IR.block(
+                IR.breakNode(),
+                IR.exprResult(IR.number(1))
+        ));
+        NodeTraversal.traverse(new MockCompiler(), root, new MinimizeExitPoints(new MockCompiler()));
+        assertEquals(2, root.getLastChild().getChildCount());
+        assertEquals(Token.BREAK, root.getLastChild().getFirstChild().getType());
+        assertEquals(Token.EXPR_RESULT, root.getLastChild().getLastChild().getType());
+    }
+
+    @Test
+    public void testMinimizeExits_continueWithoutLabel() throws Exception {
+        Node root = IR.root(IR.block(
+                IR.continueNode(),
+                IR.exprResult(IR.number(1))
+        ));
+        NodeTraversal.traverse(new MockCompiler(), root, new MinimizeExitPoints(new MockCompiler()));
+        assertEquals(2, root.getLastChild().getChildCount());
+        assertEquals(Token.CONTINUE, root.getLastChild().getFirstChild().getType());
+        assertEquals(Token.EXPR_RESULT, root.getLastChild().getLastChild().getType());
+    }
+
+    @Test
+    public void testMinimizeExits_labelBreakMatchingLabel() throws Exception {
+        Node root = IR.root(IR.label(IR.labelName("outer"),
+                IR.block(
+                        IR.label(IR.labelName("inner"),
+                                IR.block(
+                                        IR.breakNode(IR.string("inner")),
+                                        IR.exprResult(IR.number(1))
+                                )
+                        ),
+                        IR.breakNode(IR.string("outer")),
+                        IR.exprResult(IR.number(2))
+                )
+        ));
+        NodeTraversal.traverse(new MockCompiler(), root, new MinimizeExitPoints(new MockCompiler()));
+
+        Node outerBlock = root.getLastChild();
+        assertEquals(2, outerBlock.getChildCount());
+
+        Node innerLabel = outerBlock.getFirstChild();
+        assertEquals(Token.LABEL, innerLabel.getType());
+        assertEquals("inner", innerLabel.getFirstChild().getString());
+
+        Node innerBreak = innerLabel.getLastChild().getFirstChild();
+        assertEquals(Token.BREAK, innerBreak.getType());
+        assertEquals("inner", innerBreak.getFirstChild().getString());
+
+        Node outerBreak = outerBlock.getLastChild().getFirstChild();
+        assertEquals(Token.BREAK, outerBreak.getType());
+        assertEquals("outer", outerBreak.getFirstChild().getString());
+    }
+
+    @Test
+    public void testMinimizeExits_labelBreakMismatchedLabel() throws Exception {
+        Node root = IR.root(IR.label(IR.labelName("outer"),
+                IR.block(
+                        IR.breakNode(IR.string("mismatched")),
+                        IR.exprResult(IR.number(1))
+                )
+        ));
+        NodeTraversal.traverse(new MockCompiler(), root, new MinimizeExitPoints(new MockCompiler()));
+        assertEquals(2, root.getLastChild().getChildCount());
+        assertEquals(Token.BREAK, root.getLastChild().getFirstChild().getType());
+        assertEquals("mismatched", root.getLastChild().getFirstChild().getFirstChild().getString());
+        assertEquals(Token.EXPR_RESULT, root.getLastChild().getLastChild().getType());
+    }
+
+    @Test
+    public void testMinimizeExits_functionWithReturnInElse() throws Exception {
+        Node root = IR.root(IR.function(IR.name("fn"), IR.empty(),
+                IR.block(
+                        IR.ifNode(IR.trueNode(), IR.exprResult(IR.number(1)), IR.returnNode())
+                )
+        ));
+        NodeTraversal.traverse(new MockCompiler(), root, new MinimizeExitPoints(new MockCompiler()));
+        assertEquals(1, root.getLastChild().getLastChild().getChildCount());
+        Node ifNode = root.getLastChild().getLastChild().getFirstChild();
+        assertEquals(Token.IF, ifNode.getType());
+        assertEquals(Token.EXPR_RESULT, ifNode.getSecondChild().getType());
+        assertEquals(Token.RETURN, ifNode.getLastChild().getType());
+    }
+
+    @Test
+    public void testMinimizeExits_forWithContinueInElse() throws Exception {
+        Node root = IR.root(IR.forNode(IR.empty(), IR.trueNode(), IR.empty(),
+                IR.block(
+                        IR.ifNode(IR.trueNode(), IR.exprResult(IR.number(1)), IR.continueNode())
+                )
+        ));
+        NodeTraversal.traverse(new MockCompiler(), root, new MinimizeExitPoints(new MockCompiler()));
+        assertEquals(1, root.getLastChild().getLastChild().getChildCount());
+        Node ifNode = root.getLastChild().getLastChild().getFirstChild();
+        assertEquals(Token.IF, ifNode.getType());
+        assertEquals(Token.EXPR_RESULT, ifNode.getSecondChild().getType());
+        assertEquals(Token.CONTINUE, ifNode.getLastChild().getType());
+    }
+
+    @Test
+    public void testMinimizeExits_blockWithMultipleExits() throws Exception {
+        Node root = IR.root(IR.block(
+                IR.ifNode(IR.trueNode(), IR.returnNode()),
+                IR.ifNode(IR.falseNode(), IR.returnNode()),
+                IR.exprResult(IR.number(1))
+        ));
+        NodeTraversal.traverse(new MockCompiler(), root, new MinimizeExitPoints(new MockCompiler()));
+        assertEquals(2, root.getLastChild().getChildCount());
+        Node firstIf = root.getLastChild().getFirstChild();
+        assertEquals(Token.IF, firstIf.getType());
+        Node secondIf = root.getLastChild().getLastChild();
+        assertEquals(Token.IF, secondIf.getType());
+        assertEquals(Token.RETURN, firstIf.getSecondChild().getType());
+        assertEquals(Token.RETURN, secondIf.getSecondChild().getType());
+    }
+
+    @Test
+    public void testMinimizeExits_nestedLabels() throws Exception {
+        Node root = IR.root(IR.label(IR.labelName("outer"),
+                IR.block(
+                        IR.label(IR.labelName("inner"),
+                                IR.block(
+                                        IR.breakNode(IR.string("inner")),
+                                        IR.exprResult(IR.number(1))
+                                )
+                        ),
+                        IR.breakNode(IR.string("outer")),
+                        IR.exprResult(IR.number(2))
+                )
+        ));
+        NodeTraversal.traverse(new MockCompiler(), root, new MinimizeExitPoints(new MockCompiler()));
+        Node outerBlock = root.getLastChild();
+        assertEquals(2, outerBlock.getChildCount());
+
+        Node innerLabel = outerBlock.getFirstChild();
+        assertEquals(Token.LABEL, innerLabel.getType());
+        Node innerBlock = innerLabel.getLastChild();
+        assertEquals(2, innerBlock.getChildCount());
+        Node innerBreak = innerBlock.getFirstChild();
+        assertEquals(Token.BREAK, innerBreak.getType());
+        assertEquals("inner", innerBreak.getFirstChild().getString());
+
+        Node outerBreak = outerBlock.getLastChild().getFirstChild();
+        assertEquals(Token.BREAK, outerBreak.getType());
+        assertEquals("outer", outerBreak.getFirstChild().getString());
+    }
+
+    @Test
+    public void testMinimizeExits_emptyBlock() throws Exception {
+        Node root = IR.root(IR.function(IR.name("fn"), IR.empty(),
+                IR.block()
+        ));
+        NodeTraversal.traverse(new MockCompiler(), root, new MinimizeExitPoints(new MockCompiler()));
+        assertEquals(0, root.getLastChild().getLastChild().getChildCount());
+    }
+
+    @Test
+    public void testMinimizeExits_ifWithoutElse() throws Exception {
+        Node root = IR.root(IR.function(IR.name("fn"), IR.empty(),
+                IR.block(
+                        IR.ifNode(IR.trueNode(), IR.returnNode())
+                )
+        ));
+        NodeTraversal.traverse(new MockCompiler(), root, new MinimizeExitPoints(new MockCompiler()));
+        assertEquals(1, root.getLastChild().getLastChild().getChildCount());
+        Node ifNode = root.getLastChild().getLastChild().getFirstChild();
+        assertEquals(Token.IF, ifNode.getType());
+        assertEquals(Token.RETURN, ifNode.getSecondChild().getType());
+        assertNull(ifNode.getLastChild());
+    }
+
+    @Test
+    public void testMinimizeExits_doWhileWithBreak() throws Exception {
+        Node root = IR.root(IR.doNode(
+                IR.block(
+                        IR.breakNode(),
+                        IR.exprResult(IR.number(1))
+                ), IR.trueNode()
+        ));
+        NodeTraversal.traverse(new MockCompiler(), root, new MinimizeExitPoints(new MockCompiler()));
+        assertEquals(1, root.getFirstChild().getLastChild().getChildCount());
+        assertEquals(Token.BREAK, root.getFirstChild().getLastChild().getFirstChild().getType());
+    }
+
+    // Mock Compiler class for testing
+    private static class MockCompiler implements AbstractCompiler {
+        @Override
+        public void reportCodeChange() {
+            // No-op
+        }
+        // Other methods of AbstractCompiler are not needed for this test.
+    }
+}
+```
+
+1. SOURCE CODE ANALYSIS - This class `MinimizeExitPoints` transforms the AST to minimize explicit exit points (like `return`, `break`, `continue`) in control structures. The `visit` method dispatches to `tryMinimizeExits` based on node types like `LABEL`, `FOR`, `WHILE`, `DO`, and `FUNCTION`. The `tryMinimizeExits` and `tryMinimizeIfBlockExits` methods recursively traverse blocks and conditionally restructure `if` statements to absorb exits.
+
+2. TEST CASE DESIGN -
+- testMinimizeExits_simpleReturn: Checks a basic function with an immediate return. Expected: return statement remains.
+- testMinimizeExits_ifReturn: Checks an `if` statement where the condition leads to a return. Expected: `if` statement is removed, return remains.
+- testMinimizeExits_ifElseReturn: Checks an `if-else` where both branches return. Expected: `if-else` is removed, returns remain.
+- testMinimizeExits_ifReturnElseStmt: Checks `if (cond) return; else stmt;`. Expected: `if` statement is kept, `else` block is removed.
+- testMinimizeExits_ifStmtElseReturn: Checks `if (cond) stmt; else return;`. Expected: `if` statement is kept, `else` block is removed.
+- testMinimizeExits_labelBreak: Checks a labeled block with a break. Expected: break statement remains.
+- testMinimizeExits_labelBreakWithOtherStmts: Checks a labeled block with a break and another statement after it. Expected: break remains, other statement remains.
+- testMinimizeExits_forContinue: Checks a `for` loop with a `continue`. Expected: continue statement remains.
+- testMinimizeExits_whileContinue: Checks a `while` loop with a `continue`. Expected: continue statement remains.
+- testMinimizeExits_doContinue: Checks a `do-while` loop with a `continue`. Expected: continue statement remains.
+- testMinimizeExits_doBreakOnFalseCondition: Checks a `do-while` with a break and a condition that is always false. Expected: break statement remains.
+- testMinimizeExits_multipleIfsInBlock: Checks a block with multiple `if` statements that have returns. Expected: `if` statements are processed, returns remain.
+- testMinimizeExits_ifWithElseBlock: Checks an `if` statement with an `else` block that is a simple statement. Expected: `if` statement is processed.
+- testMinimizeExits_tryCatchFinally: Checks a `try-catch-finally` block. Expected: `try` and `catch` blocks are processed, `finally` is not.
+- testMinimizeExits_tryCatchWithReturn: Checks `try-catch` where both blocks contain returns. Expected: returns remain.
+- testMinimizeExits_breakWithoutLabel: Checks a `break` without a label. Expected: break remains.
+- testMinimizeExits_continueWithoutLabel: Checks a `continue` without a label. Expected: continue remains.
+- testMinimizeExits_labelBreakMatchingLabel: Checks nested labels with matching breaks. Expected: breaks are processed correctly.
+- testMinimizeExits_labelBreakMismatchedLabel: Checks a label with a mismatched break. Expected: break remains with its label.
+- testMinimizeExits_functionWithReturnInElse: Checks a function with an `if-else` structure where the `else` returns. Expected: `if-else` processed.
+- testMinimizeExits_forWithContinueInElse: Checks a `for` loop with an `if-else` structure where the `else` has a `continue`. Expected: `if-else` processed.
+- testMinimizeExits_blockWithMultipleExits: Checks a block with multiple `if` statements and exits. Expected: `if` statements are processed.
+- testMinimizeExits_nestedLabels: Checks nested labeled statements. Expected: inner breaks are handled.
+- testMinimizeExits_emptyBlock: Checks an empty function block. Expected: block remains empty.
+- testMinimizeExits_ifWithoutElse: Checks an `if` statement without an `else` block. Expected: `if` statement is processed.
+- testMinimizeExits_doWhileWithBreak: Checks a `do-while` loop with a break. Expected: break statement remains.
+
+4. DEFECT DETECTION STRATEGY - Tests focus on the correct restructuring of `if`, `try`, `label`, `for`, `while`, and `do` statements when they contain `return`, `break`, or `continue` statements, ensuring these exits are properly handled or removed according to the logic of minimizing explicit exits.
+
+5. SUMMARY - 26 tests.
+
+6. LIMITATIONS - Tests cover various control flow structures and exit types, but do not exhaustively test all possible AST configurations or complex nested scenarios. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

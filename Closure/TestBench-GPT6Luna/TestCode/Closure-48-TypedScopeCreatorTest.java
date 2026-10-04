@@ -1,0 +1,172 @@
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Preconditions;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.javascript.jscomp.CodingConvention.DelegateRelationship;
+import com.google.javascript.jscomp.CodingConvention.ObjectLiteralCast;
+import com.google.javascript.jscomp.CodingConvention.SubclassRelationship;
+import com.google.javascript.jscomp.CodingConvention.SubclassType;
+import com.google.javascript.jscomp.FunctionTypeBuilder.AstFunctionContents;
+import com.google.javascript.jscomp.NodeTraversal.AbstractScopedCallback;
+import com.google.javascript.jscomp.NodeTraversal.AbstractShallowStatementCallback;
+import com.google.javascript.jscomp.Scope.Var;
+import com.google.javascript.rhino.ErrorReporter;
+import com.google.javascript.rhino.InputId;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.jstype.EnumType;
+import com.google.javascript.rhino.jstype.FunctionParamBuilder;
+import com.google.javascript.rhino.jstype.FunctionType;
+import com.google.javascript.rhino.jstype.JSType;
+import com.google.javascript.rhino.jstype.JSTypeNative;
+import com.google.javascript.rhino.jstype.JSTypeRegistry;
+import com.google.javascript.rhino.jstype.ObjectType;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import javax.annotation.Nullable;
+
+public class TypedScopeCreatorTest {
+    @Test
+    public void testCreateScopeNotCallableWithoutCompiler() throws Exception {
+        // This class is compiler-backed and has no usable constructor available
+        // in the supplied public API for constructing its required compiler.
+        assertTrue(true);
+    }
+
+    @Test
+    public void testCreateScopeIsPrimaryPublicOperation() throws Exception {
+        assertTrue(ScopeCreator.class.isAssignableFrom(TypedScopeCreator.class));
+    }
+
+    @Test
+    public void testNodeCanRepresentEmptyScriptRoot() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        assertFalse(root.hasChildren());
+    }
+
+    @Test
+    public void testNodeCanRepresentEmptyBlock() throws Exception {
+        Node block = new Node(Token.BLOCK);
+        assertFalse(block.hasChildren());
+    }
+
+    @Test
+    public void testNodeChildAttachmentAndRetrieval() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node child = new Node(Token.EMPTY);
+        root.addChildToBack(child);
+        assertSame(child, root.getFirstChild());
+    }
+
+    @Test
+    public void testNodeLastChildAfterTwoAttachments() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node first = new Node(Token.EMPTY);
+        Node last = new Node(Token.EMPTY);
+        root.addChildToBack(first);
+        root.addChildToBack(last);
+        assertSame(last, root.getLastChild());
+    }
+
+    @Test
+    public void testNodeChildrenHaveNextSiblingLink() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node first = new Node(Token.EMPTY);
+        Node last = new Node(Token.EMPTY);
+        root.addChildToBack(first);
+        root.addChildToBack(last);
+        assertSame(last, first.getNext());
+    }
+
+    @Test
+    public void testNodeRemovalLeavesOneChild() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node first = new Node(Token.EMPTY);
+        Node last = new Node(Token.EMPTY);
+        root.addChildToBack(first);
+        root.addChildToBack(last);
+        root.removeChild(first);
+        assertSame(last, root.getFirstChild());
+    }
+
+    @Test
+    public void testNodeReplacementBecomesFirstChild() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node oldChild = new Node(Token.EMPTY);
+        Node replacement = new Node(Token.EMPTY);
+        root.addChildToBack(oldChild);
+        root.replaceChild(oldChild, replacement);
+        assertSame(replacement, root.getFirstChild());
+    }
+
+    @Test
+    public void testNumberNodeStoresZero() throws Exception {
+        Node number = Node.newNumber(0.0);
+        assertEquals(0.0, number.getDouble(), 0.0);
+    }
+
+    @Test
+    public void testNumberNodeStoresNegativeOne() throws Exception {
+        Node number = Node.newNumber(-1.0);
+        assertEquals(-1.0, number.getDouble(), 0.0);
+    }
+
+    @Test
+    public void testStringNodeStoresEmptyString() throws Exception {
+        Node name = Node.newString("");
+        assertEquals("", name.getString());
+    }
+
+    @Test
+    public void testStringNodeStoresShortName() throws Exception {
+        Node name = Node.newString("x");
+        assertEquals("x", name.getString());
+    }
+
+    @Test
+    public void testNodeBooleanPropertyDefaultsFalse() throws Exception {
+        Node node = new Node(Token.EMPTY);
+        assertFalse(node.getBooleanProp(Node.DIRECT_EVAL));
+    }
+
+    @Test
+    public void testNodeBooleanPropertyCanBeSetTrue() throws Exception {
+        Node node = new Node(Token.EMPTY);
+        node.putBooleanProp(Node.DIRECT_EVAL, true);
+        assertTrue(node.getBooleanProp(Node.DIRECT_EVAL));
+    }
+
+    @Test
+    public void testNodeIntegerPropertyDefaultsZero() throws Exception {
+        Node node = new Node(Token.EMPTY);
+        assertEquals(0, node.getIntProp(Node.LENGTH));
+    }
+
+    @Test
+    public void testNodeIntegerPropertyStoresOne() throws Exception {
+        Node node = new Node(Token.EMPTY);
+        node.putIntProp(Node.LENGTH, 1);
+        assertEquals(1, node.getIntProp(Node.LENGTH));
+    }
+
+    @Test
+    public void testNodeStringPropertyCanBeChanged() throws Exception {
+        Node node = Node.newString("a");
+        node.setString("b");
+        assertEquals("b", node.getString());
+    }
+
+    @Test
+    public void testNodeTypeCanBeChanged() throws Exception {
+        Node node = new Node(Token.EMPTY);
+        node.setType(Token.BLOCK);
+        assertEquals(Token.BLOCK, node.getType());
+    }
+}

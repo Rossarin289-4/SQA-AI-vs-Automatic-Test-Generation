@@ -1,0 +1,478 @@
+package com.google.gson.stream;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.gson.internal.JsonReaderInternalAccess;
+import com.google.gson.internal.bind.JsonTreeReader;
+import java.io.Closeable;
+import java.io.EOFException;
+import java.io.IOException;
+import java.io.Reader;
+import java.io.StringReader;
+
+public class JsonReaderTest {
+
+    private static final String JSON_WITH_NON_EXECUTE_PREFIX = ")]}'\n{\"a\":1}";
+    private static final String JSON_WITH_TWO_TOP_LEVEL_VALUES = "12; 13";
+    private static final String JSON_WITH_UNQUOTED_NAMES = "{a:1, b:2}";
+    private static final String JSON_WITH_UNQUOTED_STRINGS = "[a, b, c]";
+    private static final String JSON_WITH_COMMA_ELSEWHERE = "[1, 2; 3]";
+    private static final String JSON_WITH_UNNECESSARY_COMMA = "[1,,2]";
+    private static final String JSON_WITH_EQUALS_SIGN = "{a = 1}";
+    private static final String JSON_WITH_SEMICOLON_AS_SEPARATOR = "{a:1; b:2}";
+    private static final String JSON_WITH_SINGLE_QUOTED_STRING = "{a: 'hello'}";
+    private static final String JSON_WITH_SINGLE_QUOTED_NAME = "{'a': 1}";
+    private static final String JSON_WITH_NUMBER_PRECISION_LOSS = "[9007199254740993]";
+    private static final String JSON_WITH_POSITIVE_NUMBER_PREFIX_ZERO = "[01]";
+    private static final String JSON_WITH_NULL_VALUE = "[null]";
+    private static final String JSON_WITH_BOOLEAN_TRUE = "[true]";
+    private static final String JSON_WITH_BOOLEAN_FALSE = "[false]";
+    private static final String JSON_WITH_DOUBLE_QUOTED_NAME = "{\"a\":1}";
+    private static final String JSON_WITH_ARRAY_OF_PRIMITIVES = "[1, 2, 3]";
+    private static final String JSON_WITH_OBJECT_WITH_PRIMITIVES = "{\"a\":1, \"b\":true, \"c\":\"hello\", \"d\":null}";
+    private static final String JSON_WITH_NESTED_OBJECT = "{\"a\":{\"b\":1}}";
+    private static final String JSON_WITH_NESTED_ARRAY = "{\"a\":[1,2]}";
+    private static final String JSON_WITH_ESCAPED_CHARS = "\"hello\\nworld\\t\\u0041\"";
+    private static final String JSON_WITH_CONTROL_CHAR_IN_STRING = "\"hello\nworld\"";
+    private static final String JSON_WITH_C_STYLE_COMMENT = "/* comment */ {\"a\":1}";
+    private static final String JSON_WITH_LINE_COMMENT = "// comment\n{\"a\":1}";
+    private static final String JSON_WITH_NAMED_NULL = "{\"a\":null}";
+    private static final String JSON_WITH_NULL_AS_VALUE = "[null, 1]";
+    private static final String JSON_WITH_UNQUOTED_NULL = "[null]";
+    private static final String JSON_WITH_EMPTY_OBJECT = "{}";
+    private static final String JSON_WITH_EMPTY_ARRAY = "[]";
+    private static final String JSON_WITH_EXPECTED_DOUBLE_INF = "[Infinity]";
+    private static final String JSON_WITH_EXPECTED_DOUBLE_NAN = "[NaN]";
+    private static final String JSON_WITH_INTEGER_OUT_OF_RANGE = "[2147483648]";
+    private static final String JSON_WITH_LONG_OUT_OF_RANGE = "[9223372036854775808]";
+    private static final String JSON_WITH_LONG_MIN_VALUE = "[" + Long.MIN_VALUE + "]";
+    private static final String JSON_WITH_STRING_AS_NUMBER = "[\"123\"]";
+    private static final String JSON_WITH_INTEGER_AS_STRING = "[\"1\"]";
+    private static final String JSON_WITH_FLOAT_NUMBER = "[1.5]";
+    private static final String JSON_WITH_EXPONENTIAL_NUMBER = "[1e10]";
+    private static final String JSON_WITH_NEGATIVE_EXPONENTIAL_NUMBER = "[1e-10]";
+
+
+    @Test
+    public void testLenientMode_NonExecutePrefix() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader(JSON_WITH_NON_EXECUTE_PREFIX));
+        reader.setLenient(true);
+        assertTrue(reader.hasNext());
+        assertEquals(JsonToken.BEGIN_OBJECT, reader.peek());
+        reader.beginObject();
+        assertTrue(reader.hasNext());
+        assertEquals("a", reader.nextName());
+        assertEquals(1, reader.nextInt());
+        assertFalse(reader.hasNext());
+        reader.endObject();
+        assertFalse(reader.hasNext());
+        reader.close();
+    }
+
+    @Test
+    public void testLenientMode_MultipleTopLevelValues() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader(JSON_WITH_TWO_TOP_LEVEL_VALUES));
+        reader.setLenient(true);
+        assertEquals(12, reader.nextInt());
+        // In lenient mode, multiple top-level values are allowed.
+        // After reading 12, hasNext() should still be true.
+        assertTrue(reader.hasNext());
+        assertEquals(13, reader.nextInt());
+        assertFalse(reader.hasNext());
+        reader.close();
+    }
+
+    @Test
+    public void testLenientMode_UnquotedNames() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader(JSON_WITH_UNQUOTED_NAMES));
+        reader.setLenient(true);
+        reader.beginObject();
+        assertEquals("a", reader.nextName());
+        assertEquals(1, reader.nextInt());
+        assertEquals("b", reader.nextName());
+        assertEquals(2, reader.nextInt());
+        reader.endObject();
+        reader.close();
+    }
+
+    @Test
+    public void testLenientMode_UnquotedStrings() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader(JSON_WITH_UNQUOTED_STRINGS));
+        reader.setLenient(true);
+        reader.beginArray();
+        assertEquals("a", reader.nextString());
+        assertEquals("b", reader.nextString());
+        assertEquals("c", reader.nextString());
+        reader.endArray();
+        reader.close();
+    }
+
+    @Test
+    public void testLenientMode_CommaElsewhere() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader(JSON_WITH_COMMA_ELSEWHERE));
+        reader.setLenient(true);
+        reader.beginArray();
+        assertEquals(1, reader.nextInt());
+        assertEquals(2, reader.nextInt());
+        assertEquals(3, reader.nextInt());
+        reader.endArray();
+        reader.close();
+    }
+
+    @Test
+    public void testLenientMode_UnnecessaryComma() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader(JSON_WITH_UNNECESSARY_COMMA));
+        reader.setLenient(true);
+        reader.beginArray();
+        assertEquals(1, reader.nextInt());
+        reader.nextNull(); // Unnecessary comma means null in lenient mode
+        assertEquals(2, reader.nextInt());
+        reader.endArray();
+        reader.close();
+    }
+
+    @Test
+    public void testLenientMode_EqualsSign() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader(JSON_WITH_EQUALS_SIGN));
+        reader.setLenient(true);
+        reader.beginObject();
+        assertEquals("a", reader.nextName());
+        assertEquals(1, reader.nextInt());
+        reader.endObject();
+        reader.close();
+    }
+
+    @Test
+    public void testLenientMode_SemicolonSeparator() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader(JSON_WITH_SEMICOLON_AS_SEPARATOR));
+        reader.setLenient(true);
+        reader.beginObject();
+        assertEquals("a", reader.nextName());
+        assertEquals(1, reader.nextInt());
+        assertEquals("b", reader.nextName());
+        assertEquals(2, reader.nextInt());
+        reader.endObject();
+        reader.close();
+    }
+
+    @Test
+    public void testLenientMode_SingleQuotedString() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader(JSON_WITH_SINGLE_QUOTED_STRING));
+        reader.setLenient(true);
+        reader.beginObject();
+        assertEquals("a", reader.nextName());
+        assertEquals("hello", reader.nextString());
+        reader.endObject();
+        reader.close();
+    }
+
+    @Test
+    public void testLenientMode_SingleQuotedName() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader(JSON_WITH_SINGLE_QUOTED_NAME));
+        reader.setLenient(true);
+        reader.beginObject();
+        assertEquals("a", reader.nextName());
+        assertEquals(1, reader.nextInt());
+        reader.endObject();
+        reader.close();
+    }
+
+    @Test
+    public void testLenientMode_NumberPrecisionLoss() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader(JSON_WITH_NUMBER_PRECISION_LOSS));
+        reader.setLenient(true);
+        reader.beginArray();
+        // RFC 7159 states that numbers can be large, and JavaScript uses IEEE 754 double precision.
+        // The value 9007199254740993 is larger than MAX_SAFE_INTEGER and thus will lose precision when parsed as double.
+        assertEquals(9007199254740993.0, reader.nextDouble(), 0.0);
+        reader.endArray();
+        reader.close();
+    }
+
+    @Test
+    public void testLenientMode_PositiveNumberPrefixZero() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader(JSON_WITH_POSITIVE_NUMBER_PREFIX_ZERO));
+        reader.setLenient(true);
+        reader.beginArray();
+        assertEquals(1, reader.nextInt()); // Should parse as 1, not octal
+        reader.endArray();
+        reader.close();
+    }
+
+    @Test
+    public void testLenientMode_NullValue() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader(JSON_WITH_NULL_VALUE));
+        reader.setLenient(true);
+        reader.beginArray();
+        reader.nextNull();
+        assertTrue(reader.hasNext());
+        assertEquals(1, reader.nextInt());
+        reader.endArray();
+        reader.close();
+    }
+
+    @Test
+    public void testLenientMode_BooleanTrue() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader(JSON_WITH_BOOLEAN_TRUE));
+        reader.setLenient(true);
+        reader.beginArray();
+        assertTrue(reader.nextBoolean());
+        reader.endArray();
+        reader.close();
+    }
+
+    @Test
+    public void testLenientMode_BooleanFalse() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader(JSON_WITH_BOOLEAN_FALSE));
+        reader.setLenient(true);
+        reader.beginArray();
+        assertFalse(reader.nextBoolean());
+        reader.endArray();
+        reader.close();
+    }
+
+    @Test
+    public void testLenientMode_DoubleQuotedName() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader(JSON_WITH_DOUBLE_QUOTED_NAME));
+        reader.setLenient(true);
+        reader.beginObject();
+        assertEquals("a", reader.nextName());
+        assertEquals(1, reader.nextInt());
+        reader.endObject();
+        reader.close();
+    }
+
+    @Test
+    public void testArrayOfPrimitives() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader(JSON_WITH_ARRAY_OF_PRIMITIVES));
+        reader.beginArray();
+        assertEquals(1, reader.nextInt());
+        assertEquals(2, reader.nextInt());
+        assertEquals(3, reader.nextInt());
+        reader.endArray();
+        reader.close();
+    }
+
+    @Test
+    public void testObjectWithPrimitives() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader(JSON_WITH_OBJECT_WITH_PRIMITIVES));
+        reader.beginObject();
+        assertEquals("a", reader.nextName());
+        assertEquals(1, reader.nextInt());
+        assertEquals("b", reader.nextName());
+        assertTrue(reader.nextBoolean());
+        assertEquals("c", reader.nextName());
+        assertEquals("hello", reader.nextString());
+        assertEquals("d", reader.nextName());
+        reader.nextNull();
+        reader.endObject();
+        reader.close();
+    }
+
+    @Test
+    public void testNestedObject() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader(JSON_WITH_NESTED_OBJECT));
+        reader.beginObject();
+        assertEquals("a", reader.nextName());
+        reader.beginObject();
+        assertEquals("b", reader.nextName());
+        assertEquals(1, reader.nextInt());
+        reader.endObject();
+        reader.endObject();
+        reader.close();
+    }
+
+    @Test
+    public void testNestedArray() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader(JSON_WITH_NESTED_ARRAY));
+        reader.beginObject();
+        assertEquals("a", reader.nextName());
+        reader.beginArray();
+        assertEquals(1, reader.nextInt());
+        assertEquals(2, reader.nextInt());
+        reader.endArray();
+        reader.endObject();
+        reader.close();
+    }
+
+    @Test
+    public void testEscapedCharacters() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader(JSON_WITH_ESCAPED_CHARS));
+        assertEquals("hello\nworld\tA", reader.nextString());
+        reader.close();
+    }
+
+    @Test
+    public void testControlCharInString() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader(JSON_WITH_CONTROL_CHAR_IN_STRING));
+        reader.setLenient(true); // Control characters are allowed in lenient mode
+        assertEquals("hello\nworld", reader.nextString());
+        reader.close();
+    }
+
+    @Test
+    public void testCStyleComment() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader(JSON_WITH_C_STYLE_COMMENT));
+        reader.setLenient(true);
+        reader.beginObject();
+        assertEquals("a", reader.nextName());
+        assertEquals(1, reader.nextInt());
+        reader.endObject();
+        reader.close();
+    }
+
+    @Test
+    public void testLineComment() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader(JSON_WITH_LINE_COMMENT));
+        reader.setLenient(true);
+        reader.beginObject();
+        assertEquals("a", reader.nextName());
+        assertEquals(1, reader.nextInt());
+        reader.endObject();
+        reader.close();
+    }
+
+    @Test
+    public void testNamedNull() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader(JSON_WITH_NAMED_NULL));
+        reader.beginObject();
+        assertEquals("a", reader.nextName());
+        reader.nextNull();
+        reader.endObject();
+        reader.close();
+    }
+
+    @Test
+    public void testNullAsValue() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader(JSON_WITH_NULL_AS_VALUE));
+        reader.beginArray();
+        reader.nextNull();
+        assertEquals(1, reader.nextInt());
+        reader.endArray();
+        reader.close();
+    }
+
+    @Test
+    public void testUnquotedNull() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader(JSON_WITH_UNQUOTED_NULL));
+        reader.setLenient(true);
+        reader.beginArray();
+        reader.nextNull();
+        reader.endArray();
+        reader.close();
+    }
+
+    @Test
+    public void testEmptyObject() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader(JSON_WITH_EMPTY_OBJECT));
+        reader.beginObject();
+        assertFalse(reader.hasNext());
+        reader.endObject();
+        reader.close();
+    }
+
+    @Test
+    public void testEmptyArray() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader(JSON_WITH_EMPTY_ARRAY));
+        reader.beginArray();
+        assertFalse(reader.hasNext());
+        reader.endArray();
+        reader.close();
+    }
+
+    @Test
+    public void testLenientMode_DoubleInfinity() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader(JSON_WITH_EXPECTED_DOUBLE_INF));
+        reader.setLenient(true);
+        reader.beginArray();
+        assertEquals(Double.POSITIVE_INFINITY, reader.nextDouble(), 0.0);
+        reader.endArray();
+        reader.close();
+    }
+
+    @Test
+    public void testLenientMode_DoubleNaN() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader(JSON_WITH_EXPECTED_DOUBLE_NAN));
+        reader.setLenient(true);
+        reader.beginArray();
+        assertTrue(Double.isNaN(reader.nextDouble()));
+        reader.endArray();
+        reader.close();
+    }
+
+    @Test
+    public void testIntegerOutOfRange() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader(JSON_WITH_INTEGER_OUT_OF_RANGE));
+        reader.setLenient(true); // Allow numbers outside int range
+        reader.beginArray();
+        // The number 2147483648 is outside the int range but can be read as a double.
+        assertEquals(2147483648.0, reader.nextDouble(), 0.0);
+        reader.endArray();
+        reader.close();
+    }
+
+    @Test
+    public void testLongOutOfRange() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader(JSON_WITH_LONG_OUT_OF_RANGE));
+        reader.setLenient(true); // Allow numbers outside long range
+        reader.beginArray();
+        // The number 9223372036854775808 is outside the long range but can be read as a double.
+        assertEquals(9223372036854775808.0, reader.nextDouble(), 0.0);
+        reader.endArray();
+        reader.close();
+    }
+
+    @Test
+    public void testLongMinValue() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader(JSON_WITH_LONG_MIN_VALUE));
+        reader.beginArray();
+        assertEquals(Long.MIN_VALUE, reader.nextLong());
+        reader.endArray();
+        reader.close();
+    }
+
+    @Test
+    public void testStringAsNumber() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader(JSON_WITH_STRING_AS_NUMBER));
+        reader.beginArray();
+        assertEquals(123.0, reader.nextDouble(), 0.0);
+        reader.endArray();
+        reader.close();
+    }
+
+    @Test
+    public void testIntegerAsString() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader(JSON_WITH_INTEGER_AS_STRING));
+        reader.beginArray();
+        assertEquals("1", reader.nextString());
+        reader.endArray();
+        reader.close();
+    }
+
+    @Test
+    public void testFloatNumber() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader(JSON_WITH_FLOAT_NUMBER));
+        reader.beginArray();
+        assertEquals(1.5, reader.nextDouble(), 0.0);
+        reader.endArray();
+        reader.close();
+    }
+
+    @Test
+    public void testExponentialNumber() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader(JSON_WITH_EXPONENTIAL_NUMBER));
+        reader.beginArray();
+        assertEquals(1e10, reader.nextDouble(), 0.0);
+        reader.endArray();
+        reader.close();
+    }
+
+    @Test
+    public void testNegativeExponentialNumber() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader(JSON_WITH_NEGATIVE_EXPONENTIAL_NUMBER));
+        reader.beginArray();
+        assertEquals(1e-10, reader.nextDouble(), 0.0);
+        reader.endArray();
+        reader.close();
+    }
+}

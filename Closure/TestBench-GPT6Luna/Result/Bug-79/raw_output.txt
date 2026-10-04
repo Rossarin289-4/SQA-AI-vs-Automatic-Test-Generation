@@ -1,0 +1,181 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Preconditions;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.common.collect.Sets;
+import com.google.javascript.jscomp.AbstractCompiler.LifeCycleStage;
+import com.google.javascript.jscomp.MakeDeclaredNamesUnique.BoilerplateRenamer;
+import com.google.javascript.jscomp.NodeTraversal.AbstractPostOrderCallback;
+import com.google.javascript.jscomp.NodeTraversal.Callback;
+import com.google.javascript.jscomp.Scope.Var;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import java.util.Map;
+import java.util.Set;
+
+public class NormalizeTest {
+    @Test
+    public void testSplitMultipleVarDeclarations() throws Exception {
+        Compiler compiler = new Compiler();
+        Node root = compiler.parseTestCode("var a=1,b=2;");
+        new Normalize.NormalizeStatements(compiler, false).process(null, root);
+        Node first = root.getFirstChild();
+        assertEquals(Token.VAR, first.getType());
+        assertEquals("a", first.getFirstChild().getString());
+        Node second = first.getNext();
+        assertEquals(Token.VAR, second.getType());
+        assertEquals("b", second.getFirstChild().getString());
+        assertNull(second.getNext());
+    }
+
+    @Test
+    public void testWhileConvertedToFor() throws Exception {
+        Compiler compiler = new Compiler();
+        Node root = compiler.parseTestCode("while(x)y();");
+        new Normalize.NormalizeStatements(compiler, false).process(null, root);
+        Node loop = root.getFirstChild();
+        assertEquals(Token.FOR, loop.getType());
+        assertEquals(Token.EMPTY, loop.getFirstChild().getType());
+        assertEquals(Token.NAME, loop.getFirstChild().getNext().getType());
+        assertEquals(Token.EMPTY, loop.getFirstChild().getNext().getNext().getType());
+    }
+
+    @Test
+    public void testForInitializerMovedBeforeLoop() throws Exception {
+        Compiler compiler = new Compiler();
+        Node root = compiler.parseTestCode("for(var i=0;i<1;i++)x();");
+        new Normalize.NormalizeStatements(compiler, false).process(null, root);
+        Node declaration = root.getFirstChild();
+        assertEquals(Token.VAR, declaration.getType());
+        assertEquals("i", declaration.getFirstChild().getString());
+        Node loop = declaration.getNext();
+        assertEquals(Token.FOR, loop.getType());
+        assertEquals(Token.EMPTY, loop.getFirstChild().getType());
+    }
+
+    @Test
+    public void testForExpressionInitializerMovedAsExpression() throws Exception {
+        Compiler compiler = new Compiler();
+        Node root = compiler.parseTestCode("for(f();x;)y();");
+        new Normalize.NormalizeStatements(compiler, false).process(null, root);
+        Node expression = root.getFirstChild();
+        assertEquals(Token.EXPR_RESULT, expression.getType());
+        assertEquals(Token.CALL, expression.getFirstChild().getType());
+        assertEquals(Token.FOR, expression.getNext().getType());
+        assertEquals(Token.EMPTY, expression.getNext().getFirstChild().getType());
+    }
+
+    @Test
+    public void testForInVarDeclarationExtracted() throws Exception {
+        Compiler compiler = new Compiler();
+        Node root = compiler.parseTestCode("for(var k in obj)x();");
+        new Normalize.NormalizeStatements(compiler, false).process(null, root);
+        Node declaration = root.getFirstChild();
+        assertEquals(Token.VAR, declaration.getType());
+        assertEquals("k", declaration.getFirstChild().getString());
+        Node loop = declaration.getNext();
+        assertEquals(Token.FOR, loop.getType());
+        assertEquals(Token.NAME, loop.getFirstChild().getType());
+        assertEquals("k", loop.getFirstChild().getString());
+    }
+
+    @Test
+    public void testLabelAroundStatementGetsBlock() throws Exception {
+        Compiler compiler = new Compiler();
+        Node root = compiler.parseTestCode("label:x();");
+        new Normalize.NormalizeStatements(compiler, false).process(null, root);
+        Node label = root.getFirstChild();
+        assertEquals(Token.LABEL, label.getType());
+        assertEquals(Token.BLOCK, label.getLastChild().getType());
+        assertEquals(Token.EXPR_RESULT, label.getLastChild().getFirstChild().getType());
+    }
+
+    @Test
+    public void testLabelAroundLoopDoesNotAddBlock() throws Exception {
+        Compiler compiler = new Compiler();
+        Node root = compiler.parseTestCode("label:while(x)y();");
+        new Normalize.NormalizeStatements(compiler, false).process(null, root);
+        Node label = root.getFirstChild();
+        assertEquals(Token.LABEL, label.getType());
+        assertEquals(Token.FOR, label.getLastChild().getType());
+    }
+
+    @Test
+    public void testFunctionDeclarationMovedToTopOfFunctionBody() throws Exception {
+        Compiler compiler = new Compiler();
+        Node root = compiler.parseTestCode("function outer(){x();function inner(){}}");
+        new Normalize.NormalizeStatements(compiler, false).process(null, root);
+        Node body = root.getFirstChild().getLastChild();
+        assertEquals(Token.FUNCTION, body.getFirstChild().getType());
+        assertEquals("inner", body.getFirstChild().getFirstChild().getString());
+        assertEquals(Token.EXPR_RESULT, body.getFirstChild().getNext().getType());
+    }
+
+    @Test
+    public void testConstantConventionAnnotationPropagated() throws Exception {
+        Compiler compiler = new Compiler();
+        Node root = compiler.parseTestCode("var FOO=1;FOO;");
+        new Normalize.NormalizeStatements(compiler, false).process(null, root);
+        Node declarationName = root.getFirstChild().getFirstChild();
+        assertTrue(declarationName.getBooleanProp(Node.IS_CONSTANT_NAME));
+        assertTrue(root.getFirstChild().getNext().getFirstChild()
+                .getBooleanProp(Node.IS_CONSTANT_NAME));
+    }
+
+    @Test
+    public void testEmptyVariableNameIsLeftUnannotated() throws Exception {
+        Node name = Node.newString(Token.NAME, "");
+        assertFalse(name.getBooleanProp(Node.IS_CONSTANT_NAME));
+    }
+
+    @Test
+    public void testProcessSetsNormalizedLifecycleStage() throws Exception {
+        Compiler compiler = new Compiler();
+        Node root = compiler.parseTestCode("var x=1;");
+        new Normalize(compiler, false).process(null, root);
+        assertTrue(compiler.getLifeCycleStage().isNormalized());
+    }
+
+    @Test
+    public void testDuplicateDeclarationsAreNormalized() throws Exception {
+        Compiler compiler = new Compiler();
+        Node root = compiler.parseTestCode("var x=1;var x=2;");
+        new Normalize(compiler, false).process(null, root);
+        assertEquals(Token.EXPR_RESULT, root.getFirstChild().getNext().getType());
+        assertEquals(Token.ASSIGN,
+                root.getFirstChild().getNext().getFirstChild().getType());
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+Selected exploratory tests for `NormalizeStatements` transformations: splitting `var`, loop normalization, labels, function movement, and constant annotations.
+Also exercised the pass-level lifecycle update and duplicate declaration handling through `process`.
+
+### 2. TEST CASE DESIGN
+- `testSplitMultipleVarDeclarations`: `var a=1,b=2;`; expects separate `VAR` nodes for `a` and `b`, as the splitting loop detaches declarations into sibling nodes.
+- `testWhileConvertedToFor`: `while(x)y();`; expects `FOR` with empty initializer, condition, and empty increment, as the visit changes the token and adds two empty nodes.
+- `testForInitializerMovedBeforeLoop`: `for(var i=0;i<1;i++)x();`; expects declaration before a `FOR` with an empty initializer, as normalization lifts the `VAR`.
+- `testForExpressionInitializerMovedAsExpression`: `for(f();x;)y();`; expects an expression statement before the loop, as a non-`VAR` initializer is wrapped in `EXPR_RESULT`.
+- `testForInVarDeclarationExtracted`: `for(var k in obj)x();`; expects a preceding declaration and `NAME k` as the loop target, as the `VAR` is cloned and its name extracted.
+- `testLabelAroundStatementGetsBlock`: `label:x();`; expects the labeled expression enclosed in a block, as non-loop/non-block label children are wrapped.
+- `testLabelAroundLoopDoesNotAddBlock`: `label:while(x)y();`; expects a `FOR` child, as a loop is exempt from label wrapping and the `WHILE` is converted.
+- `testFunctionDeclarationMovedToTopOfFunctionBody`: nested function after an expression; expects it before the expression, as named function declarations are moved to the body front.
+- `testConstantConventionAnnotationPropagated`: `FOO`; expects constant-name annotations on declaration and reference, as the coding convention recognizes the uppercase name.
+- `testEmptyVariableNameIsLeftUnannotated`: empty `NAME`; expects the default false annotation property.
+- `testProcessSetsNormalizedLifecycleStage`: simple script; expects normalized lifecycle, as `process` sets that stage when needed.
+- `testDuplicateDeclarationsAreNormalized`: duplicate `var x`; expects the second declaration converted to an assignment expression by duplicate handling.
+
+### 4. DEFECT DETECTION STRATEGY
+The assertions pin observable AST structures and lifecycle state for representative normalization branches. No detection outcome is claimed.
+
+### 5. SUMMARY
+12 tests.
+
+### 6. LIMITATIONS
+These tests depend on the supplied Closure APIs and parser behavior; unexercised branches may contain defects. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

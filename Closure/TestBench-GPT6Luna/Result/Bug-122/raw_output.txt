@@ -1,0 +1,303 @@
+```java
+package com.google.javascript.jscomp.parsing;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Preconditions;
+import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Sets;
+import com.google.javascript.jscomp.parsing.Config.LanguageMode;
+import com.google.javascript.rhino.IR;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.TokenStream;
+import com.google.javascript.rhino.head.ErrorReporter;
+import com.google.javascript.rhino.head.Token.CommentType;
+import com.google.javascript.rhino.head.ast.ArrayLiteral;
+import com.google.javascript.rhino.head.ast.Assignment;
+import com.google.javascript.rhino.head.ast.AstNode;
+import com.google.javascript.rhino.head.ast.AstRoot;
+import com.google.javascript.rhino.head.ast.Block;
+import com.google.javascript.rhino.head.ast.BreakStatement;
+import com.google.javascript.rhino.head.ast.CatchClause;
+import com.google.javascript.rhino.head.ast.Comment;
+import com.google.javascript.rhino.head.ast.ConditionalExpression;
+import com.google.javascript.rhino.head.ast.ContinueStatement;
+import com.google.javascript.rhino.head.ast.DoLoop;
+import com.google.javascript.rhino.head.ast.ElementGet;
+import com.google.javascript.rhino.head.ast.EmptyExpression;
+import com.google.javascript.rhino.head.ast.EmptyStatement;
+import com.google.javascript.rhino.head.ast.ExpressionStatement;
+import com.google.javascript.rhino.head.ast.ForInLoop;
+import com.google.javascript.rhino.head.ast.ForLoop;
+import com.google.javascript.rhino.head.ast.FunctionCall;
+import com.google.javascript.rhino.head.ast.FunctionNode;
+import com.google.javascript.rhino.head.ast.IfStatement;
+import com.google.javascript.rhino.head.ast.InfixExpression;
+import com.google.javascript.rhino.head.ast.KeywordLiteral;
+import com.google.javascript.rhino.head.ast.Label;
+import com.google.javascript.rhino.head.ast.LabeledStatement;
+import com.google.javascript.rhino.head.ast.Name;
+import com.google.javascript.rhino.head.ast.NewExpression;
+import com.google.javascript.rhino.head.ast.NumberLiteral;
+import com.google.javascript.rhino.head.ast.ObjectLiteral;
+import com.google.javascript.rhino.head.ast.ObjectProperty;
+import com.google.javascript.rhino.head.ast.ParenthesizedExpression;
+import com.google.javascript.rhino.head.ast.PropertyGet;
+import com.google.javascript.rhino.head.ast.RegExpLiteral;
+import com.google.javascript.rhino.head.ast.ReturnStatement;
+import com.google.javascript.rhino.head.ast.Scope;
+import com.google.javascript.rhino.head.ast.StringLiteral;
+import com.google.javascript.rhino.head.ast.SwitchCase;
+import com.google.javascript.rhino.head.ast.SwitchStatement;
+import com.google.javascript.rhino.head.ast.ThrowStatement;
+import com.google.javascript.rhino.head.ast.TryStatement;
+import com.google.javascript.rhino.head.ast.UnaryExpression;
+import com.google.javascript.rhino.head.ast.VariableDeclaration;
+import com.google.javascript.rhino.head.ast.VariableInitializer;
+import com.google.javascript.rhino.head.ast.WhileLoop;
+import com.google.javascript.rhino.head.ast.WithStatement;
+import com.google.javascript.rhino.jstype.StaticSourceFile;
+import java.util.Set;
+import java.util.regex.Pattern;
+
+public class IRFactoryTest {
+    @Test
+    public void testEmptyScriptTransformsToScript() throws Exception {
+        AstRoot root = new AstRoot();
+        Node result = IRFactory.transformTree(root, null, "", new Config(LanguageMode.ECMASCRIPT5), null);
+        assertEquals(Token.SCRIPT, result.getType());
+        assertFalse(result.hasChildren());
+    }
+
+    @Test
+    public void testNumberExpressionTransformsToNumberNode() throws Exception {
+        AstRoot root = new AstRoot();
+        NumberLiteral number = new NumberLiteral();
+        number.setNumber(7.0);
+        ExpressionStatement statement = new ExpressionStatement();
+        statement.setExpression(number);
+        root.addChild(statement);
+        Node result = IRFactory.transformTree(root, null, "7;", new Config(LanguageMode.ECMASCRIPT5), null);
+        Node expression = result.getFirstChild();
+        assertEquals(Token.EXPR_RESULT, expression.getType());
+        assertEquals(Token.NUMBER, expression.getFirstChild().getType());
+        assertEquals(7.0, expression.getFirstChild().getDouble(), 0.0);
+    }
+
+    @Test
+    public void testNegativeNumericLiteralFoldsToNegativeNumber() throws Exception {
+        AstRoot root = new AstRoot();
+        UnaryExpression neg = new UnaryExpression();
+        NumberLiteral number = new NumberLiteral();
+        number.setNumber(3.0);
+        neg.setOperator(com.google.javascript.rhino.head.Token.NEG);
+        neg.setOperand(number);
+        ExpressionStatement statement = new ExpressionStatement();
+        statement.setExpression(neg);
+        root.addChild(statement);
+        Node result = IRFactory.transformTree(root, null, "-3;", new Config(LanguageMode.ECMASCRIPT5), null);
+        assertEquals(-3.0, result.getFirstChild().getFirstChild().getDouble(), 0.0);
+    }
+
+    @Test
+    public void testPositiveNumericUnaryExpressionKeepsOperator() throws Exception {
+        AstRoot root = new AstRoot();
+        UnaryExpression pos = new UnaryExpression();
+        NumberLiteral number = new NumberLiteral();
+        number.setNumber(3.0);
+        pos.setOperator(com.google.javascript.rhino.head.Token.POS);
+        pos.setOperand(number);
+        ExpressionStatement statement = new ExpressionStatement();
+        statement.setExpression(pos);
+        root.addChild(statement);
+        Node result = IRFactory.transformTree(root, null, "+3;", new Config(LanguageMode.ECMASCRIPT5), null);
+        Node unary = result.getFirstChild().getFirstChild();
+        assertEquals(Token.POS, unary.getType());
+        assertEquals(3.0, unary.getFirstChild().getDouble(), 0.0);
+    }
+
+    @Test
+    public void testStringExpressionPreservesValue() throws Exception {
+        AstRoot root = new AstRoot();
+        StringLiteral literal = new StringLiteral();
+        literal.setValue("hi");
+        ExpressionStatement statement = new ExpressionStatement();
+        statement.setExpression(literal);
+        root.addChild(statement);
+        Node result = IRFactory.transformTree(root, null, "'hi';", new Config(LanguageMode.ECMASCRIPT5), null);
+        assertEquals("hi", result.getFirstChild().getFirstChild().getString());
+    }
+
+    @Test
+    public void testNameExpressionPreservesIdentifier() throws Exception {
+        AstRoot root = new AstRoot();
+        Name name = new Name();
+        name.setIdentifier("value");
+        ExpressionStatement statement = new ExpressionStatement();
+        statement.setExpression(name);
+        root.addChild(statement);
+        Node result = IRFactory.transformTree(root, null, "value;", new Config(LanguageMode.ECMASCRIPT5), null);
+        assertEquals(Token.NAME, result.getFirstChild().getFirstChild().getType());
+        assertEquals("value", result.getFirstChild().getFirstChild().getString());
+    }
+
+    @Test
+    public void testAdditionMapsOperatorAndChildren() throws Exception {
+        AstRoot root = new AstRoot();
+        InfixExpression add = new InfixExpression();
+        NumberLiteral left = new NumberLiteral();
+        left.setNumber(2.0);
+        NumberLiteral right = new NumberLiteral();
+        right.setNumber(4.0);
+        add.setOperator(com.google.javascript.rhino.head.Token.ADD);
+        add.setLeft(left);
+        add.setRight(right);
+        ExpressionStatement statement = new ExpressionStatement();
+        statement.setExpression(add);
+        root.addChild(statement);
+        Node result = IRFactory.transformTree(root, null, "2+4;", new Config(LanguageMode.ECMASCRIPT5), null);
+        Node transformed = result.getFirstChild().getFirstChild();
+        assertEquals(Token.ADD, transformed.getType());
+        assertEquals(2.0, transformed.getFirstChild().getDouble(), 0.0);
+        assertEquals(4.0, transformed.getLastChild().getDouble(), 0.0);
+    }
+
+    @Test
+    public void testParenthesizedExpressionTransformsItsInnerExpression() throws Exception {
+        AstRoot root = new AstRoot();
+        ParenthesizedExpression parens = new ParenthesizedExpression();
+        NumberLiteral number = new NumberLiteral();
+        number.setNumber(9.0);
+        parens.setExpression(number);
+        ExpressionStatement statement = new ExpressionStatement();
+        statement.setExpression(parens);
+        root.addChild(statement);
+        Node result = IRFactory.transformTree(root, null, "(9);", new Config(LanguageMode.ECMASCRIPT5), null);
+        assertEquals(Token.NUMBER, result.getFirstChild().getFirstChild().getType());
+        assertEquals(9.0, result.getFirstChild().getFirstChild().getDouble(), 0.0);
+    }
+
+    @Test
+    public void testEmptyStatementBecomesEmptyToken() throws Exception {
+        AstRoot root = new AstRoot();
+        root.addChild(new EmptyStatement());
+        Node result = IRFactory.transformTree(root, null, ";", new Config(LanguageMode.ECMASCRIPT5), null);
+        assertEquals(Token.EMPTY, result.getFirstChild().getType());
+    }
+
+    @Test
+    public void testReturnWithValueHasOneExpressionChild() throws Exception {
+        AstRoot root = new AstRoot();
+        ReturnStatement ret = new ReturnStatement();
+        NumberLiteral number = new NumberLiteral();
+        number.setNumber(5.0);
+        ret.setReturnValue(number);
+        root.addChild(ret);
+        Node result = IRFactory.transformTree(root, null, "return 5;", new Config(LanguageMode.ECMASCRIPT5), null);
+        Node transformed = result.getFirstChild();
+        assertEquals(Token.RETURN, transformed.getType());
+        assertEquals(5.0, transformed.getFirstChild().getDouble(), 0.0);
+        assertFalse(transformed.getFirstChild().hasChildren());
+    }
+
+    @Test
+    public void testReturnWithoutValueHasNoChildren() throws Exception {
+        AstRoot root = new AstRoot();
+        root.addChild(new ReturnStatement());
+        Node result = IRFactory.transformTree(root, null, "return;", new Config(LanguageMode.ECMASCRIPT5), null);
+        assertEquals(Token.RETURN, result.getFirstChild().getType());
+        assertFalse(result.getFirstChild().hasChildren());
+    }
+
+    @Test
+    public void testArrayLiteralPreservesElementOrder() throws Exception {
+        AstRoot root = new AstRoot();
+        ArrayLiteral array = new ArrayLiteral();
+        NumberLiteral first = new NumberLiteral();
+        first.setNumber(1.0);
+        NumberLiteral second = new NumberLiteral();
+        second.setNumber(2.0);
+        array.addElement(first);
+        array.addElement(second);
+        ExpressionStatement statement = new ExpressionStatement();
+        statement.setExpression(array);
+        root.addChild(statement);
+        Node result = IRFactory.transformTree(root, null, "[1,2];", new Config(LanguageMode.ECMASCRIPT5), null);
+        Node transformed = result.getFirstChild().getFirstChild();
+        assertEquals(Token.ARRAYLIT, transformed.getType());
+        assertEquals(1.0, transformed.getFirstChild().getDouble(), 0.0);
+        assertEquals(2.0, transformed.getLastChild().getDouble(), 0.0);
+    }
+
+    @Test
+    public void testAllowedUseStrictDirectiveIsRemovedAndRecorded() throws Exception {
+        AstRoot root = new AstRoot();
+        ExpressionStatement directive = new ExpressionStatement();
+        StringLiteral strict = new StringLiteral();
+        strict.setValue("use strict");
+        directive.setExpression(strict);
+        root.addChild(directive);
+        Node result = IRFactory.transformTree(root, null, "'use strict';", new Config(LanguageMode.ECMASCRIPT5), null);
+        assertFalse(result.hasChildren());
+        assertEquals(Sets.newHashSet("use strict"), result.getDirectives());
+    }
+
+    @Test
+    public void testOtherStringExpressionRemainsInScript() throws Exception {
+        AstRoot root = new AstRoot();
+        ExpressionStatement statement = new ExpressionStatement();
+        StringLiteral literal = new StringLiteral();
+        literal.setValue("hello");
+        statement.setExpression(literal);
+        root.addChild(statement);
+        Node result = IRFactory.transformTree(root, null, "'hello';", new Config(LanguageMode.ECMASCRIPT5), null);
+        assertEquals(Token.EXPR_RESULT, result.getFirstChild().getType());
+        assertEquals("hello", result.getFirstChild().getFirstChild().getString());
+    }
+
+    @Test
+    public void testBooleanTrueLiteralMapsToTrueToken() throws Exception {
+        AstRoot root = new AstRoot();
+        KeywordLiteral literal = new KeywordLiteral();
+        literal.setType(com.google.javascript.rhino.head.Token.TRUE);
+        ExpressionStatement statement = new ExpressionStatement();
+        statement.setExpression(literal);
+        root.addChild(statement);
+        Node result = IRFactory.transformTree(root, null, "true;", new Config(LanguageMode.ECMASCRIPT5), null);
+        assertEquals(Token.TRUE, result.getFirstChild().getFirstChild().getType());
+    }
+}
+```
+
+1. SOURCE CODE ANALYSIS  
+Selected exploratory coverage of `transformTree` and its transformation paths: literals, operators, statements, arrays, and script directives.  
+Checked child structure, token mapping, literal contents, and the special removal/recording of `"use strict"`.
+
+2. TEST CASE DESIGN  
+- Empty script: expect childless `SCRIPT`, from root transformation with no AST children.
+- Number expression: expect `EXPR_RESULT` with `NUMBER` value 7, from expression wrapping and number conversion.
+- Negative number: expect value -3, from the `NEG` numeric-folding branch.
+- Positive number: expect `POS` with operand 3, since only `NEG` folds numeric operands.
+- String expression: expect `"hi"`, copied from the string literal value.
+- Name expression: expect `NAME` and `"value"`, from name transformation.
+- Addition: expect `ADD` with ordered operands 2 and 4, from infix transformation.
+- Parentheses: expect inner numeric node 9, from parenthesized-expression transformation.
+- Empty statement: expect `EMPTY`, from empty-statement transformation.
+- Return with value: expect `RETURN` containing 5, from return-value transformation.
+- Return without value: expect childless `RETURN`, since no return expression is present.
+- Array literal: expect `ARRAYLIT` elements 1 then 2, following element traversal order.
+- `"use strict"` directive: expect no script children and recorded directive, from directive parsing/removal.
+- Other string expression: expect retained expression statement and `"hello"`, since it is not an allowed directive.
+- `true` literal: expect `TRUE`, from keyword-token mapping.
+
+4. DEFECT DETECTION STRATEGY  
+The assertions pin token selection, operand and child order, literal values, and directive handling in the transformed AST.  
+They exercise distinct paths without assuming behavior outside the supplied transformation source.
+
+5. SUMMARY  
+15 tests.
+
+6. LIMITATIONS  
+The tests are exploratory because no target method was specified beyond the public `transformTree` API; compilation and execution outcomes are not available here. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

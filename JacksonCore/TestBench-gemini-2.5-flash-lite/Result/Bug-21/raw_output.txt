@@ -1,0 +1,907 @@
+```java
+package com.fasterxml.jackson.core.filter;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.math.BigDecimal;
+import java.math.BigInteger;
+import com.fasterxml.jackson.core.*;
+import com.fasterxml.jackson.core.util.JsonParserDelegate;
+
+public class FilteringParserDelegateTest {
+    // test methods (as many as the instructions ask for), each exactly in this form:
+    //     @Test
+    //     public void testWhatItChecks() throws Exception { ... }
+
+    // Helper method to create a dummy delegate parser
+    private JsonParser createDummyParser() {
+        return new JsonParserDelegate(new JsonFactory().createParser("[]")) {
+            // Override necessary methods to return predictable values for testing
+            @Override
+            public JsonToken nextToken() throws IOException {
+                // Simulate a basic JSON structure like {"key": "value"}
+                // This needs to be carefully crafted to test different paths
+                // For simplicity, let's return START_OBJECT, FIELD_NAME, VALUE_STRING, END_OBJECT, null
+                // A more robust test would involve a real JsonParser and input.
+                // However, given the constraints, we simulate tokens.
+                // Let's assume a simple array for now for testing purposes.
+                return JsonToken.END_ARRAY; // Default to end of array to avoid infinite loops in simple cases
+            }
+
+            @Override
+            public JsonToken getCurrentToken() {
+                // This should be managed by nextToken and set appropriately
+                return JsonToken.END_ARRAY; // Default
+            }
+
+            @Override
+            public String getText() throws IOException {
+                if (getCurrentToken() == JsonToken.FIELD_NAME) return "testField";
+                if (getCurrentToken() == JsonToken.VALUE_STRING) return "testValue";
+                return super.getText();
+            }
+
+            @Override
+            public int getIntValue() throws IOException {
+                return 123;
+            }
+
+            @Override
+            public double getDoubleValue() throws IOException {
+                return 123.45;
+            }
+
+            @Override
+            public JsonStreamContext getParsingContext() {
+                return new JsonStreamContext() {
+                    @Override
+                    public Object getCurrentValue() { return null; }
+                    @Override
+                    public void setCurrentValue(Object v) {}
+                    @Override
+                    public int getEntryCount() { return 0; }
+                    @Override
+                    public int getIndex() { return 0; }
+                    @Override
+                    public String getCurrentName() { return null; }
+                    @Override
+                    public JsonStreamContext getParent() { return null; }
+                    @Override
+                    public boolean inArray() { return false; }
+                    @Override
+                    public boolean inObject() { return false; }
+                    @Override
+                    public String toString() { return "DUMMY_CONTEXT"; }
+                };
+            }
+
+            @Override
+            public JsonLocation getCurrentLocation() {
+                return JsonLocation.NA;
+            }
+
+            @Override
+            public String getCurrentName() throws IOException {
+                return "testName";
+            }
+        };
+    }
+
+    // Helper method to create a dummy parser that returns specific tokens
+    private JsonParser createSpecificTokenParser(JsonToken... tokens) {
+        class SpecificTokenParser extends JsonParserDelegate {
+            private final JsonToken[] _tokens;
+            private int _index = 0;
+            private JsonToken _currentToken = null;
+
+            SpecificTokenParser(JsonParser p, JsonToken... tokens) {
+                super(p);
+                _tokens = tokens;
+            }
+
+            @Override
+            public JsonToken nextToken() throws IOException {
+                if (_index < _tokens.length) {
+                    _currentToken = _tokens[_index++];
+                    return _currentToken;
+                }
+                _currentToken = null;
+                return null;
+            }
+
+            @Override
+            public JsonToken getCurrentToken() {
+                return _currentToken;
+            }
+
+            @Override
+            public String getText() throws IOException {
+                if (_currentToken == JsonToken.FIELD_NAME) return "fieldName";
+                if (_currentToken == JsonToken.VALUE_STRING) return "stringValue";
+                return super.getText();
+            }
+
+            @Override
+            public int getIntValue() throws IOException { return 42; }
+
+            @Override
+            public double getDoubleValue() throws IOException { return 42.5; }
+
+            @Override
+            public JsonStreamContext getParsingContext() {
+                return new JsonStreamContext() {
+                    @Override public Object getCurrentValue() { return null; }
+                    @Override public void setCurrentValue(Object v) {}
+                    @Override public int getEntryCount() { return 0; }
+                    @Override public int getIndex() { return 0; }
+                    @Override public String getCurrentName() { return "currentName"; }
+                    @Override public JsonStreamContext getParent() { return null; }
+                    @Override public boolean inArray() { return false; }
+                    @Override public boolean inObject() { return false; }
+                    @Override public String toString() { return "SPECIFIC_CONTEXT"; }
+                };
+            }
+             @Override
+            public JsonLocation getCurrentLocation() {
+                return JsonLocation.NA;
+            }
+        }
+        // Use a minimal parser for the delegate
+        JsonParser delegateParser = new JsonFactory().createParser("{}");
+        return new SpecificTokenParser(delegateParser, tokens);
+    }
+
+    @Test
+    public void testConstructorAndGetFilter() throws Exception {
+        TokenFilter filter = TokenFilter.INCLUDE_ALL;
+        JsonParser delegateParser = createDummyParser();
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, filter, true, true);
+        assertNotNull(fpd);
+        assertEquals(filter, fpd.getFilter());
+    }
+
+    @Test
+    public void testConstructorAndAllowMultipleMatches() throws Exception {
+        JsonParser delegateParser = createDummyParser();
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertTrue(fpd._allowMultipleMatches);
+
+        FilteringParserDelegate fpdFalse = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, false);
+        assertFalse(fpdFalse._allowMultipleMatches);
+    }
+
+    @Test
+    public void testConstructorAndIncludePath() throws Exception {
+        JsonParser delegateParser = createDummyParser();
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertTrue(fpd._includePath);
+
+        FilteringParserDelegate fpdFalse = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, false, true);
+        assertFalse(fpdFalse._includePath);
+    }
+
+    @Test
+    public void testGetMatchCountInitiallyZero() throws Exception {
+        JsonParser delegateParser = createDummyParser();
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertEquals(0, fpd.getMatchCount());
+    }
+
+    @Test
+    public void testGetParsingContextInitiallyRoot() throws Exception {
+        JsonParser delegateParser = createDummyParser();
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertNotNull(fpd.getParsingContext());
+        assertEquals("ROOT", fpd.getParsingContext().toString());
+    }
+
+    @Test
+    public void testCurrentTokenIsNullInitially() throws Exception {
+        JsonParser delegateParser = createDummyParser();
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertNull(fpd.getCurrentToken());
+        assertNull(fpd.currentToken());
+    }
+
+    @Test
+    public void testCurrentTokenIdIsNoTokenInitially() throws Exception {
+        JsonParser delegateParser = createDummyParser();
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertEquals(JsonTokenId.ID_NO_TOKEN, fpd.getCurrentTokenId());
+        assertEquals(JsonTokenId.ID_NO_TOKEN, fpd.currentTokenId());
+    }
+
+    @Test
+    public void testHasCurrentTokenIsFalseInitially() throws Exception {
+        JsonParser delegateParser = createDummyParser();
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertFalse(fpd.hasCurrentToken());
+    }
+
+    @Test
+    public void testHasTokenIdNoTokenInitially() throws Exception {
+        JsonParser delegateParser = createDummyParser();
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertTrue(fpd.hasTokenId(JsonTokenId.ID_NO_TOKEN));
+        assertFalse(fpd.hasTokenId(JsonTokenId.ID_OBJECT));
+    }
+
+    @Test
+    public void testHasTokenFalseInitially() throws Exception {
+        JsonParser delegateParser = createDummyParser();
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertFalse(fpd.hasToken(JsonToken.START_OBJECT));
+    }
+
+    @Test
+    public void testIsExpectedStartArrayTokenFalseInitially() throws Exception {
+        JsonParser delegateParser = createDummyParser();
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertFalse(fpd.isExpectedStartArrayToken());
+    }
+
+    @Test
+    public void testIsExpectedStartObjectTokenFalseInitially() throws Exception {
+        JsonParser delegateParser = createDummyParser();
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertFalse(fpd.isExpectedStartObjectToken());
+    }
+
+    @Test
+    public void testGetCurrentLocationUsesDelegate() throws Exception {
+        JsonParser delegateParser = createDummyParser();
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertEquals(delegateParser.getCurrentLocation(), fpd.getCurrentLocation());
+    }
+
+    @Test
+    public void testGetCurrentNameUsesDelegateWhenStructIsNil() throws Exception {
+        // Mock a delegate that returns a name when current token is not START_OBJECT or START_ARRAY
+        JsonParser delegateMock = new JsonParserDelegate(new JsonFactory().createParser("{}")) {
+            @Override
+            public JsonToken nextToken() throws IOException {
+                return JsonToken.VALUE_STRING; // Simulate a scalar value
+            }
+            @Override
+            public JsonToken getCurrentToken() {
+                return JsonToken.VALUE_STRING;
+            }
+            @Override
+            public String getCurrentName() throws IOException {
+                return "delegateName";
+            }
+            @Override
+            public JsonStreamContext getParsingContext() {
+                // Simulate a context where getCurrentName() would be valid
+                return new JsonStreamContext() {
+                    @Override public Object getCurrentValue() { return null; }
+                    @Override public void setCurrentValue(Object v) {}
+                    @Override public int getEntryCount() { return 1; }
+                    @Override public int getIndex() { return 0; }
+                    @Override public String getCurrentName() { return "contextName"; }
+                    @Override public JsonStreamContext getParent() { return null; }
+                    @Override public boolean inArray() { return false; }
+                    @Override public boolean inObject() { return true; }
+                    @Override public String toString() { return "OBJECT_CONTEXT"; }
+                };
+            }
+        };
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateMock, TokenFilter.INCLUDE_ALL, true, true);
+        // Call nextToken to set the current token
+        fpd.nextToken();
+        assertEquals("contextName", fpd.getCurrentName()); // Should return context name when value is current
+    }
+
+
+    @Test
+    public void testClearCurrentTokenSetsToNull() throws Exception {
+        JsonParser delegateParser = createSpecificTokenParser(JsonToken.VALUE_STRING);
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        fpd.nextToken(); // Set current token
+        assertNotNull(fpd.getCurrentToken());
+        fpd.clearCurrentToken();
+        assertNull(fpd.getCurrentToken());
+    }
+
+    @Test
+    public void testGetLastClearedToken() throws Exception {
+        JsonParser delegateParser = createSpecificTokenParser(JsonToken.VALUE_STRING, JsonToken.END_OBJECT);
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        fpd.nextToken(); // VALUE_STRING
+        fpd.clearCurrentToken();
+        assertEquals(JsonToken.VALUE_STRING, fpd.getLastClearedToken());
+        fpd.nextToken(); // END_OBJECT
+        fpd.clearCurrentToken();
+        assertEquals(JsonToken.END_OBJECT, fpd.getLastClearedToken());
+    }
+
+    @Test
+    public void testOverrideCurrentNameThrowsUnsupportedOperationException() throws Exception {
+        JsonParser delegateParser = createDummyParser();
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        try {
+            fpd.overrideCurrentName("newName");
+            fail("Expected UnsupportedOperationException");
+        } catch (UnsupportedOperationException e) {
+            // Expected
+        }
+    }
+
+    @Test
+    public void testNextTokenHandlesEndOfInput() throws Exception {
+        JsonParser delegateParser = createSpecificTokenParser(); // No tokens provided, should return null
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertNull(fpd.nextToken());
+    }
+
+    @Test
+    public void testNextTokenWithIncludePathAndMultipleMatches() throws Exception {
+        // Simulate a structure like {"a": 1, "b": 2} and includePath=true, allowMultipleMatches=true
+        JsonParser delegateParser = createSpecificTokenParser(
+            JsonToken.START_OBJECT, JsonToken.FIELD_NAME, JsonToken.VALUE_NUMBER_INT,
+            JsonToken.FIELD_NAME, JsonToken.VALUE_NUMBER_INT, JsonToken.END_OBJECT
+        );
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertEquals(JsonToken.START_OBJECT, fpd.nextToken());
+        assertEquals(JsonToken.FIELD_NAME, fpd.nextToken());
+        assertEquals("fieldName", fpd.getText()); // Check text for FIELD_NAME
+        assertEquals(JsonToken.VALUE_NUMBER_INT, fpd.nextToken());
+        assertEquals(42, fpd.getIntValue()); // Check numeric value
+        assertEquals(JsonToken.FIELD_NAME, fpd.nextToken());
+        assertEquals(JsonToken.VALUE_NUMBER_INT, fpd.nextToken());
+        assertEquals(42, fpd.getIntValue());
+        assertEquals(JsonToken.END_OBJECT, fpd.nextToken());
+        assertNull(fpd.nextToken());
+    }
+
+    @Test
+    public void testNextTokenFiltersScalarValue() throws Exception {
+        // Simulate {"a": 1} and filter to exclude number 1
+        TokenFilter excludeNumberOne = new TokenFilter() {
+            @Override
+            public boolean includeValue(JsonParser p) throws IOException {
+                return p.getIntValue() != 1;
+            }
+        };
+        JsonParser delegateParser = createSpecificTokenParser(
+            JsonToken.START_OBJECT, JsonToken.FIELD_NAME, JsonToken.VALUE_NUMBER_INT, JsonToken.END_OBJECT
+        );
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, excludeNumberOne, false, false);
+
+        assertEquals(JsonToken.START_OBJECT, fpd.nextToken());
+        assertEquals(JsonToken.FIELD_NAME, fpd.nextToken()); // "a"
+        // The nextToken should skip the value 1 because it's filtered out
+        // The delegate's nextToken will return VALUE_NUMBER_INT, but the filter logic should prevent it from being returned.
+        // The `_nextToken2` logic should then advance to END_OBJECT.
+        assertEquals(JsonToken.END_OBJECT, fpd.nextToken());
+        assertNull(fpd.nextToken());
+    }
+
+    @Test
+    public void testNextTokenSkipsChildrenWhenFilterReturnsNull() throws Exception {
+        // Simulate {"a": {"b": 1}} and have the filter return null for the object "a"
+        TokenFilter filterReturnsNullForObject = new TokenFilter() {
+            @Override
+            public TokenFilter filterStartObject() {
+                return null; // Signal to skip children
+            }
+        };
+        JsonParser delegateParser = createSpecificTokenParser(
+            JsonToken.START_OBJECT, JsonToken.FIELD_NAME, // "a"
+            JsonToken.START_OBJECT, JsonToken.FIELD_NAME, // "b"
+            JsonToken.VALUE_NUMBER_INT, // 1
+            JsonToken.END_OBJECT, JsonToken.END_OBJECT
+        );
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, filterReturnsNullForObject, false, false);
+
+        assertEquals(JsonToken.START_OBJECT, fpd.nextToken());
+        assertEquals(JsonToken.FIELD_NAME, fpd.nextToken()); // "a"
+        // The filter should return null for the start of object "a", causing delegate.skipChildren() to be called.
+        // This means the inner object {"b": 1} should be skipped.
+        // The next token returned should be the END_OBJECT for "a".
+        assertEquals(JsonToken.END_OBJECT, fpd.nextToken());
+        assertNull(fpd.nextToken());
+    }
+
+    @Test
+    public void testNextValueSkipsFieldNameWhenPresent() throws Exception {
+        JsonParser delegateParser = createSpecificTokenParser(
+            JsonToken.FIELD_NAME, JsonToken.VALUE_STRING
+        );
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertEquals(JsonToken.FIELD_NAME, fpd.nextToken());
+        assertEquals(JsonToken.VALUE_STRING, fpd.nextValue());
+    }
+
+    @Test
+    public void testSkipChildrenWhenCurrentTokenIsNotStructStart() throws Exception {
+        JsonParser delegateParser = createSpecificTokenParser(JsonToken.VALUE_STRING);
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        fpd.nextToken(); // Set current token to VALUE_STRING
+        assertNotNull(fpd.skipChildren()); // Should return 'this' without changing state significantly
+        assertEquals(JsonToken.VALUE_STRING, fpd.getCurrentToken()); // Token should remain
+    }
+
+    @Test
+    public void testSkipChildrenHandlesNestedStructures() throws Exception {
+        JsonParser delegateParser = createSpecificTokenParser(
+            JsonToken.START_OBJECT, JsonToken.FIELD_NAME, JsonToken.START_ARRAY,
+            JsonToken.VALUE_NUMBER_INT, JsonToken.END_ARRAY, JsonToken.END_OBJECT
+        );
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        fpd.nextToken(); // START_OBJECT
+        assertNotNull(fpd.skipChildren());
+        // After skipping, the token should be END_OBJECT
+        assertEquals(JsonToken.END_OBJECT, fpd.getCurrentToken());
+    }
+
+    @Test
+    public void testGetTextUsesDelegate() throws Exception {
+        JsonParser delegateParser = new JsonParserDelegate(new JsonFactory().createParser("\"hello\"")) {
+            @Override
+            public JsonToken nextToken() throws IOException {
+                return JsonToken.VALUE_STRING;
+            }
+            @Override
+            public String getText() throws IOException {
+                return "delegateText";
+            }
+        };
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        fpd.nextToken();
+        assertEquals("delegateText", fpd.getText());
+    }
+
+    @Test
+    public void testHasTextCharactersUsesDelegate() throws Exception {
+        JsonParser delegateParser = new JsonParserDelegate(new JsonFactory().createParser("\"hello\"")) {
+            @Override
+            public boolean hasTextCharacters() {
+                return true;
+            }
+        };
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertTrue(fpd.hasTextCharacters());
+    }
+
+    @Test
+    public void testGetTextCharactersUsesDelegate() throws Exception {
+        JsonParser delegateParser = new JsonParserDelegate(new JsonFactory().createParser("\"hello\"")) {
+            @Override
+            public char[] getTextCharacters() throws IOException {
+                return new char[]{'h', 'e', 'l', 'l', 'o'};
+            }
+        };
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertArrayEquals(new char[]{'h', 'e', 'l', 'l', 'o'}, fpd.getTextCharacters());
+    }
+
+    @Test
+    public void testGetTextLengthUsesDelegate() throws Exception {
+        JsonParser delegateParser = new JsonParserDelegate(new JsonFactory().createParser("\"hello\"")) {
+            @Override
+            public int getTextLength() throws IOException {
+                return 5;
+            }
+        };
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertEquals(5, fpd.getTextLength());
+    }
+
+    @Test
+    public void testGetTextOffsetUsesDelegate() throws Exception {
+        JsonParser delegateParser = new JsonParserDelegate(new JsonFactory().createParser("\"hello\"")) {
+            @Override
+            public int getTextOffset() throws IOException {
+                return 1;
+            }
+        };
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertEquals(1, fpd.getTextOffset());
+    }
+
+    @Test
+    public void testGetBigIntegerValueUsesDelegate() throws Exception {
+        BigInteger expected = new BigInteger("12345678901234567890");
+        JsonParser delegateParser = new JsonParserDelegate(new JsonFactory().createParser("12345678901234567890")) {
+            @Override
+            public BigInteger getBigIntegerValue() throws IOException {
+                return expected;
+            }
+        };
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertEquals(expected, fpd.getBigIntegerValue());
+    }
+
+    @Test
+    public void testGetBooleanValueUsesDelegate() throws Exception {
+        JsonParser delegateParser = new JsonParserDelegate(new JsonFactory().createParser("true")) {
+            @Override
+            public boolean getBooleanValue() throws IOException {
+                return true;
+            }
+        };
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertTrue(fpd.getBooleanValue());
+    }
+
+    @Test
+    public void testGetByteValueUsesDelegate() throws Exception {
+        JsonParser delegateParser = new JsonParserDelegate(new JsonFactory().createParser("10")) {
+            @Override
+            public byte getByteValue() throws IOException {
+                return 10;
+            }
+        };
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertEquals((byte) 10, fpd.getByteValue());
+    }
+
+    @Test
+    public void testGetShortValueUsesDelegate() throws Exception {
+        JsonParser delegateParser = new JsonParserDelegate(new JsonFactory().createParser("100")) {
+            @Override
+            public short getShortValue() throws IOException {
+                return 100;
+            }
+        };
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertEquals((short) 100, fpd.getShortValue());
+    }
+
+    @Test
+    public void testGetDecimalValueUsesDelegate() throws Exception {
+        BigDecimal expected = new BigDecimal("123.456");
+        JsonParser delegateParser = new JsonParserDelegate(new JsonFactory().createParser("123.456")) {
+            @Override
+            public BigDecimal getDecimalValue() throws IOException {
+                return expected;
+            }
+        };
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertEquals(expected, fpd.getDecimalValue());
+    }
+
+    @Test
+    public void testGetDoubleValueUsesDelegate() throws Exception {
+        JsonParser delegateParser = new JsonParserDelegate(new JsonFactory().createParser("123.45")) {
+            @Override
+            public double getDoubleValue() throws IOException {
+                return 123.45;
+            }
+        };
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertEquals(123.45, fpd.getDoubleValue(), 0.0);
+    }
+
+    @Test
+    public void testGetFloatValueUsesDelegate() throws Exception {
+        JsonParser delegateParser = new JsonParserDelegate(new JsonFactory().createParser("123.45f")) {
+            @Override
+            public float getFloatValue() throws IOException {
+                return 123.45f;
+            }
+        };
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertEquals(123.45f, fpd.getFloatValue(), 0.0f);
+    }
+
+    @Test
+    public void testGetIntValueUsesDelegate() throws Exception {
+        JsonParser delegateParser = new JsonParserDelegate(new JsonFactory().createParser("123")) {
+            @Override
+            public int getIntValue() throws IOException {
+                return 123;
+            }
+        };
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertEquals(123, fpd.getIntValue());
+    }
+
+    @Test
+    public void testGetLongValueUsesDelegate() throws Exception {
+        JsonParser delegateParser = new JsonParserDelegate(new JsonFactory().createParser("1234567890")) {
+            @Override
+            public long getLongValue() throws IOException {
+                return 1234567890L;
+            }
+        };
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertEquals(1234567890L, fpd.getLongValue());
+    }
+
+    @Test
+    public void testGetNumberTypeUsesDelegate() throws Exception {
+        JsonParser delegateParser = new JsonParserDelegate(new JsonFactory().createParser("123")) {
+            @Override
+            public NumberType getNumberType() throws IOException {
+                return NumberType.INT;
+            }
+        };
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertEquals(NumberType.INT, fpd.getNumberType());
+    }
+
+    @Test
+    public void testGetNumberValueUsesDelegate() throws Exception {
+        Number expected = Integer.valueOf(123);
+        JsonParser delegateParser = new JsonParserDelegate(new JsonFactory().createParser("123")) {
+            @Override
+            public Number getNumberValue() throws IOException {
+                return expected;
+            }
+        };
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertEquals(expected, fpd.getNumberValue());
+    }
+
+    @Test
+    public void testGetValueAsIntUsesDelegate() throws Exception {
+        JsonParser delegateParser = new JsonParserDelegate(new JsonFactory().createParser("456")) {
+            @Override
+            public int getValueAsInt() throws IOException {
+                return 456;
+            }
+        };
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertEquals(456, fpd.getValueAsInt());
+    }
+
+    @Test
+    public void testGetValueAsIntWithDefaultUsesDelegate() throws Exception {
+        JsonParser delegateParser = new JsonParserDelegate(new JsonFactory().createParser("abc")) {
+            @Override
+            public int getValueAsInt(int defaultValue) throws IOException {
+                return defaultValue; // Simulate fallback
+            }
+        };
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertEquals(99, fpd.getValueAsInt(99));
+    }
+
+    @Test
+    public void testGetValueAsLongUsesDelegate() throws Exception {
+        JsonParser delegateParser = new JsonParserDelegate(new JsonFactory().createParser("789012345")) {
+            @Override
+            public long getValueAsLong() throws IOException {
+                return 789012345L;
+            }
+        };
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertEquals(789012345L, fpd.getValueAsLong());
+    }
+
+    @Test
+    public void testGetValueAsLongWithDefaultUsesDelegate() throws Exception {
+        JsonParser delegateParser = new JsonParserDelegate(new JsonFactory().createParser("xyz")) {
+            @Override
+            public long getValueAsLong(long defaultValue) throws IOException {
+                return defaultValue; // Simulate fallback
+            }
+        };
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertEquals(100L, fpd.getValueAsLong(100L));
+    }
+
+    @Test
+    public void testGetValueAsDoubleUsesDelegate() throws Exception {
+        JsonParser delegateParser = new JsonParserDelegate(new JsonFactory().createParser("98.76")) {
+            @Override
+            public double getValueAsDouble() throws IOException {
+                return 98.76;
+            }
+        };
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertEquals(98.76, fpd.getValueAsDouble(), 0.0);
+    }
+
+    @Test
+    public void testGetValueAsDoubleWithDefaultUsesDelegate() throws Exception {
+        JsonParser delegateParser = new JsonParserDelegate(new JsonFactory().createParser("xyz")) {
+            @Override
+            public double getValueAsDouble(double defaultValue) throws IOException {
+                return defaultValue; // Simulate fallback
+            }
+        };
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertEquals(1.23, fpd.getValueAsDouble(1.23));
+    }
+
+    @Test
+    public void testGetValueAsBooleanUsesDelegate() throws Exception {
+        JsonParser delegateParser = new JsonParserDelegate(new JsonFactory().createParser("false")) {
+            @Override
+            public boolean getValueAsBoolean() throws IOException {
+                return false;
+            }
+        };
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertFalse(fpd.getValueAsBoolean());
+    }
+
+    @Test
+    public void testGetValueAsBooleanWithDefaultUsesDelegate() throws Exception {
+        JsonParser delegateParser = new JsonParserDelegate(new JsonFactory().createParser("true")) {
+            @Override
+            public boolean getValueAsBoolean(boolean defaultValue) throws IOException {
+                return defaultValue; // Simulate fallback
+            }
+        };
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertTrue(fpd.getValueAsBoolean(true)); // Default value is true, should be returned
+    }
+
+    @Test
+    public void testGetValueAsStringUsesDelegate() throws Exception {
+        JsonParser delegateParser = new JsonParserDelegate(new JsonFactory().createParser("\"testString\"")) {
+            @Override
+            public String getValueAsString() throws IOException {
+                return "testString";
+            }
+        };
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertEquals("testString", fpd.getValueAsString());
+    }
+
+    @Test
+    public void testGetValueAsStringWithDefaultUsesDelegate() throws Exception {
+        JsonParser delegateParser = new JsonParserDelegate(new JsonFactory().createParser("null")) {
+            @Override
+            public String getValueAsString(String defaultValue) throws IOException {
+                return defaultValue; // Simulate fallback
+            }
+        };
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertEquals("default", fpd.getValueAsString("default"));
+    }
+
+    @Test
+    public void testGetEmbeddedObjectUsesDelegate() throws Exception {
+        Object expected = new Object();
+        JsonParser delegateParser = new JsonParserDelegate(new JsonFactory().createParser("{}")) {
+            @Override
+            public Object getEmbeddedObject() throws IOException {
+                return expected;
+            }
+        };
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertEquals(expected, fpd.getEmbeddedObject());
+    }
+
+    @Test
+    public void testGetBinaryValueUsesDelegate() throws Exception {
+        byte[] expected = {1, 2, 3};
+        Base64Variant bv = new Base64Variant("dummy", "A", false, '\0', 4);
+        JsonParser delegateParser = new JsonParserDelegate(new JsonFactory().createParser("{}")) {
+            @Override
+            public byte[] getBinaryValue(Base64Variant b64variant) throws IOException {
+                return expected;
+            }
+        };
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertArrayEquals(expected, fpd.getBinaryValue(bv));
+    }
+
+    @Test
+    public void testReadBinaryValueUsesDelegate() throws Exception {
+        byte[] expected = {1, 2, 3};
+        Base64Variant bv = new Base64Variant("dummy", "A", false, '\0', 4);
+        OutputStream mockOut = new java.io.ByteArrayOutputStream();
+        JsonParser delegateParser = new JsonParserDelegate(new JsonFactory().createParser("{}")) {
+            @Override
+            public int readBinaryValue(Base64Variant b64variant, OutputStream out) throws IOException {
+                out.write(expected);
+                return expected.length;
+            }
+        };
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertEquals(expected.length, fpd.readBinaryValue(bv, mockOut));
+        assertArrayEquals(expected, ((java.io.ByteArrayOutputStream) mockOut).toByteArray());
+    }
+
+    @Test
+    public void testGetTokenLocationUsesDelegate() throws Exception {
+        JsonLocation expected = new JsonLocation(null, 0, 1, 1);
+        JsonParser delegateParser = new JsonParserDelegate(new JsonFactory().createParser("{}")) {
+            @Override
+            public JsonLocation getTokenLocation() {
+                return expected;
+            }
+        };
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        assertEquals(expected, fpd.getTokenLocation());
+    }
+
+    @Test
+    public void testFilterContextHandlesExposedContextWhenNotNull() throws Exception {
+        JsonParser delegateParser = createDummyParser();
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        // Manually set an exposed context to test _filterContext()
+        fpd._exposedContext = TokenFilterContext.createRootContext(TokenFilter.INCLUDE_ALL);
+        assertEquals(fpd._exposedContext, fpd._filterContext());
+    }
+
+    @Test
+    public void testFilterContextUsesHeadContextWhenExposedIsNull() throws Exception {
+        JsonParser delegateParser = createDummyParser();
+        FilteringParserDelegate fpd = new FilteringParserDelegate(delegateParser, TokenFilter.INCLUDE_ALL, true, true);
+        // _exposedContext is null by default
+        assertEquals(fpd._headContext, fpd._filterContext());
+    }
+}
+```
+
+```text
+1. SOURCE CODE ANALYSIS
+The tests cover the constructor and public methods of FilteringParserDelegate. They focus on delegation to the underlying JsonParser, token handling, and state management, including aspects of filtering and path inclusion.
+
+2. TEST CASE DESIGN
+- testConstructorAndGetFilter: Initializes the delegate and checks the filter.
+- testConstructorAndAllowMultipleMatches: Initializes and checks the allowMultipleMatches flag.
+- testConstructorAndIncludePath: Initializes and checks the includePath flag.
+- testGetMatchCountInitiallyZero: Checks initial match count.
+- testGetParsingContextInitiallyRoot: Checks initial parsing context.
+- testCurrentTokenIsNullInitially: Checks initial current token.
+- testCurrentTokenIdIsNoTokenInitially: Checks initial current token ID.
+- testHasCurrentTokenIsFalseInitially: Checks initial hasCurrentToken status.
+- testHasTokenIdNoTokenInitially: Checks initial hasTokenId status.
+- testHasTokenFalseInitially: Checks initial hasToken status.
+- testIsExpectedStartArrayTokenFalseInitially: Checks initial isExpectedStartArrayToken status.
+- testIsExpectedStartObjectTokenFalseInitially: Checks initial isExpectedStartObjectToken status.
+- testGetCurrentLocationUsesDelegate: Verifies location delegation.
+- testGetCurrentNameUsesDelegateWhenStructIsNil: Verifies current name delegation.
+- testClearCurrentTokenSetsToNull: Verifies clearCurrentToken behavior.
+- testGetLastClearedToken: Verifies getLastClearedToken behavior.
+- testOverrideCurrentNameThrowsUnsupportedOperationException: Verifies unsupported operation for overrideCurrentName.
+- testNextTokenHandlesEndOfInput: Tests end-of-input handling for nextToken.
+- testNextTokenWithIncludePathAndMultipleMatches: Tests nextToken with specific configurations.
+- testNextTokenFiltersScalarValue: Tests filtering of scalar values.
+- testNextTokenSkipsChildrenWhenFilterReturnsNull: Tests skipping children when filter returns null.
+- testNextValueSkipsFieldNameWhenPresent: Tests nextValue behavior.
+- testSkipChildrenWhenCurrentTokenIsNotStructStart: Tests skipChildren on non-struct tokens.
+- testSkipChildrenHandlesNestedStructures: Tests skipChildren on nested structures.
+- testGetTextUsesDelegate: Verifies text delegation.
+- testHasTextCharactersUsesDelegate: Verifies hasTextCharacters delegation.
+- testGetTextCharactersUsesDelegate: Verifies getTextCharacters delegation.
+- testGetTextLengthUsesDelegate: Verifies getTextLength delegation.
+- testGetTextOffsetUsesDelegate: Verifies getTextOffset delegation.
+- testGetBigIntegerValueUsesDelegate: Verifies BigInteger delegation.
+- testGetBooleanValueUsesDelegate: Verifies boolean delegation.
+- testGetByteValueUsesDelegate: Verifies byte delegation.
+- testGetShortValueUsesDelegate: Verifies short delegation.
+- testGetDecimalValueUsesDelegate: Verifies BigDecimal delegation.
+- testGetDoubleValueUsesDelegate: Verifies double delegation.
+- testGetFloatValueUsesDelegate: Verifies float delegation.
+- testGetIntValueUsesDelegate: Verifies int delegation.
+- testGetLongValueUsesDelegate: Verifies long delegation.
+- testGetNumberTypeUsesDelegate: Verifies NumberType delegation.
+- testGetNumberValueUsesDelegate: Verifies Number delegation.
+- testGetValueAsIntUsesDelegate: Verifies getValueAsInt delegation.
+- testGetValueAsIntWithDefaultUsesDelegate: Verifies getValueAsInt with default delegation.
+- testGetValueAsLongUsesDelegate: Verifies getValueAsLong delegation.
+- testGetValueAsLongWithDefaultUsesDelegate: Verifies getValueAsLong with default delegation.
+- testGetValueAsDoubleUsesDelegate: Verifies getValueAsDouble delegation.
+- testGetValueAsDoubleWithDefaultUsesDelegate: Verifies getValueAsDouble with default delegation.
+- testGetValueAsBooleanUsesDelegate: Verifies getValueAsBoolean delegation.
+- testGetValueAsBooleanWithDefaultUsesDelegate: Verifies getValueAsBoolean with default delegation.
+- testGetValueAsStringUsesDelegate: Verifies getValueAsString delegation.
+- testGetValueAsStringWithDefaultUsesDelegate: Verifies getValueAsString with default delegation.
+- testGetEmbeddedObjectUsesDelegate: Verifies embedded object delegation.
+- testGetBinaryValueUsesDelegate: Verifies binary value delegation.
+- testReadBinaryValueUsesDelegate: Verifies binary read delegation.
+- testGetTokenLocationUsesDelegate: Verifies token location delegation.
+- testFilterContextHandlesExposedContextWhenNotNull: Tests _filterContext with exposed context.
+- testFilterContextUsesHeadContextWhenExposedIsNull: Tests _filterContext without exposed context.
+
+4. DEFECT DETECTION STRATEGY
+Tests verify correct delegation of parser methods and accurate handling of token filtering logic, including state transitions and conditional path inclusion.
+
+5. SUMMARY
+55 tests.
+
+6. LIMITATIONS
+The tests rely on mocked JsonParser delegates to simulate specific token sequences and return values due to the inability to provide a full, parseable JSON input and a concrete delegate for each test. Therefore, the tests primarily validate the internal logic of FilteringParserDelegate rather than its interaction with a real parsing scenario.
+Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.
+```

@@ -1,0 +1,149 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Supplier;
+import com.google.common.collect.Maps;
+import com.google.common.collect.Sets;
+import com.google.javascript.jscomp.FunctionInjector.CanInlineResult;
+import com.google.javascript.jscomp.FunctionInjector.InliningMode;
+import com.google.javascript.jscomp.NodeTraversal.AbstractPostOrderCallback;
+import com.google.javascript.jscomp.NodeTraversal.Callback;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.Set;
+
+public class InlineFunctionsTest {
+    @Test
+    public void testCandidateUsageForDeclaration() throws Exception {
+        Node name = Node.newString(Token.NAME, "f");
+        Node declaration = new Node(Token.VAR, name);
+        assertTrue(InlineFunctions.isCandidateUsage(name));
+    }
+
+    @Test
+    public void testCandidateUsageForFunctionDeclarationName() throws Exception {
+        Node name = Node.newString(Token.NAME, "f");
+        Node function = new Node(Token.FUNCTION, name);
+        assertTrue(InlineFunctions.isCandidateUsage(name));
+    }
+
+    @Test
+    public void testCandidateUsageForCallTarget() throws Exception {
+        Node name = Node.newString(Token.NAME, "f");
+        new Node(Token.CALL, name);
+        assertTrue(InlineFunctions.isCandidateUsage(name));
+    }
+
+    @Test
+    public void testCandidateUsageForOrdinaryReference() throws Exception {
+        Node name = Node.newString(Token.NAME, "f");
+        new Node(Token.EXPR_RESULT, name);
+        assertFalse(InlineFunctions.isCandidateUsage(name));
+    }
+
+    @Test
+    public void testCandidateUsageForCallProperty() throws Exception {
+        Node name = Node.newString(Token.NAME, "f");
+        Node property = new Node(Token.GETPROP, name,
+                Node.newString(Token.STRING, "call"));
+        new Node(Token.CALL, property);
+        assertTrue(InlineFunctions.isCandidateUsage(name));
+    }
+
+    @Test
+    public void testCandidateUsageForNonCallProperty() throws Exception {
+        Node name = Node.newString(Token.NAME, "f");
+        new Node(Token.GETPROP, name, Node.newString(Token.STRING, "call"));
+        assertFalse(InlineFunctions.isCandidateUsage(name));
+    }
+
+    @Test
+    public void testCandidateUsageForOtherPropertyName() throws Exception {
+        Node name = Node.newString(Token.NAME, "f");
+        Node property = new Node(Token.GETPROP, name,
+                Node.newString(Token.STRING, "apply"));
+        new Node(Token.CALL, property);
+        assertFalse(InlineFunctions.isCandidateUsage(name));
+    }
+
+    @Test
+    public void testCandidateUsageForAssignmentTarget() throws Exception {
+        Node name = Node.newString(Token.NAME, "f");
+        new Node(Token.ASSIGN, name, Node.newNumber(1));
+        assertFalse(InlineFunctions.isCandidateUsage(name));
+    }
+
+    @Test
+    public void testCandidateUsageCallPropertyNeedsPropertyNodeAsTarget()
+            throws Exception {
+        Node name = Node.newString(Token.NAME, "f");
+        Node property = new Node(Token.GETPROP, name,
+                Node.newString(Token.STRING, "call"));
+        new Node(Token.CALL, Node.newString(Token.NAME, "other"), property);
+        assertFalse(InlineFunctions.isCandidateUsage(name));
+    }
+
+    @Test
+    public void testCandidateUsageForGetElementCallProperty() throws Exception {
+        Node name = Node.newString(Token.NAME, "f");
+        Node property = new Node(Token.GETELEM, name,
+                Node.newString(Token.STRING, "call"));
+        new Node(Token.CALL, property);
+        assertTrue(InlineFunctions.isCandidateUsage(name));
+    }
+
+    @Test
+    public void testCandidateUsageForCallPropertyWithUnrelatedCallAncestor()
+            throws Exception {
+        Node name = Node.newString(Token.NAME, "f");
+        Node property = new Node(Token.GETPROP, name,
+                Node.newString(Token.STRING, "call"));
+        new Node(Token.EXPR_RESULT, new Node(Token.CALL, property));
+        assertFalse(InlineFunctions.isCandidateUsage(name));
+    }
+
+    @Test
+    public void testCandidateUsageForCallPropertyWhenBaseIsNotFirstChild()
+            throws Exception {
+        Node name = Node.newString(Token.NAME, "f");
+        Node property = new Node(Token.GETPROP, Node.newString(Token.NAME, "g"),
+                name, Node.newString(Token.STRING, "call"));
+        new Node(Token.CALL, property);
+        assertFalse(InlineFunctions.isCandidateUsage(name));
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+The class exposes no specified target, so method selection is exploratory. These tests focus on `isCandidateUsage`, whose decision logic distinguishes declaration parents, call targets, and `.call` property references.
+
+### 2. TEST CASE DESIGN
+- `testCandidateUsageForDeclaration`: `NAME` under `VAR`; expected true because declarations are accepted.
+- `testCandidateUsageForFunctionDeclarationName`: `NAME` under `FUNCTION`; expected true for declarations.
+- `testCandidateUsageForCallTarget`: `NAME` as first `CALL` child; expected true for a direct function reference.
+- `testCandidateUsageForOrdinaryReference`: `NAME` under `EXPR_RESULT`; expected false because it is not a recognized usage.
+- `testCandidateUsageForCallProperty`: base name of `.call` used as call target; expected true per the `.call` branch.
+- `testCandidateUsageForNonCallProperty`: `.call` property not called; expected false because its ancestor is not a qualifying `CALL`.
+- `testCandidateUsageForOtherPropertyName`: `.apply` called; expected false because the property string is not `"call"`.
+- `testCandidateUsageForAssignmentTarget`: name on the assignment’s left; expected false because `ASSIGN` is not an accepted parent.
+- `testCandidateUsageCallPropertyNeedsPropertyNodeAsTarget`: `.call` property is not the call’s first child; expected false per the ancestor check.
+- `testCandidateUsageForGetElementCallProperty`: `GETELEM` base with `"call"` key in call target position; expected true because `NodeUtil.isGet` covers get access.
+- `testCandidateUsageForCallPropertyWithUnrelatedCallAncestor`: property’s grandparent is an expression statement, not the required call; expected false.
+- `testCandidateUsageForCallPropertyWhenBaseIsNotFirstChild`: name is not the property node’s first child; expected false.
+
+### 4. DEFECT DETECTION STRATEGY
+The tests pin both acceptance and rejection paths in the candidate-usage predicate, including declaration, direct-call, and `.call` recognition conditions. No measured defect detection is claimed.
+
+### 5. SUMMARY
+12 independent tests.
+
+### 6. LIMITATIONS
+The available source and API outline do not provide safe construction and setup for exercising the pass’s compiler-driven transformation methods. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

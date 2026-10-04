@@ -1,0 +1,187 @@
+```java
+package com.fasterxml.jackson.core.json.async;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.io.IOException;
+import java.io.OutputStream;
+import com.fasterxml.jackson.core.*;
+import com.fasterxml.jackson.core.async.ByteArrayFeeder;
+import com.fasterxml.jackson.core.async.NonBlockingInputFeeder;
+import com.fasterxml.jackson.core.io.CharTypes;
+import com.fasterxml.jackson.core.io.IOContext;
+import com.fasterxml.jackson.core.sym.ByteQuadsCanonicalizer;
+import com.fasterxml.jackson.core.util.VersionUtil;
+
+public class NonBlockingJsonParserTest {
+    @Test
+    public void testFeederIsParser() throws Exception {
+        NonBlockingJsonParser parser = newParser();
+        assertSame(parser, parser.getNonBlockingInputFeeder());
+    }
+
+    @Test
+    public void testNeedMoreInputInitially() throws Exception {
+        NonBlockingJsonParser parser = newParser();
+        assertTrue(parser.needMoreInput());
+    }
+
+    @Test
+    public void testNeedMoreInputAfterFeed() throws Exception {
+        NonBlockingJsonParser parser = newParser();
+        parser.feedInput(bytes("1"), 0, 1);
+        assertFalse(parser.needMoreInput());
+    }
+
+    @Test
+    public void testNeedMoreInputAfterConsumingFeed() throws Exception {
+        NonBlockingJsonParser parser = newParser();
+        parser.feedInput(bytes("1"), 0, 1);
+        assertEquals(JsonToken.VALUE_NUMBER_INT, parser.nextToken());
+        assertTrue(parser.needMoreInput());
+    }
+
+    @Test
+    public void testEndOfInputStopsNeedMore() throws Exception {
+        NonBlockingJsonParser parser = newParser();
+        parser.endOfInput();
+        assertFalse(parser.needMoreInput());
+    }
+
+    @Test
+    public void testFeedSubrange() throws Exception {
+        NonBlockingJsonParser parser = newParser();
+        parser.feedInput(bytes("x7y"), 1, 2);
+        assertEquals(JsonToken.VALUE_NUMBER_INT, parser.nextToken());
+        assertEquals("7", parser.getText());
+    }
+
+    @Test
+    public void testFeedEmptyRange() throws Exception {
+        NonBlockingJsonParser parser = newParser();
+        parser.feedInput(bytes(""), 0, 0);
+        assertTrue(parser.needMoreInput());
+        assertEquals(JsonToken.NOT_AVAILABLE, parser.nextToken());
+    }
+
+    @Test
+    public void testFeedReversedRangeRejected() throws Exception {
+        NonBlockingJsonParser parser = newParser();
+        try {
+            parser.feedInput(bytes("x"), 1, 0);
+            fail("expected IOException");
+        } catch (IOException expected) { }
+    }
+
+    @Test
+    public void testFeedAfterEndRejected() throws Exception {
+        NonBlockingJsonParser parser = newParser();
+        parser.endOfInput();
+        try {
+            parser.feedInput(bytes("1"), 0, 1);
+            fail("expected IOException");
+        } catch (IOException expected) { }
+    }
+
+    @Test
+    public void testReleaseBufferedCopiesAvailableBytes() throws Exception {
+        NonBlockingJsonParser parser = newParser();
+        parser.feedInput(bytes("123"), 0, 3);
+        OutputStream out = new java.io.ByteArrayOutputStream();
+        assertEquals(3, parser.releaseBuffered(out));
+        assertEquals("123", out.toString("UTF-8"));
+    }
+
+    @Test
+    public void testReleaseBufferedEmptyAfterConsumption() throws Exception {
+        NonBlockingJsonParser parser = newParser();
+        parser.feedInput(bytes("1"), 0, 1);
+        assertEquals(JsonToken.VALUE_NUMBER_INT, parser.nextToken());
+        assertEquals(0, parser.releaseBuffered(new java.io.ByteArrayOutputStream()));
+    }
+
+    @Test
+    public void testNextTokenEmptyInputUnavailable() throws Exception {
+        NonBlockingJsonParser parser = newParser();
+        assertEquals(JsonToken.NOT_AVAILABLE, parser.nextToken());
+    }
+
+    @Test
+    public void testNextTokenNumberAndEnd() throws Exception {
+        NonBlockingJsonParser parser = newParser();
+        parser.feedInput(bytes("1"), 0, 1);
+        assertEquals(JsonToken.VALUE_NUMBER_INT, parser.nextToken());
+        parser.endOfInput();
+        assertNull(parser.nextToken());
+    }
+
+    @Test
+    public void testNextTokenBoolean() throws Exception {
+        NonBlockingJsonParser parser = newParser();
+        parser.feedInput(bytes("true"), 0, 4);
+        assertEquals(JsonToken.VALUE_TRUE, parser.nextToken());
+    }
+
+    @Test
+    public void testSplitKeywordAcrossFeeds() throws Exception {
+        NonBlockingJsonParser parser = newParser();
+        parser.feedInput(bytes("tr"), 0, 2);
+        assertEquals(JsonToken.NOT_AVAILABLE, parser.nextToken());
+        assertTrue(parser.needMoreInput());
+        parser.feedInput(bytes("ue"), 0, 2);
+        parser.endOfInput();
+        assertEquals(JsonToken.VALUE_TRUE, parser.nextToken());
+    }
+
+    @Test
+    public void testSplitStringAcrossFeeds() throws Exception {
+        NonBlockingJsonParser parser = newParser();
+        parser.feedInput(bytes("\"ab"), 0, 3);
+        assertEquals(JsonToken.NOT_AVAILABLE, parser.nextToken());
+        parser.feedInput(bytes("c\""), 0, 2);
+        assertEquals(JsonToken.VALUE_STRING, parser.nextToken());
+        assertEquals("abc", parser.getText());
+    }
+
+    private static NonBlockingJsonParser newParser() {
+        IOContext context = new IOContext(null, null, false);
+        return new NonBlockingJsonParser(context, JsonParser.Feature.collectDefaults(),
+                ByteQuadsCanonicalizer.createRoot().makeChild(JsonFactory.Feature.collectDefaults()));
+    }
+
+    private static byte[] bytes(String value) throws Exception {
+        return value.getBytes("UTF-8");
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+The public feeder methods cover parser identity, input availability, feed validation, and end-of-input state.  
+Tests also exercise buffered-byte copying and token decoding, including incomplete input resumed across feeds.
+
+### 2. TEST CASE DESIGN
+- `testFeederIsParser`: feeder getter; expects the parser itself, as returned by `return this`.
+- `testNeedMoreInputInitially`: no input fed; expects true from empty input and open state.
+- `testNeedMoreInputAfterFeed`: one byte remains; expects false because pointers differ.
+- `testNeedMoreInputAfterConsumingFeed`: parse the one-byte number; expects true after the byte is consumed.
+- `testEndOfInputStopsNeedMore`: mark end; expects false because the parser is ended.
+- `testFeedSubrange`: feed indices 1–2 of `x7y`; expects integer token text `7`.
+- `testFeedEmptyRange`: feed an empty range; expects input needed and unavailable token.
+- `testFeedReversedRangeRejected`: `end < start`; expects `IOException` via `_reportError`.
+- `testFeedAfterEndRejected`: feed after end-of-input; expects `IOException` via `_reportError`.
+- `testReleaseBufferedCopiesAvailableBytes`: three unconsumed bytes; expects count 3 and output `123`.
+- `testReleaseBufferedEmptyAfterConsumption`: consume the only byte; expects zero available bytes.
+- `testNextTokenEmptyInputUnavailable`: open parser with no data; expects `NOT_AVAILABLE`.
+- `testNextTokenNumberAndEnd`: parse `1`, then signal EOF; expects integer token and null at root EOF.
+- `testNextTokenBoolean`: complete `true`; expects `VALUE_TRUE`.
+- `testSplitKeywordAcrossFeeds`: split `true` after `tr`; expects unavailable then `VALUE_TRUE` at EOF.
+- `testSplitStringAcrossFeeds`: split a quoted string; expects string token with text `abc`.
+
+### 4. DEFECT DETECTION STRATEGY
+The tests pin feeder state transitions, range validation, buffered output, and representative complete and split-token parsing behavior. Detection is not inferred from the test code alone.
+
+### 5. SUMMARY
+16 independent tests.
+
+### 6. LIMITATIONS
+The class depends on project-level parser, context, and canonicalizer behavior beyond the supplied implementation, and these tests cover only selected token paths. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

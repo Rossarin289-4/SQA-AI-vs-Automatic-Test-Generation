@@ -1,0 +1,670 @@
+```java
+package com.fasterxml.jackson.databind.deser.std;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.io.IOException;
+import com.fasterxml.jackson.core.*;
+import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.annotation.JacksonStdImpl;
+import com.fasterxml.jackson.databind.deser.ContextualDeserializer;
+import com.fasterxml.jackson.databind.deser.DefaultDeserializationContext;
+import com.fasterxml.jackson.databind.deser.DeserializationProblemHandler;
+import com.fasterxml.jackson.databind.deser.DeserializerFactory;
+import com.fasterxml.jackson.databind.deser.impl.BeanPropertyMap;
+import com.fasterxml.jackson.databind.deser.impl.ReadableObjectId;
+import com.fasterxml.jackson.databind.jsontype.TypeDeserializer;
+import com.fasterxml.jackson.databind.type.SimpleType;
+import com.fasterxml.jackson.databind.util.ObjectBuffer;
+
+import com.fasterxml.jackson.databind.BeanProperty;
+import com.fasterxml.jackson.databind.DeserializationContext;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.JavaType;
+import com.fasterxml.jackson.databind.JsonDeserializer;
+import com.fasterxml.jackson.databind.JsonMappingException;
+import com.fasterxml.jackson.databind.PropertyName;
+import com.fasterxml.jackson.databind.cfg.DeserializerFactoryConfig;
+import com.fasterxml.jackson.databind.deser.DefaultDeserializationContext.MissingInstantiator;
+import com.fasterxml.jackson.databind.deser.DeserializerFactory;
+import com.fasterxml.jackson.databind.deser.DeserializerCache;
+import com.fasterxml.jackson.databind.util.TokenBuffer;
+import com.fasterxml.jackson.dataformat.json.JsonFactory;
+
+public class StringArrayDeserializerTest {
+    // test methods (as many as the instructions ask for), each exactly in this form:
+    //     @Test
+    //     public void testWhatItChecks() throws Exception { ... }
+
+    // Mock a DeserializationContext and JsonParser for testing
+    private DeserializationContext mockDeserializationContext() {
+        // Use a real DeserializerFactory and DeserializerCache for a more robust mock
+        // For simplicity, we can use a basic configuration if not needed.
+        DeserializerFactory factory = new DeserializerFactory() {
+            @Override
+            protected DeserializerFactoryConfig _getFactoryConfig() {
+                return new DeserializerFactoryConfig();
+            }
+            @Override
+            public JsonDeserializer<?> createArrayDeserializer(DeserializationConfig config, ArrayType valueType, BeanProperty property, TypeDeserializer elementTypeDeserializer, JsonDeserializer<?> elementDeserializer) throws JsonMappingException { return null; }
+            @Override
+            public JsonDeserializer<?> createCollectionDeserializer(DeserializationConfig config, com.fasterxml.jackson.databind.type.CollectionType type, BeanProperty property, TypeDeserializer elementTypeDeserializer, JsonDeserializer<?> elementDeserializer) throws JsonMappingException { return null; }
+            @Override
+            public JsonDeserializer<?> createCollectionLikeDeserializer(DeserializationConfig config, com.fasterxml.jackson.databind.type.CollectionLikeType type, BeanProperty property, TypeDeserializer elementTypeDeserializer, JsonDeserializer<?> elementDeserializer) throws JsonMappingException { return null; }
+            @Override
+            public JsonDeserializer<?> createMapDeserializer(DeserializationConfig config, com.fasterxml.jackson.databind.type.MapType type, BeanProperty property, TypeDeserializer keyTypeDeserializer, KeyDeserializer keyDeserializer, TypeDeserializer elementTypeDeserializer, JsonDeserializer<?> elementDeserializer) throws JsonMappingException { return null; }
+            @Override
+            public JsonDeserializer<?> createMapLikeDeserializer(DeserializationConfig config, com.fasterxml.jackson.databind.type.MapLikeType type, BeanProperty property, TypeDeserializer keyTypeDeserializer, KeyDeserializer keyDeserializer, TypeDeserializer elementTypeDeserializer, JsonDeserializer<?> elementDeserializer) throws JsonMappingException { return null; }
+            @Override
+            public JsonDeserializer<?> findDefaultImplDeserializer(DeserializationConfig config, JavaType type, com.fasterxml.jackson.databind.introspect.AnnotatedClass.Creator creator) throws JsonMappingException { return null; }
+            @Override
+            public JsonDeserializer<?> findBeanDeserializer(DeserializationConfig config, com.fasterxml.jackson.databind.type.JavaType type, BeanProperty property) throws JsonMappingException {
+                if (type.getRawClass().equals(String.class)) {
+                    // This is a hacky way to make findContextualValueDeserializer work for String.
+                    // In a real scenario, this would be handled by the DeserializerFactory and DeserializerCache.
+                    return new StringDeserializer();
+                }
+                return null;
+            }
+            @Override
+            public KeyDeserializer createKeyDeserializer(DeserializationConfig config, com.fasterxml.jackson.databind.type.JavaType type) throws JsonMappingException { return null; }
+            @Override
+            public TypeDeserializer findTypeDeserializer(DeserializationConfig config, JavaType type) throws JsonMappingException { return null; }
+            @Override
+            public JsonDeserializer<?> findValueDeserializer(DeserializationContext ctxt, com.fasterxml.jackson.databind.type.JavaType type) throws JsonMappingException { return null; }
+        };
+        DeserializerCache cache = new DeserializerCache() {
+            @Override
+            protected KeyDeserializer findKeyDeserializer(KeyDeserializer.KeyFactory keyFactory, JavaType keyType) throws JsonMappingException {
+                return null;
+            }
+            @Override
+            protected JsonDeserializer<Object> findValueDeserializer(JsonDeserializerProvider provider, JavaType type) throws JsonMappingException {
+                return null;
+            }
+        };
+
+        return new DefaultDeserializationContext(factory, cache) {
+            private final ObjectBuffer objectBuffer = new ObjectBuffer();
+
+            @Override
+            public ObjectBuffer leaseObjectBuffer() {
+                return objectBuffer;
+            }
+
+            @Override
+            public void returnObjectBuffer(ObjectBuffer buffer) {
+                // No-op for mock
+            }
+
+            @Override
+            public JavaType constructType(Class<?> cls) {
+                return SimpleType.constructUnsafe(cls);
+            }
+
+            @Override
+            public JsonMappingException mappingException(Class<?> type) {
+                return new JsonMappingException("Mock mapping exception");
+            }
+
+            @Override
+            public boolean isEnabled(DeserializationFeature f) {
+                if (f == DeserializationFeature.ACCEPT_SINGLE_VALUE_AS_ARRAY) return true;
+                if (f == DeserializationFeature.ACCEPT_EMPTY_STRING_AS_NULL_OBJECT) return true;
+                return super.isEnabled(f);
+            }
+
+            // Mock method required by DefaultDeserializationContext
+            @Override
+            public MissingInstantiator missingInstantiator(JavaType type) {
+                return new MissingInstantiator(this, type);
+            }
+
+            // Mock method required by DefaultDeserializationContext
+            @Override
+            public JsonDeserializer<?> findRootValueDeserializer(JavaType type) throws JsonMappingException {
+                // Provide a default String deserializer if needed
+                if (type.getRawClass().equals(String.class)) {
+                    return new StringDeserializer();
+                }
+                return null; // Not needed for these tests
+            }
+        };
+    }
+
+    private JsonParser mockJsonParser(String json) throws IOException {
+        JsonFactory f = new JsonFactory();
+        return f.createParser(json);
+    }
+
+    @Test
+    public void testDeserializeEmptyArray() throws Exception {
+        String json = "[]";
+        JsonParser parser = mockJsonParser(json);
+        DeserializationContext context = mockDeserializationContext();
+        StringArrayDeserializer deserializer = StringArrayDeserializer.instance;
+        String[] result = deserializer.deserialize(parser, context);
+        assertNotNull(result);
+        assertEquals(0, result.length);
+    }
+
+    @Test
+    public void testDeserializeArrayWithStrings() throws Exception {
+        String json = "[\"a\", \"b\", \"c\"]";
+        JsonParser parser = mockJsonParser(json);
+        DeserializationContext context = mockDeserializationContext();
+        StringArrayDeserializer deserializer = StringArrayDeserializer.instance;
+        String[] result = deserializer.deserialize(parser, context);
+        assertNotNull(result);
+        assertArrayEquals(new String[]{"a", "b", "c"}, result);
+    }
+
+    @Test
+    public void testDeserializeArrayWithNulls() throws Exception {
+        String json = "[null, \"b\", null]";
+        JsonParser parser = mockJsonParser(json);
+        DeserializationContext context = mockDeserializationContext();
+        StringArrayDeserializer deserializer = StringArrayDeserializer.instance;
+        String[] result = deserializer.deserialize(parser, context);
+        assertNotNull(result);
+        assertNull(result[0]);
+        assertEquals("b", result[1]);
+        assertNull(result[2]);
+    }
+
+    @Test
+    public void testDeserializeArrayWithMixedTypes() throws Exception {
+        // This tests _parseString which is called when token is not VALUE_STRING or VALUE_NULL
+        String json = "[\"a\", 123, true, null]"; // 123 and true will be parsed as strings by _parseString
+        JsonParser parser = mockJsonParser(json);
+        DeserializationContext context = mockDeserializationContext();
+        StringArrayDeserializer deserializer = StringArrayDeserializer.instance;
+        String[] result = deserializer.deserialize(parser, context);
+        assertNotNull(result);
+        assertEquals("a", result[0]);
+        assertEquals("123", result[1]);
+        assertEquals("true", result[2]);
+        assertNull(result[3]);
+    }
+
+
+    @Test
+    public void testDeserializeNonArrayButAcceptSingleValue() throws Exception {
+        String json = "\"a\"";
+        JsonParser parser = mockJsonParser(json);
+        DeserializationContext context = mockDeserializationContext(); // ENABLED ACCEPT_SINGLE_VALUE_AS_ARRAY
+        StringArrayDeserializer deserializer = StringArrayDeserializer.instance;
+        String[] result = deserializer.deserialize(parser, context);
+        assertNotNull(result);
+        assertArrayEquals(new String[]{"a"}, result);
+    }
+
+    @Test
+    public void testDeserializeNonArrayNullButAcceptSingleValue() throws Exception {
+        String json = "null";
+        JsonParser parser = mockJsonParser(json);
+        DeserializationContext context = mockDeserializationContext(); // ENABLED ACCEPT_SINGLE_VALUE_AS_ARRAY
+        StringArrayDeserializer deserializer = StringArrayDeserializer.instance;
+        String[] result = deserializer.deserialize(parser, context);
+        assertNotNull(result);
+        assertArrayEquals(new String[]{null}, result);
+    }
+
+    @Test
+    public void testDeserializeEmptyStringAsNull() throws Exception {
+        String json = "\"\"";
+        JsonParser parser = mockJsonParser(json);
+        DeserializationContext context = mockDeserializationContext(); // ENABLED ACCEPT_EMPTY_STRING_AS_NULL_OBJECT
+        StringArrayDeserializer deserializer = StringArrayDeserializer.instance;
+        String[] result = deserializer.deserialize(parser, context);
+        assertNull(result); // handleNonArray returns null when empty string becomes null
+    }
+
+
+    @Test
+    public void testDeserializeNonArrayWithoutAcceptSingleValue() throws Exception {
+        String json = "\"a\"";
+        JsonParser parser = mockJsonParser(json);
+        DeserializationContext context = new DefaultDeserializationContext(null, null) { // Simpler mock for context
+            private final ObjectBuffer objectBuffer = new ObjectBuffer();
+            @Override public ObjectBuffer leaseObjectBuffer() { return objectBuffer; }
+            @Override public void returnObjectBuffer(ObjectBuffer buffer) { }
+            @Override public JavaType constructType(Class<?> cls) { return SimpleType.constructUnsafe(cls); }
+            @Override public JsonMappingException mappingException(Class<?> type) { return new JsonMappingException("Mock mapping exception"); }
+            @Override
+            public boolean isEnabled(DeserializationFeature f) {
+                if (f == DeserializationFeature.ACCEPT_SINGLE_VALUE_AS_ARRAY) return false;
+                if (f == DeserializationFeature.ACCEPT_EMPTY_STRING_AS_NULL_OBJECT) return true;
+                return super.isEnabled(f);
+            }
+            @Override
+            public MissingInstantiator missingInstantiator(JavaType type) { return new MissingInstantiator(this, type); }
+            @Override
+            public JsonDeserializer<?> findRootValueDeserializer(JavaType type) throws JsonMappingException { return null; }
+        };
+        StringArrayDeserializer deserializer = StringArrayDeserializer.instance;
+        try {
+            deserializer.deserialize(parser, context);
+            fail("Expected JsonMappingException for non-array input when ACCEPT_SINGLE_VALUE_AS_ARRAY is disabled");
+        } catch (JsonMappingException e) {
+            // Expected
+        }
+    }
+
+    @Test
+    public void testDeserializeLargeArray() throws Exception {
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < 1000; i++) {
+            sb.append("\"").append(i).append("\"").append(",");
+        }
+        sb.setLength(sb.length() - 1); // remove trailing comma
+        sb.append("]");
+        String json = sb.toString();
+
+        JsonParser parser = mockJsonParser(json);
+        DeserializationContext context = mockDeserializationContext();
+        StringArrayDeserializer deserializer = StringArrayDeserializer.instance;
+        String[] result = deserializer.deserialize(parser, context);
+        assertNotNull(result);
+        assertEquals(1000, result.length);
+        assertEquals("500", result[500]);
+    }
+
+    // Test case for createContextual to ensure it handles default deserializer correctly
+    @Test
+    public void testCreateContextualWithDefaultDeserializer() throws Exception {
+        DeserializationContext context = mockDeserializationContext();
+        // No BeanProperty provided, so it should use default String deserializer and return itself
+        JsonDeserializer<?> contextualDeserializer = StringArrayDeserializer.instance.createContextual(context, null);
+        assertSame(StringArrayDeserializer.instance, contextualDeserializer);
+    }
+
+    @Test
+    public void testCreateContextualWithCustomDeserializer() throws Exception {
+        // Mock a custom String deserializer
+        JsonDeserializer<String> customStringDeserializer = new JsonDeserializer<String>() {
+            @Override
+            public String deserialize(JsonParser p, DeserializationContext ctxt) throws IOException {
+                return "custom:" + p.getText();
+            }
+        };
+
+        // Mock DeserializationContext to return our custom deserializer when String.class is requested
+        DeserializationContext context = new DefaultDeserializationContext(new DeserializerFactoryConfig().createDefaults().getDeserializerFactory(), null) {
+            private final ObjectBuffer objectBuffer = new ObjectBuffer();
+            @Override
+            public ObjectBuffer leaseObjectBuffer() { return objectBuffer; }
+            @Override
+            public void returnObjectBuffer(ObjectBuffer buffer) { }
+            @Override
+            public JavaType constructType(Class<?> cls) { return SimpleType.constructUnsafe(cls); }
+            @Override
+            public JsonMappingException mappingException(Class<?> type) { return new JsonMappingException("Mock mapping exception"); }
+            @Override
+            public boolean isEnabled(DeserializationFeature f) { return true; }
+
+            @Override
+            public JsonDeserializer<?> findContextualValueDeserializer(JavaType type, BeanProperty property) throws JsonMappingException {
+                if (type.getRawClass().equals(String.class)) {
+                    return customStringDeserializer;
+                }
+                return super.findContextualValueDeserializer(type, property);
+            }
+
+            @Override
+            public MissingInstantiator missingInstantiator(JavaType type) {
+                return new MissingInstantiator(this, type);
+            }
+
+             @Override
+            public JsonDeserializer<?> findRootValueDeserializer(JavaType type) throws JsonMappingException {
+                return null; // Not needed for these tests
+            }
+        };
+
+        BeanProperty property = null; // Not strictly needed for this test
+
+        // Create a StringArrayDeserializer with a non-null _elementDeserializer
+        StringArrayDeserializer originalDeserializer = new StringArrayDeserializer(customStringDeserializer);
+
+        // Call createContextual
+        JsonDeserializer<?> contextualDeserializer = originalDeserializer.createContextual(context, property);
+
+        // It should return a new instance with the custom deserializer
+        assertNotSame(originalDeserializer, contextualDeserializer);
+        assertTrue(contextualDeserializer instanceof StringArrayDeserializer);
+        StringArrayDeserializer newStringArrayDeserializer = (StringArrayDeserializer) contextualDeserializer;
+
+        // Verify the element deserializer is the custom one
+        assertNotNull(newStringArrayDeserializer._elementDeserializer);
+        assertSame(customStringDeserializer, newStringArrayDeserializer._elementDeserializer);
+    }
+
+
+    @Test
+    public void testDeserializeCustomArrayWithStrings() throws Exception {
+        JsonDeserializer<String> customStringDeserializer = new JsonDeserializer<String>() {
+            @Override
+            public String deserialize(JsonParser p, DeserializationContext ctxt) throws IOException {
+                return "custom:" + p.getText();
+            }
+        };
+        String json = "[\"a\", \"b\", \"c\"]";
+        JsonParser parser = mockJsonParser(json);
+        DeserializationContext context = mockDeserializationContext();
+
+        // Create a deserializer with the custom element deserializer
+        StringArrayDeserializer deserializer = new StringArrayDeserializer(customStringDeserializer);
+
+        String[] result = deserializer.deserialize(parser, context);
+        assertNotNull(result);
+        assertArrayEquals(new String[]{"custom:a", "custom:b", "custom:c"}, result);
+    }
+
+    @Test
+    public void testDeserializeCustomArrayWithNulls() throws Exception {
+        JsonDeserializer<String> customStringDeserializer = new JsonDeserializer<String>() {
+            @Override
+            public String deserialize(JsonParser p, DeserializationContext ctxt) throws IOException {
+                if (p.getCurrentToken() == JsonToken.VALUE_NULL) {
+                    return ctxt.getNullValue(String.class);
+                }
+                return "custom:" + p.getText();
+            }
+             @Override
+             public String getNullValue(DeserializationContext ctxt) throws JsonMappingException {
+                 return null; // Standard null for String
+             }
+        };
+        String json = "[null, \"b\", null]";
+        JsonParser parser = mockJsonParser(json);
+        DeserializationContext context = mockDeserializationContext();
+
+        StringArrayDeserializer deserializer = new StringArrayDeserializer(customStringDeserializer);
+
+        String[] result = deserializer.deserialize(parser, context);
+        assertNotNull(result);
+        assertNull(result[0]);
+        assertEquals("custom:b", result[1]);
+        assertNull(result[2]);
+    }
+
+    @Test
+    public void testDeserializeWithType() throws Exception {
+        // This method delegates to TypeDeserializer.deserializeTypedFromArray
+        // We need to mock a TypeDeserializer that handles String arrays.
+        TypeDeserializer mockTypeDeserializer = new TypeDeserializer(0, null) { // TypeIdResolver and defaultImpl can be null for this mock
+            @Override public TypeDeserializer forProperty(BeanProperty prop) { return this; }
+            @Override public As getTypeInclusion() { return As.WRAPPER_ARRAY; } // Example inclusion
+            @Override public String getPropertyName() { return null; }
+            @Override public com.fasterxml.jackson.databind.jsontype.TypeIdResolver getTypeIdResolver() { return null; }
+            @Override public Class<?> getDefaultImpl() { return String[].class; }
+
+            @Override
+            public Object deserializeTypedFromArray(JsonParser jp, DeserializationContext ctxt) throws IOException {
+                // Simulate parsing a simple array
+                if (!jp.isExpectedStartArrayToken()) {
+                    throw ctxt.mappingException(_valueClass);
+                }
+                jp.nextToken(); // Skip START_ARRAY, expect VALUE_STRING
+                String value = jp.getText();
+                jp.nextToken(); // Skip VALUE_STRING, expect END_ARRAY
+                return new String[]{value};
+            }
+
+            // Other deserializeTyped methods can be simplified/mocked as needed or left unimplemented if not called
+            @Override public Object deserializeTypedFromObject(JsonParser jp, DeserializationContext ctxt) throws IOException { return null; }
+            @Override public Object deserializeTypedFromScalar(JsonParser jp, DeserializationContext ctxt) throws IOException { return null; }
+            @Override public Object deserializeTypedFromAny(JsonParser jp, DeserializationContext ctxt) throws IOException { return null; }
+        };
+
+        String json = "[\"value\"]";
+        JsonParser parser = mockJsonParser(json);
+        DeserializationContext context = mockDeserializationContext();
+        StringArrayDeserializer deserializer = StringArrayDeserializer.instance;
+
+        Object result = deserializer.deserializeWithType(parser, context, mockTypeDeserializer);
+
+        assertNotNull(result);
+        assertTrue(result instanceof String[]);
+        assertArrayEquals(new String[]{"value"}, (String[]) result);
+    }
+
+    // Test edge case for _parseString: very long string
+    @Test
+    public void testParseStringEdgeCases() throws Exception {
+        // Test with a number that should be parsed as a string
+        String jsonWithNumber = "[12345678901234567890]"; // A large number
+        JsonParser parserWithNumber = mockJsonParser(jsonWithNumber);
+        DeserializationContext context = mockDeserializationContext();
+        StringArrayDeserializer deserializer = StringArrayDeserializer.instance;
+        String[] result = deserializer.deserialize(parserWithNumber, context);
+        assertNotNull(result);
+        assertEquals("12345678901234567890", result[0]); // _parseString should handle this.
+
+        // Test with empty string in a custom deserializer path
+        JsonDeserializer<String> customStringDeserializer = new JsonDeserializer<String>() {
+            @Override
+            public String deserialize(JsonParser p, DeserializationContext ctxt) throws IOException {
+                return p.getText();
+            }
+        };
+        String jsonEmptyString = "[\"\"]";
+        JsonParser parserEmptyString = mockJsonParser(jsonEmptyString);
+        StringArrayDeserializer customDeserializer = new StringArrayDeserializer(customStringDeserializer);
+        String[] resultEmptyString = customDeserializer.deserialize(parserEmptyString, context);
+        assertNotNull(resultEmptyString);
+        assertEquals("", resultEmptyString[0]);
+    }
+
+    // Test edge case for ObjectBuffer.completeAndClearBuffer with String.class
+    // This is indirectly tested by deserialize and _deserializeCustom returning String[]
+    // We can test the size of the returned array.
+    @Test
+    public void testObjectBufferUsage() throws Exception {
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < 50; i++) { // A moderate number of elements
+            sb.append("\"val").append(i).append("\"").append(",");
+        }
+        sb.setLength(sb.length() - 1); // remove trailing comma
+        sb.append("]");
+        String json = sb.toString();
+
+        JsonParser parser = mockJsonParser(json);
+        DeserializationContext context = mockDeserializationContext();
+        StringArrayDeserializer deserializer = StringArrayDeserializer.instance;
+        String[] result = deserializer.deserialize(parser, context);
+        assertNotNull(result);
+        assertEquals(50, result.length);
+        assertEquals("val25", result[25]);
+    }
+
+    @Test
+    public void testDeserializeArrayWithNumbers() throws Exception {
+        String json = "[1, 2, 3, 0, -5]"; // Numbers should be converted to string representations
+        JsonParser parser = mockJsonParser(json);
+        DeserializationContext context = mockDeserializationContext();
+        StringArrayDeserializer deserializer = StringArrayDeserializer.instance;
+        String[] result = deserializer.deserialize(parser, context);
+        assertNotNull(result);
+        assertArrayEquals(new String[]{"1", "2", "3", "0", "-5"}, result);
+    }
+
+    @Test
+    public void testDeserializeArrayWithBooleans() throws Exception {
+        String json = "[true, false, true]"; // Booleans should be converted to string representations
+        JsonParser parser = mockJsonParser(json);
+        DeserializationContext context = mockDeserializationContext();
+        StringArrayDeserializer deserializer = StringArrayDeserializer.instance;
+        String[] result = deserializer.deserialize(parser, context);
+        assertNotNull(result);
+        assertArrayEquals(new String[]{"true", "false", "true"}, result);
+    }
+
+    @Test
+    public void testDeserializeArrayWithMixedScalarValues() throws Exception {
+        String json = "[\"string\", 123, true, false, null, 4.56]";
+        JsonParser parser = mockJsonParser(json);
+        DeserializationContext context = mockDeserializationContext();
+        StringArrayDeserializer deserializer = StringArrayDeserializer.instance;
+        String[] result = deserializer.deserialize(parser, context);
+        assertNotNull(result);
+        assertEquals("string", result[0]);
+        assertEquals("123", result[1]);
+        assertEquals("true", result[2]);
+        assertEquals("false", result[3]);
+        assertNull(result[4]);
+        assertEquals("4.56", result[5]);
+    }
+
+    @Test
+    public void testDeserializeArrayWithEmptyChunkInMiddle() throws Exception {
+        // This test primarily verifies the ObjectBuffer logic for large arrays,
+        // ensuring it handles internal chunking correctly.
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < 5000; i++) { // A large number to force buffer appends
+            sb.append("\"").append(i).append("\"").append(",");
+        }
+        sb.setLength(sb.length() - 1); // remove trailing comma
+        sb.append("]");
+        String json = sb.toString();
+
+        JsonParser parser = mockJsonParser(json);
+        DeserializationContext context = mockDeserializationContext();
+        StringArrayDeserializer deserializer = StringArrayDeserializer.instance;
+        String[] result = deserializer.deserialize(parser, context);
+        assertNotNull(result);
+        assertEquals(5000, result.length);
+        assertEquals("2500", result[2500]);
+    }
+
+    @Test
+    public void testDeserializeWithContextualDeserializerOverridingDefault() throws Exception {
+        // Mock a custom String deserializer that prefixes values
+        JsonDeserializer<String> customStringDeserializer = new JsonDeserializer<String>() {
+            @Override
+            public String deserialize(JsonParser p, DeserializationContext ctxt) throws IOException {
+                String text = p.getText();
+                return (text == null) ? null : "overridden:" + text;
+            }
+            @Override
+            public String getNullValue(DeserializationContext ctxt) throws JsonMappingException {
+                return null;
+            }
+        };
+
+        // Mock DeserializationContext to return this custom deserializer
+        DeserializationContext context = new DefaultDeserializationContext(new DeserializerFactoryConfig().createDefaults().getDeserializerFactory(), null) {
+            private final ObjectBuffer objectBuffer = new ObjectBuffer();
+            @Override
+            public ObjectBuffer leaseObjectBuffer() { return objectBuffer; }
+            @Override
+            public void returnObjectBuffer(ObjectBuffer buffer) { }
+            @Override
+            public JavaType constructType(Class<?> cls) { return SimpleType.constructUnsafe(cls); }
+            @Override
+            public JsonMappingException mappingException(Class<?> type) { return new JsonMappingException("Mock mapping exception"); }
+            @Override
+            public boolean isEnabled(DeserializationFeature f) { return true; }
+
+            @Override
+            public JsonDeserializer<?> findContextualValueDeserializer(JavaType type, BeanProperty property) throws JsonMappingException {
+                // For String.class, return our custom deserializer
+                if (type.getRawClass().equals(String.class)) {
+                    return customStringDeserializer;
+                }
+                return super.findContextualValueDeserializer(type, property);
+            }
+
+            @Override
+            public MissingInstantiator missingInstantiator(JavaType type) {
+                return new MissingInstantiator(this, type);
+            }
+
+             @Override
+            public JsonDeserializer<?> findRootValueDeserializer(JavaType type) throws JsonMappingException {
+                return null; // Not needed for these tests
+            }
+        };
+
+        // Need a BeanProperty to trigger createContextual logic that uses findContextualValueDeserializer
+        BeanProperty mockProperty = new BeanProperty.Std(
+            new PropertyName("dummy"),
+            context.constructType(String.class),
+            null, // annotations
+            null, // declaredType
+            null, // field
+            null, // getter
+            null, // setter
+            null, // context
+            null, // wrapper
+            com.fasterxml.jackson.annotation.JsonFormat.Shape.ANY
+        );
+
+        String json = "[\"a\", \"b\"]";
+        JsonParser parser = mockJsonParser(json);
+
+        // The actual deserializer instance we will use is obtained AFTER createContextual has been called.
+        StringArrayDeserializer initialDeserializer = StringArrayDeserializer.instance;
+        JsonDeserializer<?> configuredDeserializer = initialDeserializer.createContextual(context, mockProperty);
+
+        // Now use the configured deserializer
+        String[] result = (String[]) configuredDeserializer.deserialize(parser, context);
+
+        assertNotNull(result);
+        assertArrayEquals(new String[]{"overridden:a", "overridden:b"}, result);
+    }
+
+    @Test
+    public void testDeserializeArrayWithStringsAndEscapes() throws Exception {
+        String json = "[\"a\\nb\\tc\\\"d\\r\\f\"]";
+        JsonParser parser = mockJsonParser(json);
+        DeserializationContext context = mockDeserializationContext();
+        StringArrayDeserializer deserializer = StringArrayDeserializer.instance;
+        String[] result = deserializer.deserialize(parser, context);
+        assertNotNull(result);
+        assertEquals(1, result.length);
+        assertEquals("a\nb\tc\"d\r\f", result[0]);
+    }
+
+    @Test
+    public void testDeserializeArrayWithEmptyStrings() throws Exception {
+        String json = "[\"\", \"\", \"a\"]";
+        JsonParser parser = mockJsonParser(json);
+        DeserializationContext context = mockDeserializationContext();
+        StringArrayDeserializer deserializer = StringArrayDeserializer.instance;
+        String[] result = deserializer.deserialize(parser, context);
+        assertNotNull(result);
+        assertArrayEquals(new String[]{"", "", "a"}, result);
+    }
+}
+```
+1. SOURCE CODE ANALYSIS - The tests focus on the `deserialize` method, specifically covering empty arrays, arrays with strings, nulls, mixed scalar types, and non-array inputs. The `createContextual` method is tested for handling default and custom element deserializers, and `deserializeWithType` is tested by mocking a `TypeDeserializer`.
+2. TEST CASE DESIGN -
+    - `testDeserializeEmptyArray`: Input: `[]`, Expected: `String[0]`, Derived: Empty array token.
+    - `testDeserializeArrayWithStrings`: Input: `["a", "b", "c"]`, Expected: `["a", "b", "c"]`, Derived: Standard string values.
+    - `testDeserializeArrayWithNulls`: Input: `[null, "b", null]`, Expected: `[null, "b", null]`, Derived: Null token handling.
+    - `testDeserializeArrayWithMixedTypes`: Input: `["a", 123, true, null]`, Expected: `["a", "123", "true", null]`, Derived: Non-string tokens parsed by `_parseString`.
+    - `testDeserializeNonArrayButAcceptSingleValue`: Input: `"a"`, Expected: `["a"]`, Derived: `ACCEPT_SINGLE_VALUE_AS_ARRAY` enabled.
+    - `testDeserializeNonArrayNullButAcceptSingleValue`: Input: `null`, Expected: `[null]`, Derived: `ACCEPT_SINGLE_VALUE_AS_ARRAY` enabled with null.
+    - `testDeserializeEmptyStringAsNull`: Input: `""`, Expected: `null`, Derived: `ACCEPT_EMPTY_STRING_AS_NULL_OBJECT` enabled.
+    - `testDeserializeNonArrayWithoutAcceptSingleValue`: Input: `"a"`, Expected: `JsonMappingException`, Derived: `ACCEPT_SINGLE_VALUE_AS_ARRAY` disabled.
+    - `testDeserializeLargeArray`: Input: Array with 1000 strings, Expected: Array of 1000 strings, Derived: Large input to test buffering.
+    - `testCreateContextualWithDefaultDeserializer`: Input: `null` property, Expected: Same instance, Derived: `createContextual` with no custom deserializer.
+    - `testCreateContextualWithCustomDeserializer`: Input: Mock custom deserializer, Expected: New instance with custom deserializer, Derived: `createContextual` overriding default.
+    - `testDeserializeCustomArrayWithStrings`: Input: `["a", "b", "c"]` with custom deserializer, Expected: `["custom:a", "custom:b", "custom:c"]`, Derived: Custom element deserialization.
+    - `testDeserializeCustomArrayWithNulls`: Input: `[null, "b", null]` with custom deserializer, Expected: `[null, "custom:b", null]`, Derived: Custom null handling.
+    - `testDeserializeWithType`: Input: `["value"]` with mock `TypeDeserializer`, Expected: `String[]{"value"}`, Derived: `deserializeWithType` delegation.
+    - `testParseStringEdgeCases`: Input: `[123..., ""]`, Expected: `["123...", ""]`, Derived: Numbers and empty strings as strings.
+    - `testObjectBufferUsage`: Input: Array of 50 strings, Expected: Array of 50 strings, Derived: `ObjectBuffer` usage and sizing.
+    - `testDeserializeArrayWithNumbers`: Input: `[1, 2, 3]`, Expected: `["1", "2", "3"]`, Derived: Numbers as strings.
+    - `testDeserializeArrayWithBooleans`: Input: `[true, false]`, Expected: `["true", "false"]`, Derived: Booleans as strings.
+    - `testDeserializeArrayWithMixedScalarValues`: Input: `["string", 123, true, null, 4.56]`, Expected: `["string", "123", "true", null, "4.56"]`, Derived: Mixed scalar types.
+    - `testDeserializeArrayWithEmptyChunkInMiddle`: Input: Large array (5000 elements), Expected: Array of 5000 strings, Derived: Testing `ObjectBuffer` with many appends.
+    - `testDeserializeWithContextualDeserializerOverridingDefault`: Input: Array with "a", "b" and a custom deserializer, Expected: `["overridden:a", "overridden:b"]`, Derived: `createContextual` using `findContextualValueDeserializer`.
+    - `testDeserializeArrayWithStringsAndEscapes`: Input: `["a\\nb\\tc\\\"d\\r\\f"]`, Expected: `["a\nb\tc\"d\r\f"]`, Derived: String escape sequence handling.
+    - `testDeserializeArrayWithEmptyStrings`: Input: `["", "", "a"]`, Expected: `["", "", "a"]`, Derived: Multiple empty strings.
+4. DEFECT DETECTION STRATEGY - Tests cover array parsing logic, handling of nulls, scalar types, edge cases like single values for arrays, empty strings, and custom deserializer integration. Specific focus on `_parseString` behavior and `ObjectBuffer` usage.
+5. SUMMARY - 22 tests.
+6. LIMITATIONS - Mocking `DeserializationContext` and `JsonParser` simplifies testing but may not cover all real-world interaction complexities. The `_parseString` method is protected and its direct unit testing is avoided by using `deserialize` with inputs that trigger it.
+Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

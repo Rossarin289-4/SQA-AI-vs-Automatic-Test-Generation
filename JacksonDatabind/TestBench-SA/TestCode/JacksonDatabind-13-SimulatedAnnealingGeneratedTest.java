@@ -1,0 +1,2146 @@
+package generated.algorithm;
+
+import org.junit.FixMethodOrder;
+import org.junit.Test;
+import org.junit.runners.MethodSorters;
+import static org.junit.Assert.*;
+
+@FixMethodOrder(MethodSorters.NAME_ASCENDING)
+public class SimulatedAnnealingGeneratedTest {
+ @Test(timeout = 20000)
+ public void generatedInput000() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "createInstance", new String[]{"com.fasterxml.jackson.databind.DeserializationConfig", "com.fasterxml.jackson.core.JsonParser", "com.fasterxml.jackson.databind.InjectableValues"}, new String[]{"<sample:5>", "<sample:7>", "<sample:6>"}, false);
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", actual.getClass().getName());
+  assertEquals("{canOverrideAccessModifiers=true}", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput001() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "_throwAsIOE", new String[]{"java.lang.Exception", "java.lang.Object"}, new String[]{"<sample:0>", "<d:-2469.9199999999996>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withName", "java.lang.String", "1"}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getMember", ""}}); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("com.fasterxml.jackson.databind.JsonMappingException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput002() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withValueDeserializer", new String[]{"com.fasterxml.jackson.databind.JsonDeserializer"}, new String[]{"<null>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getValueTypeDeserializer", ""}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getAnnotation", "java.lang.Class", "<sample:2>"}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", actual.getClass().getName());
+  assertEquals("[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput003() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "constructType", new String[]{"java.lang.reflect.Type"}, new String[]{"<empty>"}, false, 8, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "with", "com.fasterxml.jackson.databind.deser.DeserializerFactory", "<sample:4>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "getAttribute", "java.lang.Object", "<sample:1>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "copy", ""}}); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput004() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "findObjectId", new String[]{"java.lang.Object", "com.fasterxml.jackson.annotation.ObjectIdGenerator"}, new String[]{"<null>", "<sample:7>"}, false, 5, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "determineClassName", "java.lang.Object", "<null>"}});
+  assertNull(actual);
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput005() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "instantiationException", new String[]{"java.lang.Class", "java.lang.String"}, new String[]{"<sample:3>", "v=m0"}, false, 2, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "getParser", ""}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "findObjectId", "java.lang.Object,com.fasterxml.jackson.annotation.ObjectIdGenerator", "<i:2>", "<sample:2>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "findObjectId", "java.lang.Object,com.fasterxml.jackson.annotation.ObjectIdGenerator,com.fasterxml.jackson.annotation.ObjectIdResolver", "<sample:1>", "<sample:5>", "<sample:4>"}}); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput006() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "instantiationException", new String[]{"java.lang.Class", "java.lang.String"}, new String[]{"<sample:0>", ""}, false, 7, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "keyDeserializerInstance", "com.fasterxml.jackson.databind.introspect.Annotated,java.lang.Object", "<sample:7>", "<null>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "findObjectId", "java.lang.Object,com.fasterxml.jackson.annotation.ObjectIdGenerator", "<s:key>", "<sample:6>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "findObjectId", "java.lang.Object,com.fasterxml.jackson.annotation.ObjectIdGenerator,com.fasterxml.jackson.annotation.ObjectIdResolver", "<s:>", "<sample:7>", "<sample:4>"}}, 2), new String[][]{{"prependPath", "java.lang.Object,java.lang.String", "1"}, {"getLocalizedMessage", "", "1"}, {"prependPath", "com.fasterxml.jackson.databind.JsonMappingException$Reference", "7"}, {"getPath", "", "4"}});
+  assertNotNull(actual);
+  assertEquals("java.util.Collections$UnmodifiableList", actual.getClass().getName());
+  assertEquals("[java.lang.String[\"a\"], java.lang.Integer[\"0\"]]", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=true}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput007() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "deserializerInstance", new String[]{"com.fasterxml.jackson.databind.introspect.Annotated", "java.lang.Object"}, new String[]{"<sample:7>", "<null>"}, false, 3, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "checkUnresolvedObjectId", ""}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "keyDeserializerInstance", "com.fasterxml.jackson.databind.introspect.Annotated,java.lang.Object", "<sample:2>", "<s://F>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "copy", ""}}, 1);
+  assertNull(actual);
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=true}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput008() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "findObjectId", new String[]{"java.lang.Object", "com.fasterxml.jackson.annotation.ObjectIdGenerator"}, new String[]{"<s:a>", "<sample:4>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "findObjectId", "java.lang.Object,com.fasterxml.jackson.annotation.ObjectIdGenerator", "<s:a>", "<sample:0>"}}), new String[][]{{"appendReferring", "com.fasterxml.jackson.databind.deser.impl.ReadableObjectId$Referring", "3"}, {"setResolver", "com.fasterxml.jackson.annotation.ObjectIdResolver", "2"}, {"getKey", "", "6"}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.annotation.ObjectIdGenerator$IdKey", actual.getClass().getName());
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput009() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withName", new String[]{"java.lang.String"}, new String[]{"1.5d"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "set", "java.lang.Object,java.lang.Object", "<s:b>", "<i:1>"}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "setViews", "java.lang.Class[]", "<sample:0>"}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", actual.getClass().getName());
+  assertEquals("[property '1.5d'] {getCreatorIndex=-1, getManagedReferenceName=null, getName=1.5d, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=true, isRequired=false}", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=true, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput010() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "determineClassName", new String[]{"java.lang.Object"}, new String[]{"<s:iu__>"}, false, 9, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "findObjectId", "java.lang.Object,com.fasterxml.jackson.annotation.ObjectIdGenerator,com.fasterxml.jackson.annotation.ObjectIdResolver", "<s:b>", "<sample:0>", "<sample:4>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "checkUnresolvedObjectId", ""}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "deserializerInstance", "com.fasterxml.jackson.databind.introspect.Annotated,java.lang.Object", "<sample:2>", "<s:bL>"}});
+  assertNotNull(actual);
+  assertEquals("java.lang.String", actual.getClass().getName());
+  assertEquals("java.lang.String", String.valueOf(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput011() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "checkUnresolvedObjectId", new String[]{}, new String[]{}, false, 11, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "deserializerInstance", "com.fasterxml.jackson.databind.introspect.Annotated,java.lang.Object", "<sample:4>", "<i:-23>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "findObjectId", "java.lang.Object,com.fasterxml.jackson.annotation.ObjectIdGenerator", "<s:`>", "<sample:2>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "findObjectId", "java.lang.Object,com.fasterxml.jackson.annotation.ObjectIdGenerator", "<s:bL>", "<sample:7>"}});
+  assertNull(actual);
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=true}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput012() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "findKeyDeserializer", new String[]{"com.fasterxml.jackson.databind.JavaType", "com.fasterxml.jackson.databind.BeanProperty"}, new String[]{"<sample:4>", "<sample:6>"}, false, 0, null, 3); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput013() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "keyDeserializerInstance", new String[]{"com.fasterxml.jackson.databind.introspect.Annotated", "java.lang.Object"}, new String[]{"<null>", "<d:-612.9799999999999>"}, false, 3, new String[][]{}, 2); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.IllegalStateException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput014() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "keyDeserializerInstance", new String[]{"com.fasterxml.jackson.databind.introspect.Annotated", "java.lang.Object"}, new String[]{"<sample:3>", "<d:-2469.9199999999996>"}, false, 2, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "findObjectId", "java.lang.Object,com.fasterxml.jackson.annotation.ObjectIdGenerator,com.fasterxml.jackson.annotation.ObjectIdResolver", "<s:a>", "<sample:0>", "<sample:1>"}}, 2); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.IllegalStateException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput015() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "assignIndex", new String[]{"int"}, new String[]{"-1"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getValueDeserializer", ""}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "deserializeAndSet", "com.fasterxml.jackson.core.JsonParser,com.fasterxml.jackson.databind.DeserializationContext,java.lang.Object", "<sample:2>", "<sample:3>", "<sample:1>"}}, 1);
+  assertNull(actual);
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput016() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "assignIndex", new String[]{"int"}, new String[]{"-1"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getValueDeserializer", ""}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "deserializeAndSet", "com.fasterxml.jackson.core.JsonParser,com.fasterxml.jackson.databind.DeserializationContext,java.lang.Object", "<sample:2>", "<sample:3>", "<sample:1>"}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "setViews", "java.lang.Class[]", "<sample:1>"}}, 1);
+  assertNull(actual);
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=true, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput017() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "assignIndex", new String[]{"int"}, new String[]{"7"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getValueDeserializer", ""}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "deserializeAndSet", "com.fasterxml.jackson.core.JsonParser,com.fasterxml.jackson.databind.DeserializationContext,java.lang.Object", "<sample:2>", "<sample:3>", "<sample:1>"}}, 1);
+  assertNull(actual);
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=7, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput018() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "assignIndex", new String[]{"int"}, new String[]{"0"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getValueDeserializer", ""}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "deserializeAndSet", "com.fasterxml.jackson.core.JsonParser,com.fasterxml.jackson.databind.DeserializationContext,java.lang.Object", "<sample:2>", "<sample:3>", "<sample:1>"}}, 1);
+  assertNull(actual);
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=0, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput019() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "hasViews", new String[]{}, new String[]{}, false, 6, new String[][]{}, 1);
+  assertNotNull(actual);
+  assertEquals("java.lang.Boolean", actual.getClass().getName());
+  assertEquals("false", String.valueOf(actual));
+ }
+ @Test(timeout = 20000)
+ public void generatedInput020() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "hasViews", new String[]{}, new String[]{}, false, 7, new String[][]{}, 1);
+  assertNotNull(actual);
+  assertEquals("java.lang.Boolean", actual.getClass().getName());
+  assertEquals("false", String.valueOf(actual));
+  assertEquals("receiver state after the call", "[property 'sample'] {getCreatorIndex=-1, getManagedReferenceName=null, getName=sample, getPropertyIndex=-1, hasValueDeserializer=true, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput021() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "hasViews", new String[]{}, new String[]{}, false, 9, new String[][]{}, 1);
+  assertNotNull(actual);
+  assertEquals("java.lang.Boolean", actual.getClass().getName());
+  assertEquals("false", String.valueOf(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput022() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "hasViews", new String[]{}, new String[]{}, false, 14, new String[][]{}, 1);
+  assertNotNull(actual);
+  assertEquals("java.lang.Boolean", actual.getClass().getName());
+  assertEquals("false", String.valueOf(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=true, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput023() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "keyDeserializerInstance", new String[]{"com.fasterxml.jackson.databind.introspect.Annotated", "java.lang.Object"}, new String[]{"<sample:0>", "<b:true>"}, false, 4, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "readPropertyValue", "com.fasterxml.jackson.core.JsonParser,com.fasterxml.jackson.databind.BeanProperty,com.fasterxml.jackson.databind.JavaType", "<sample:1>", "<sample:3>", "<null>"}}, 3); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.IllegalStateException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput024() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "hasViews", new String[]{}, new String[]{}, false, 11, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "depositSchemaProperty", "com.fasterxml.jackson.databind.jsonFormatVisitors.JsonObjectFormatVisitor", "<null>"}}, 3);
+  assertNotNull(actual);
+  assertEquals("java.lang.Boolean", actual.getClass().getName());
+  assertEquals("false", String.valueOf(actual));
+  assertEquals("receiver state after the call", "[property 'sample'] {getCreatorIndex=-1, getManagedReferenceName=null, getName=sample, getPropertyIndex=-1, hasValueDeserializer=true, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput025() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "_throwAsIOE", new String[]{"java.lang.Exception", "java.lang.Object"}, new String[]{"<sample:1>", "<i:0>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withName", "java.lang.String", "11"}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getValueDeserializer", ""}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "assignIndex", "int", "1"}}, 2); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("com.fasterxml.jackson.databind.JsonMappingException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput026() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "hasValueDeserializerFor", new String[]{"com.fasterxml.jackson.databind.JavaType"}, new String[]{"<sample:1>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "findContextualValueDeserializer", "com.fasterxml.jackson.databind.JavaType,com.fasterxml.jackson.databind.BeanProperty", "<sample:4>", "<sample:7>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "findObjectId", "java.lang.Object,com.fasterxml.jackson.annotation.ObjectIdGenerator", "<b:false>", "<sample:1>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "mappingException", "java.lang.Class", "<sample:3>"}}, 2); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput027() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "hasValueDeserializerFor", new String[]{"com.fasterxml.jackson.databind.JavaType"}, new String[]{"<sample:6>"}, false, 6, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "findObjectId", "java.lang.Object,com.fasterxml.jackson.annotation.ObjectIdGenerator", "<s:a>", "<sample:1>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "mappingException", "java.lang.Class", "<sample:3>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "weirdStringException", "java.lang.Class,java.lang.String", "<sample:0>", "+1"}}, 3); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput028() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "setObjectIdInfo", new String[]{"com.fasterxml.jackson.databind.introspect.ObjectIdInfo"}, new String[]{"<sample:10>"}, false, 4, new String[][]{}, 2);
+  assertNull(actual);
+ }
+ @Test(timeout = 20000)
+ public void generatedInput029() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getDeclaringClass", new String[]{}, new String[]{}, false, 6, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "hasViews", ""}}, 1); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput030() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "setViews", new String[]{"java.lang.Class[]"}, new String[]{"<sample:3>"}, false, 12, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withName", "com.fasterxml.jackson.databind.PropertyName", "<sample:0>"}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "visibleInView", "java.lang.Class", "<sample:2>"}}, 2);
+  assertNull(actual);
+ }
+ @Test(timeout = 20000)
+ public void generatedInput031() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "setViews", new String[]{"java.lang.Class[]"}, new String[]{"<sample:3>"}, false, 11, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withName", "com.fasterxml.jackson.databind.PropertyName", "<sample:0>"}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "visibleInView", "java.lang.Class", "<sample:2>"}}, 2);
+  assertNull(actual);
+  assertEquals("receiver state after the call", "[property 'sample'] {getCreatorIndex=-1, getManagedReferenceName=null, getName=sample, getPropertyIndex=-1, hasValueDeserializer=true, hasValueTypeDeserializer=false, hasViews=true, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput032() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getMember", new String[]{}, new String[]{}, false, 5, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "hasValueDeserializer", ""}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "set", "java.lang.Object,java.lang.Object", "<s:key>", "<sample:0>"}}, 2);
+  assertNull(actual);
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput033() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getMember", new String[]{}, new String[]{}, false, 7, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "hasValueDeserializer", ""}}, 2);
+  assertNull(actual);
+  assertEquals("receiver state after the call", "[property 'sample'] {getCreatorIndex=-1, getManagedReferenceName=null, getName=sample, getPropertyIndex=-1, hasValueDeserializer=true, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput034() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "wrongTokenException", new String[]{"com.fasterxml.jackson.core.JsonParser", "com.fasterxml.jackson.core.JsonToken", "java.lang.String"}, new String[]{"<sample:3>", "<sample:3>", "1.5d"}, false, 6, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "instantiationException", "java.lang.Class,java.lang.String", "<sample:1>", "0xFFFFFFFF"}}, 2); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput035() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "wrongTokenException", new String[]{"com.fasterxml.jackson.core.JsonParser", "com.fasterxml.jackson.core.JsonToken", "java.lang.String"}, new String[]{"<sample:4>", "<sample:0>", "1.5d"}, false, 6, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "instantiationException", "java.lang.Class,java.lang.String", "<sample:1>", "0CxFFFFFFFF"}}, 2);
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.JsonMappingException", actual.getClass().getName());
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput036() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "wrongTokenException", new String[]{"com.fasterxml.jackson.core.JsonParser", "com.fasterxml.jackson.core.JsonToken", "java.lang.String"}, new String[]{"<sample:0>", "<sample:0>", "1/5d"}, false, 6, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "instantiationException", "java.lang.Class,java.lang.String", "<sample:3>", "0CxFFFFFFFF"}}, 2);
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.JsonMappingException", actual.getClass().getName());
+  assertEquals("com.fasterxml.jackson.databind.JsonMappingException: Unexpected token (null), expected NOT_AVAILABLE: 1/5d\n at [Source: 2; line: 1, column: 1] {getLocalizedMessage=Unexpected token (null), expected NO...#491#1861589757", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput037() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "wrongTokenException", new String[]{"com.fasterxml.jackson.core.JsonParser", "com.fasterxml.jackson.core.JsonToken", "java.lang.String"}, new String[]{"<sample:0>", "<sample:0>", "1/5d"}, false, 6, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "instantiationException", "java.lang.Class,java.lang.String", "<sample:1>", "0CxFFFFFFFF"}}, 2), new String[][]{{"getPathReference", "", "7"}});
+  assertNotNull(actual);
+  assertEquals("java.lang.String", actual.getClass().getName());
+  assertEquals("", String.valueOf(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput038() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "getNodeFactory", new String[]{}, new String[]{}, false, 1, new String[][]{}, 2); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput039() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "depositSchemaProperty", new String[]{"com.fasterxml.jackson.databind.jsonFormatVisitors.JsonObjectFormatVisitor"}, new String[]{"<sample:7>"}, false, 0, null, 2);
+  assertNull(actual);
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput040() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "depositSchemaProperty", new String[]{"com.fasterxml.jackson.databind.jsonFormatVisitors.JsonObjectFormatVisitor"}, new String[]{"<null>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "deserializeSetAndReturn", "com.fasterxml.jackson.core.JsonParser,com.fasterxml.jackson.databind.DeserializationContext,java.lang.Object", "<sample:7>", "<sample:5>", "<i:2>"}}, 2); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput041() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "weirdStringException", new String[]{"java.lang.Class", "java.lang.String"}, new String[]{"<sample:1>", "1E-5"}, false, 0, null, 2); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput042() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "getNodeFactory", new String[]{}, new String[]{}, false, 1, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "mappingException", "java.lang.Class,com.fasterxml.jackson.core.JsonToken", "<sample:2>", "<null>"}}, 3); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput043() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withSimpleName", new String[]{"java.lang.String"}, new String[]{"12:30:45"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getWrapperName", ""}}, 1);
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", actual.getClass().getName());
+  assertEquals("[property '12:30:45'] {getCreatorIndex=-1, getManagedReferenceName=null, getName=12:30:45, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=f...#205#-1639279082", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput044() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "deserializerInstance", new String[]{"com.fasterxml.jackson.databind.introspect.Annotated", "java.lang.Object"}, new String[]{"<sample:5>", "<sample:1>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "constructSpecializedType", "com.fasterxml.jackson.databind.JavaType,java.lang.Class", "<sample:0>", "<sample:3>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "checkUnresolvedObjectId", ""}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "mappingException", "java.lang.Class", "<sample:3>"}}, 1); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.IllegalStateException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput045() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "getAttribute", new String[]{"java.lang.Object"}, new String[]{"<s:key>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "wrongTokenException", "com.fasterxml.jackson.core.JsonParser,com.fasterxml.jackson.core.JsonToken,java.lang.String", "<sample:3>", "<sample:4>", "-1.5"}}, 3); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput046() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "set", new String[]{"java.lang.Object", "java.lang.Object"}, new String[]{"<i:1>", "<sample:0>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "deserializeAndSet", "com.fasterxml.jackson.core.JsonParser,com.fasterxml.jackson.databind.DeserializationContext,java.lang.Object", "<sample:6>", "<null>", "<d:1.5>"}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getCreatorIndex", ""}}, 2); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.UnsupportedOperationException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput047() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "constructType", new String[]{"java.lang.reflect.Type"}, new String[]{"<sample:2>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "weirdStringException", "java.lang.Class,java.lang.String", "<null>", "abc"}}, 3); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput048() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "findInjectableValue", new String[]{"java.lang.Object", "com.fasterxml.jackson.databind.BeanProperty", "java.lang.Object"}, new String[]{"<d:-2469.9199999999996>", "<sample:4>", "<i:0>"}, false, 0, null, 2); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.IllegalStateException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput049() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "constructType", new String[]{"java.lang.reflect.Type"}, new String[]{"<sample:5>"}, false, 7, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "copy", ""}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "getTypeFactory", ""}}, 1); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput050() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "instantiationException", new String[]{"java.lang.Class", "java.lang.Throwable"}, new String[]{"<sample:3>", "<null>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "getTypeFactory", ""}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "findObjectId", "java.lang.Object,com.fasterxml.jackson.annotation.ObjectIdGenerator", "<b:true>", "<sample:2>"}}, 1); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput051() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "instantiationException", new String[]{"java.lang.Class", "java.lang.Throwable"}, new String[]{"<sample:3>", "<empty>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "getTypeFactory", ""}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "findObjectId", "java.lang.Object,com.fasterxml.jackson.annotation.ObjectIdGenerator", "<i:1>", "<sample:2>"}}, 1), new String[][]{{"getPath", "", "5"}});
+  assertNotNull(actual);
+  assertEquals("java.util.Collections$EmptyList", actual.getClass().getName());
+  assertEquals("[]", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput052() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "instantiationException", new String[]{"java.lang.Class", "java.lang.Throwable"}, new String[]{"<sample:1>", "<empty>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "findObjectId", "java.lang.Object,com.fasterxml.jackson.annotation.ObjectIdGenerator", "<sample:0>", "<sample:3>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "canOverrideAccessModifiers", ""}}, 3), new String[][]{{"addSuppressed", "java.lang.Throwable", "2"}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.JsonMappingException", actual.getClass().getName());
+  assertEquals("com.fasterxml.jackson.databind.JsonMappingException: Can not construct instance of generated.algorithm.SearchInputFactory_scaffolding$GenericSub, problem: null {getLocalizedMessage=Can not construct i...#559#71199330", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput053() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "instantiationException", new String[]{"java.lang.Class", "java.lang.Throwable"}, new String[]{"<sample:2>", "<sample:2>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "findObjectId", "java.lang.Object,com.fasterxml.jackson.annotation.ObjectIdGenerator", "<sample:0>", "<sample:3>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "canOverrideAccessModifiers", ""}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "getDateFormat", ""}}, 1), new String[][]{{"addSuppressed", "java.lang.Throwable", "2"}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.JsonMappingException", actual.getClass().getName());
+  assertEquals("com.fasterxml.jackson.databind.JsonMappingException: Can not construct instance of generated.algorithm.SearchInputFactory_scaffolding$GenericBase, problem: java.lang.Throwable:  {getLocalizedMessage=C...#577#-1243002500", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput054() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "instantiationException", new String[]{"java.lang.Class", "java.lang.Throwable"}, new String[]{"<sample:1>", "<null>"}, false, 5, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "findObjectId", "java.lang.Object,com.fasterxml.jackson.annotation.ObjectIdGenerator", "<sample:0>", "<sample:3>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "canOverrideAccessModifiers", ""}}, 2); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput055() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withName", new String[]{"java.lang.String"}, new String[]{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, false, 0, null, 3);
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", actual.getClass().getName());
+  assertEquals("[property 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'] {getCreatorIndex=-1, getManagedReferenceName=null, getName=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDese...#249#-186745588", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput056() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withName", new String[]{"java.lang.String"}, new String[]{"aaabaaaaaaaaaaaaaaaaaaaaaaaaaa-1"}, false, 1, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getFullName", ""}}, 3);
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", actual.getClass().getName());
+  assertEquals("[property 'aaabaaaaaaaaaaaaaaaaaaaaaaaaaa-1'] {getCreatorIndex=-1, getManagedReferenceName=null, getName=aaabaaaaaaaaaaaaaaaaaaaaaaaaaa-1, getPropertyIndex=-1, hasValueDeserializer=false, hasValueType...#253#-1432787498", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput057() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withName", new String[]{"java.lang.String"}, new String[]{"http://example.com/a?b=c"}, false, 1, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getFullName", ""}}, 3);
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", actual.getClass().getName());
+  assertEquals("[property 'http://example.com/a?b=c'] {getCreatorIndex=-1, getManagedReferenceName=null, getName=http://example.com/a?b=c, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=fal...#237#-1639022312", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput058() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "deserialize", new String[]{"com.fasterxml.jackson.core.JsonParser", "com.fasterxml.jackson.databind.DeserializationContext"}, new String[]{"<sample:6>", "<sample:3>"}, false, 0, null, 2); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput059() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "keyDeserializerInstance", new String[]{"com.fasterxml.jackson.databind.introspect.Annotated", "java.lang.Object"}, new String[]{"<sample:1>", "<b:true>"}, false, 14, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "constructType", "java.lang.reflect.Type", "<sample:1>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "weirdKeyException", "java.lang.Class,java.lang.String,java.lang.String", "<sample:2>", "I", "1E-5"}}, 1); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.IllegalStateException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput060() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "createInstance", new String[]{"com.fasterxml.jackson.databind.DeserializationConfig", "com.fasterxml.jackson.core.JsonParser", "com.fasterxml.jackson.databind.InjectableValues"}, new String[]{"<sample:7>", "<sample:3>", "<null>"}, false, 13, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "keyDeserializerInstance", "com.fasterxml.jackson.databind.introspect.Annotated,java.lang.Object", "<sample:7>", "<s:a>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "weirdStringException", "java.lang.Class,java.lang.String", "<sample:0>", "\t"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "isEnabled", "com.fasterxml.jackson.databind.MapperFeature", "<sample:2>"}}, 2), new String[][]{{"weirdNumberException", "java.lang.Number,java.lang.Class,java.lang.String", "5"}}); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput061() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "createInstance", new String[]{"com.fasterxml.jackson.databind.DeserializationConfig", "com.fasterxml.jackson.core.JsonParser", "com.fasterxml.jackson.databind.InjectableValues"}, new String[]{"<sample:7>", "<sample:3>", "<null>"}, false, 13, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "keyDeserializerInstance", "com.fasterxml.jackson.databind.introspect.Annotated,java.lang.Object", "<sample:7>", "<s:0a>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "weirdStringException", "java.lang.Class,java.lang.String", "<sample:0>", "\t"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "isEnabled", "com.fasterxml.jackson.databind.MapperFeature", "<sample:2>"}}, 2);
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", actual.getClass().getName());
+  assertEquals("{canOverrideAccessModifiers=true}", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput062() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "createInstance", new String[]{"com.fasterxml.jackson.databind.DeserializationConfig", "com.fasterxml.jackson.core.JsonParser", "com.fasterxml.jackson.databind.InjectableValues"}, new String[]{"<sample:3>", "<sample:9>", "<sample:3>"}, false, 2, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "keyDeserializerInstance", "com.fasterxml.jackson.databind.introspect.Annotated,java.lang.Object", "<sample:6>", "<s:>0a>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "isEnabled", "com.fasterxml.jackson.databind.MapperFeature", "<sample:4>"}}, 2);
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", actual.getClass().getName());
+  assertEquals("{canOverrideAccessModifiers=true}", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=true}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput063() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "createInstance", new String[]{"com.fasterxml.jackson.databind.DeserializationConfig", "com.fasterxml.jackson.core.JsonParser", "com.fasterxml.jackson.databind.InjectableValues"}, new String[]{"<sample:3>", "<sample:9>", "<sample:3>"}, false, 2, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "keyDeserializerInstance", "com.fasterxml.jackson.databind.introspect.Annotated,java.lang.Object", "<sample:6>", "<s:>0a>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "isEnabled", "com.fasterxml.jackson.databind.MapperFeature", "<sample:4>"}}, 2), new String[][]{{"keyDeserializerInstance", "com.fasterxml.jackson.databind.introspect.Annotated,java.lang.Object", "1"}}); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.IllegalStateException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput064() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "createInstance", new String[]{"com.fasterxml.jackson.databind.DeserializationConfig", "com.fasterxml.jackson.core.JsonParser", "com.fasterxml.jackson.databind.InjectableValues"}, new String[]{"<sample:5>", "<sample:0>", "<sample:3>"}, false, 3, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "keyDeserializerInstance", "com.fasterxml.jackson.databind.introspect.Annotated,java.lang.Object", "<sample:6>", "<s:>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "isEnabled", "com.fasterxml.jackson.databind.MapperFeature", "<sample:4>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "reportUnknownProperty", "java.lang.Object,java.lang.String,com.fasterxml.jackson.databind.JsonDeserializer", "<null>", "2020-02-30T25:61:61", "<sample:0>"}}, 2), new String[][]{{"objectIdResolverInstance", "com.fasterxml.jackson.databind.introspect.Annotated,com.fasterxml.jackson.databind.introspect.ObjectIdInfo", "1"}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.annotation.SimpleObjectIdResolver", actual.getClass().getName());
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=true}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput065() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "createInstance", new String[]{"com.fasterxml.jackson.databind.DeserializationConfig", "com.fasterxml.jackson.core.JsonParser", "com.fasterxml.jackson.databind.InjectableValues"}, new String[]{"<sample:5>", "<sample:3>", "<sample:6>"}, false, 10, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "keyDeserializerInstance", "com.fasterxml.jackson.databind.introspect.Annotated,java.lang.Object", "<sample:6>", "<s:>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "isEnabled", "com.fasterxml.jackson.databind.MapperFeature", "<sample:4>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "reportUnknownProperty", "java.lang.Object,java.lang.String,com.fasterxml.jackson.databind.JsonDeserializer", "<null>", "1020-02-30T25:61:61", "<sample:0>"}}, 2), new String[][]{{"objectIdResolverInstance", "com.fasterxml.jackson.databind.introspect.Annotated,com.fasterxml.jackson.databind.introspect.ObjectIdInfo", "1"}, {"canUseFor", "com.fasterxml.jackson.annotation.ObjectIdResolver", "2"}});
+  assertNotNull(actual);
+  assertEquals("java.lang.Boolean", actual.getClass().getName());
+  assertEquals("false", String.valueOf(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput066() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "_throwAsIOE", new String[]{"java.lang.Exception", "java.lang.Object"}, new String[]{"<sample:1>", "<s:>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "setViews", "java.lang.Class[]", "<sample:0>"}}, 3); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("com.fasterxml.jackson.databind.JsonMappingException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput067() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "findObjectId", new String[]{"java.lang.Object", "com.fasterxml.jackson.annotation.ObjectIdGenerator"}, new String[]{"<d:1.5>", "<sample:2>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "weirdNumberException", "java.lang.Class,java.lang.String", "<sample:1>", "1.1234567890123456"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "getFactory", ""}}, 1);
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.deser.impl.ReadableObjectId", actual.getClass().getName());
+  assertEquals("{hasReferringProperties=false}", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput068() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "findObjectId", new String[]{"java.lang.Object", "com.fasterxml.jackson.annotation.ObjectIdGenerator"}, new String[]{"<d:1.5>", "<sample:2>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "weirdNumberException", "java.lang.Class,java.lang.String", "<sample:1>", "1.1234567890123456"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "getFactory", ""}}, 2);
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.deser.impl.ReadableObjectId", actual.getClass().getName());
+  assertEquals("{hasReferringProperties=false}", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput069() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "findObjectId", new String[]{"java.lang.Object", "com.fasterxml.jackson.annotation.ObjectIdGenerator"}, new String[]{"<d:1.5>", "<sample:2>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "keyDeserializerInstance", "com.fasterxml.jackson.databind.introspect.Annotated,java.lang.Object", "<sample:3>", "<d:-2469.9199999999996>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "weirdNumberException", "java.lang.Class,java.lang.String", "<sample:2>", "1.1234567890123456"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "getFactory", ""}}, 2), new String[][]{{"resolve", "", "3"}});
+  assertNull(actual);
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput070() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "constructType", new String[]{"java.lang.Class"}, new String[]{"<sample:2>"}, false, 0, null, 1); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput071() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "findObjectId", new String[]{"java.lang.Object", "com.fasterxml.jackson.annotation.ObjectIdGenerator"}, new String[]{"<s:>", "<sample:1>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "keyDeserializerInstance", "com.fasterxml.jackson.databind.introspect.Annotated,java.lang.Object", "<sample:5>", "<d:-2469.9199999999996>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "getFactory", ""}}, 3), new String[][]{{"resolve", "", "3"}, {"appendReferring", "com.fasterxml.jackson.databind.deser.impl.ReadableObjectId$Referring", "7"}, {"hasReferringProperties", "", "6"}});
+  assertNotNull(actual);
+  assertEquals("java.lang.Boolean", actual.getClass().getName());
+  assertEquals("true", String.valueOf(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput072() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "findObjectId", new String[]{"java.lang.Object", "com.fasterxml.jackson.annotation.ObjectIdGenerator"}, new String[]{"<s:{!w>", "<sample:0>"}, false, 11, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "reportUnknownProperty", "java.lang.Object,java.lang.String,com.fasterxml.jackson.databind.JsonDeserializer", "<s:kWhy>", "1.12345678", "<sample:5>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "getAttribute", "java.lang.Object", "<d:-1234.9599999999998>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "constructType", "java.lang.reflect.Type", "<sample:2>"}}, 1), new String[][]{{"hasReferringProperties", "", "4"}, {"hasReferringProperties", "", "6"}, {"getKey", "", "4"}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.annotation.ObjectIdGenerator$IdKey", actual.getClass().getName());
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=true}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput073() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "findObjectId", new String[]{"java.lang.Object", "com.fasterxml.jackson.annotation.ObjectIdGenerator"}, new String[]{"<s:{!w>", "<null>"}, false, 11, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "reportUnknownProperty", "java.lang.Object,java.lang.String,com.fasterxml.jackson.databind.JsonDeserializer", "<s:}kWhy>", "1.12345678", "<sample:5>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "constructType", "java.lang.reflect.Type", "<sample:2>"}}, 1); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput074() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "findNonContextualValueDeserializer", new String[]{"com.fasterxml.jackson.databind.JavaType"}, new String[]{"<sample:0>"}, false, 0, null, 3); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput075() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "findObjectId", new String[]{"java.lang.Object", "com.fasterxml.jackson.annotation.ObjectIdGenerator"}, new String[]{"<d:1.5>", "<sample:3>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "isEnabled", "com.fasterxml.jackson.databind.DeserializationFeature", "<sample:7>"}}, 3), new String[][]{{"resolve", "", "2"}});
+  assertNull(actual);
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput076() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "findObjectId", new String[]{"java.lang.Object", "com.fasterxml.jackson.annotation.ObjectIdGenerator"}, new String[]{"<d:1.5>", "<sample:1>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "isEnabled", "com.fasterxml.jackson.databind.DeserializationFeature", "<sample:4>"}}, 3), new String[][]{{"resolve", "", "2"}, {"appendReferring", "com.fasterxml.jackson.databind.deser.impl.ReadableObjectId$Referring", "2"}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.deser.impl.ReadableObjectId", actual.getClass().getName());
+  assertEquals("{hasReferringProperties=true}", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput077() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "deserializeAndSet", new String[]{"com.fasterxml.jackson.core.JsonParser", "com.fasterxml.jackson.databind.DeserializationContext", "java.lang.Object"}, new String[]{"<sample:7>", "<sample:2>", "<i:1>"}, false, 0, null, 3); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("com.fasterxml.jackson.databind.JsonMappingException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput078() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "deserializeAndSet", new String[]{"com.fasterxml.jackson.core.JsonParser", "com.fasterxml.jackson.databind.DeserializationContext", "java.lang.Object"}, new String[]{"<sample:7>", "<sample:3>", "<i:1>"}, false, 0, null, 3); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput079() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withName", new String[]{"java.lang.String"}, new String[]{"/aa"}, false, 0, null, 2), new String[][]{{"getName", "", "0"}});
+  assertNotNull(actual);
+  assertEquals("java.lang.String", actual.getClass().getName());
+  assertEquals("/aa", String.valueOf(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput080() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withName", new String[]{"java.lang.String"}, new String[]{"0/`a!{\""}, false, 0, null, 1), new String[][]{{"getName", "", "0"}});
+  assertNotNull(actual);
+  assertEquals("java.lang.String", actual.getClass().getName());
+  assertEquals("0/`a!{\"", String.valueOf(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput081() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getCreatorIndex", new String[]{}, new String[]{}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "visibleInView", "java.lang.Class", "<sample:2>"}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getType", ""}}, 2);
+  assertNotNull(actual);
+  assertEquals("java.lang.Integer", actual.getClass().getName());
+  assertEquals("-1", String.valueOf(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput082() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "constructCalendar", new String[]{"java.util.Date"}, new String[]{"<sample:0>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "determineClassName", "java.lang.Object", "<sample:0>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "determineClassName", "java.lang.Object", "<sample:1>"}}, 1); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput083() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getFullName", new String[]{}, new String[]{}, false, 1, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getMetadata", ""}}, 2);
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.PropertyName", actual.getClass().getName());
+  assertEquals("{a} {getNamespace=a, getSimpleName=, hasNamespace=true, hasSimpleName=false, isEmpty=false}", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput084() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getFullName", new String[]{}, new String[]{}, false, 2, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getMetadata", ""}}, 2);
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.PropertyName", actual.getClass().getName());
+  assertEquals(" {getNamespace=null, getSimpleName=, hasNamespace=false, hasSimpleName=false, isEmpty=true}", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=true, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput085() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "readPropertyValue", new String[]{"com.fasterxml.jackson.core.JsonParser", "com.fasterxml.jackson.databind.BeanProperty", "com.fasterxml.jackson.databind.JavaType"}, new String[]{"<sample:0>", "<sample:1>", "<sample:5>"}, false, 2, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "handleUnknownProperty", "com.fasterxml.jackson.core.JsonParser,com.fasterxml.jackson.databind.JsonDeserializer,java.lang.Object,java.lang.String", "<sample:5>", "<null>", "<i:1>", ""}}); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput086() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "weirdKeyException", new String[]{"java.lang.Class", "java.lang.String", "java.lang.String"}, new String[]{"<sample:0>", "1.12345678901234567", "5."}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "objectIdGeneratorInstance", "com.fasterxml.jackson.databind.introspect.Annotated,com.fasterxml.jackson.databind.introspect.ObjectIdInfo", "<sample:7>", "<sample:3>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "mappingException", "java.lang.Class", "<null>"}}); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput087() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "leaseObjectBuffer", new String[]{}, new String[]{}, false, 6, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "findRootValueDeserializer", "com.fasterxml.jackson.databind.JavaType", "<null>"}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.util.ObjectBuffer", actual.getClass().getName());
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput088() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "leaseObjectBuffer", new String[]{}, new String[]{}, false, 6, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "findRootValueDeserializer", "com.fasterxml.jackson.databind.JavaType", "<null>"}}), new String[][]{{"appendCompletedChunk", "java.lang.Object[]", "7"}});
+  assertNotNull(actual);
+  assertEquals("[Ljava.lang.Object;", actual.getClass().getName());
+  assertEquals("[null, null, null, null]", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput089() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "leaseObjectBuffer", new String[]{}, new String[]{}, false, 7, new String[][]{}), new String[][]{{"appendCompletedChunk", "java.lang.Object[]", "7"}});
+  assertNotNull(actual);
+  assertEquals("[Ljava.lang.Object;", actual.getClass().getName());
+  assertEquals("[null, null, null, null]", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=true}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput090() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "leaseObjectBuffer", new String[]{}, new String[]{}, false, 7, new String[][]{}), new String[][]{{"completeAndClearBuffer", "java.lang.Object[],int,java.lang.Class", "4"}}); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.ArrayStoreException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput091() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "leaseObjectBuffer", new String[]{}, new String[]{}, false, 14, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "weirdNumberException", "java.lang.Number,java.lang.Class,java.lang.String", "<i:1>", "<sample:3>", "Title"}}), new String[][]{{"initialCapacity", "", "4"}});
+  assertNotNull(actual);
+  assertEquals("java.lang.Integer", actual.getClass().getName());
+  assertEquals("0", String.valueOf(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput092() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "toString", new String[]{}, new String[]{}, false);
+  assertNotNull(actual);
+  assertEquals("java.lang.String", actual.getClass().getName());
+  assertEquals("[property '']", String.valueOf(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput093() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "toString", new String[]{}, new String[]{}, false, 2, new String[][]{});
+  assertNotNull(actual);
+  assertEquals("java.lang.String", actual.getClass().getName());
+  assertEquals("[property '']", String.valueOf(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=true, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput094() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "toString", new String[]{}, new String[]{}, false, 3, new String[][]{});
+  assertNotNull(actual);
+  assertEquals("java.lang.String", actual.getClass().getName());
+  assertEquals("[property 'sample']", String.valueOf(actual));
+  assertEquals("receiver state after the call", "[property 'sample'] {getCreatorIndex=-1, getManagedReferenceName=null, getName=sample, getPropertyIndex=-1, hasValueDeserializer=true, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput095() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "toString", new String[]{}, new String[]{}, false, 4, new String[][]{}); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput096() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "hasDeserializationFeatures", new String[]{"int"}, new String[]{"2147483647"}, false); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput097() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "handleSecondaryContextualization", new String[]{"com.fasterxml.jackson.databind.JsonDeserializer", "com.fasterxml.jackson.databind.BeanProperty", "com.fasterxml.jackson.databind.JavaType"}, new String[]{"<sample:0>", "<sample:5>", "<sample:6>"}, false, 2, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "getDateFormat", ""}});
+  assertNull(actual);
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=true}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput098() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "handleSecondaryContextualization", new String[]{"com.fasterxml.jackson.databind.JsonDeserializer", "com.fasterxml.jackson.databind.BeanProperty", "com.fasterxml.jackson.databind.JavaType"}, new String[]{"<sample:0>", "<sample:5>", "<sample:6>"}, false, 6, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "findKeyDeserializer", "com.fasterxml.jackson.databind.JavaType,com.fasterxml.jackson.databind.BeanProperty", "<sample:7>", "<sample:6>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "getDateFormat", ""}});
+  assertNull(actual);
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput099() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "instantiationException", new String[]{"java.lang.Class", "java.lang.Throwable"}, new String[]{"<sample:0>", "<sample:2>"}, false);
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.JsonMappingException", actual.getClass().getName());
+  assertEquals("com.fasterxml.jackson.databind.JsonMappingException: Can not construct instance of java.lang.String, problem: java.lang.Throwable:  {getLocalizedMessage=Can not construct instance of java.lang.String,...#489#400226957", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput100() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "instantiationException", new String[]{"java.lang.Class", "java.lang.Throwable"}, new String[]{"<sample:0>", "<sample:2>"}, false), new String[][]{{"getMessage", "", "4"}});
+  assertNotNull(actual);
+  assertEquals("java.lang.String", actual.getClass().getName());
+  assertEquals("Can not construct instance of java.lang.String, problem: java.lang.Throwable: ", String.valueOf(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput101() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "isRequired", new String[]{}, new String[]{}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getPropertyIndex", ""}});
+  assertNotNull(actual);
+  assertEquals("java.lang.Boolean", actual.getClass().getName());
+  assertEquals("false", String.valueOf(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput102() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "isRequired", new String[]{}, new String[]{}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getPropertyIndex", ""}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "setManagedReferenceName", "java.lang.String", "12:30:45"}});
+  assertNotNull(actual);
+  assertEquals("java.lang.Boolean", actual.getClass().getName());
+  assertEquals("false", String.valueOf(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=12:30:45, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput103() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "setManagedReferenceName", new String[]{"java.lang.String"}, new String[]{"\u00e9"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getPropertyIndex", ""}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "_throwAsIOE", "java.lang.Exception,java.lang.Object", "<empty>", "<s:>"}});
+  assertNull(actual);
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=\u00e9, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput104() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "setManagedReferenceName", new String[]{"java.lang.String"}, new String[]{""}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getPropertyIndex", ""}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "_throwAsIOE", "java.lang.Exception,java.lang.Object", "<empty>", "<s:>"}});
+  assertNull(actual);
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput105() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "setManagedReferenceName", new String[]{"java.lang.String"}, new String[]{"1.5f"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getPropertyIndex", ""}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "_throwAsIOE", "java.lang.Exception,java.lang.Object", "<empty>", "<s:>"}});
+  assertNull(actual);
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=1.5f, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput106() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "setManagedReferenceName", new String[]{"java.lang.String"}, new String[]{"1.5fa b2147483648"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getPropertyIndex", ""}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "_throwAsIOE", "java.lang.Exception,java.lang.Object", "<empty>", "<s:>"}});
+  assertNull(actual);
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=1.5fa b2147483648, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=fals...#202#632192293", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput107() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "instantiationException", new String[]{"java.lang.Class", "java.lang.Throwable"}, new String[]{"<sample:3>", "<sample:0>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "converterInstance", "com.fasterxml.jackson.databind.introspect.Annotated,java.lang.Object", "<sample:4>", "<b:true>"}}), new String[][]{{"getPathReference", "java.lang.StringBuilder", "6"}, {"append", "long", "6"}});
+  assertNotNull(actual);
+  assertEquals("java.lang.StringBuilder", actual.getClass().getName());
+  assertEquals("sample3", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput108() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "_calcName", new String[]{"java.lang.Class"}, new String[]{"<sample:2>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "instantiationException", "java.lang.Class,java.lang.Throwable", "<sample:2>", "<sample:1>"}});
+  assertNotNull(actual);
+  assertEquals("java.lang.String", actual.getClass().getName());
+  assertEquals("generated.algorithm.SearchInputFactory_scaffolding$GenericBase", String.valueOf(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput109() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "_calcName", new String[]{"java.lang.Class"}, new String[]{"<empty>"}, false);
+  assertNotNull(actual);
+  assertEquals("java.lang.String", actual.getClass().getName());
+  assertEquals("java.lang.String", String.valueOf(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput110() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "_calcName", new String[]{"java.lang.Class"}, new String[]{"<null>"}, false, 1, new String[][]{}); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput111() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "wrongTokenException", new String[]{"com.fasterxml.jackson.core.JsonParser", "com.fasterxml.jackson.core.JsonToken", "java.lang.String"}, new String[]{"<sample:6>", "<sample:1>", "0xFFFFFFFF"}, false);
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.JsonMappingException", actual.getClass().getName());
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput112() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "wrongTokenException", new String[]{"com.fasterxml.jackson.core.JsonParser", "com.fasterxml.jackson.core.JsonToken", "java.lang.String"}, new String[]{"<sample:1>", "<sample:1>", "0xFFFFFFFF"}, false);
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.JsonMappingException", actual.getClass().getName());
+  assertEquals("com.fasterxml.jackson.databind.JsonMappingException: Unexpected token (null), expected START_OBJECT: 0xFFFFFFFF\n at [Source: 2; line: 1, column: 1] {getLocalizedMessage=Unexpected token (null), expect...#501#435361481", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput113() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "keyDeserializerInstance", new String[]{"com.fasterxml.jackson.databind.introspect.Annotated", "java.lang.Object"}, new String[]{"<sample:2>", "<i:0>"}, false); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.IllegalStateException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput114() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "weirdKeyException", new String[]{"java.lang.Class", "java.lang.String", "java.lang.String"}, new String[]{"<sample:3>", "/a/b", "1"}, false, 7, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "getBase64Variant", ""}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.exc.InvalidFormatException", actual.getClass().getName());
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=true}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput115() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "hasViews", new String[]{}, new String[]{}, false);
+  assertNotNull(actual);
+  assertEquals("java.lang.Boolean", actual.getClass().getName());
+  assertEquals("false", String.valueOf(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput116() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "hasViews", new String[]{}, new String[]{}, false, 1, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "set", "java.lang.Object,java.lang.Object", "<b:true>", "<s:b>"}});
+  assertNotNull(actual);
+  assertEquals("java.lang.Boolean", actual.getClass().getName());
+  assertEquals("false", String.valueOf(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput117() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "hasViews", new String[]{}, new String[]{}, false, 2, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "set", "java.lang.Object,java.lang.Object", "<b:true>", "<s:b>"}});
+  assertNotNull(actual);
+  assertEquals("java.lang.Boolean", actual.getClass().getName());
+  assertEquals("false", String.valueOf(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=true, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput118() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "hasViews", new String[]{}, new String[]{}, false, 3, new String[][]{});
+  assertNotNull(actual);
+  assertEquals("java.lang.Boolean", actual.getClass().getName());
+  assertEquals("false", String.valueOf(actual));
+  assertEquals("receiver state after the call", "[property 'sample'] {getCreatorIndex=-1, getManagedReferenceName=null, getName=sample, getPropertyIndex=-1, hasValueDeserializer=true, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput119() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "objectIdResolverInstance", new String[]{"com.fasterxml.jackson.databind.introspect.Annotated", "com.fasterxml.jackson.databind.introspect.ObjectIdInfo"}, new String[]{"<sample:2>", "<sample:6>"}, false); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput120() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "deserializeAndSet", new String[]{"com.fasterxml.jackson.core.JsonParser", "com.fasterxml.jackson.databind.DeserializationContext", "java.lang.Object"}, new String[]{"<sample:6>", "<sample:3>", "<s:key>"}, false); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput121() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "createInstance", new String[]{"com.fasterxml.jackson.databind.DeserializationConfig", "com.fasterxml.jackson.core.JsonParser", "com.fasterxml.jackson.databind.InjectableValues"}, new String[]{"<null>", "<sample:7>", "<sample:6>"}, false); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput122() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "reportUnknownProperty", new String[]{"java.lang.Object", "java.lang.String", "com.fasterxml.jackson.databind.JsonDeserializer"}, new String[]{"<i:2>", "1e10", "<sample:4>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "_desc", "java.lang.String", "-1.5"}});
+  assertNull(actual);
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput123() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "deserialize", new String[]{"com.fasterxml.jackson.core.JsonParser", "com.fasterxml.jackson.databind.DeserializationContext"}, new String[]{"<null>", "<sample:0>"}, false); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput124() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "visibleInView", new String[]{"java.lang.Class"}, new String[]{"<null>"}, false, 2, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withSimpleName", "java.lang.String", "<a>b</a>"}});
+  assertNotNull(actual);
+  assertEquals("java.lang.Boolean", actual.getClass().getName());
+  assertEquals("true", String.valueOf(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=true, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput125() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "weirdStringException", new String[]{"java.lang.String", "java.lang.Class", "java.lang.String"}, new String[]{"1.1234567890123456", "<sample:2>", "1e10"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "checkUnresolvedObjectId", ""}}); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput126() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "weirdStringException", new String[]{"java.lang.String", "java.lang.Class", "java.lang.String"}, new String[]{"1.1234567890123456", "<sample:5>", "Ee110"}, false, 3, new String[][]{});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.exc.InvalidFormatException", actual.getClass().getName());
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=true}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput127() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "constructType", new String[]{"java.lang.Class"}, new String[]{"<sample:1>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "objectIdResolverInstance", "com.fasterxml.jackson.databind.introspect.Annotated,com.fasterxml.jackson.databind.introspect.ObjectIdInfo", "<sample:6>", "<sample:4>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "leaseObjectBuffer", ""}}); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput128() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "getContextualType", new String[]{}, new String[]{}, false, 1, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "handleSecondaryContextualization", "com.fasterxml.jackson.databind.JsonDeserializer,com.fasterxml.jackson.databind.BeanProperty", "<sample:2>", "<sample:4>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "objectIdGeneratorInstance", "com.fasterxml.jackson.databind.introspect.Annotated,com.fasterxml.jackson.databind.introspect.ObjectIdInfo", "<sample:6>", "<sample:6>"}});
+  assertNull(actual);
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput129() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "getContextualType", new String[]{}, new String[]{}, false, 2, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "handleSecondaryContextualization", "com.fasterxml.jackson.databind.JsonDeserializer,com.fasterxml.jackson.databind.BeanProperty", "<sample:2>", "<sample:4>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "objectIdGeneratorInstance", "com.fasterxml.jackson.databind.introspect.Annotated,com.fasterxml.jackson.databind.introspect.ObjectIdInfo", "<sample:6>", "<sample:6>"}});
+  assertNull(actual);
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=true}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput130() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getCreatorIndex", new String[]{}, new String[]{}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "visibleInView", "java.lang.Class", "<sample:1>"}});
+  assertNotNull(actual);
+  assertEquals("java.lang.Integer", actual.getClass().getName());
+  assertEquals("-1", String.valueOf(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput131() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withSimpleName", new String[]{"java.lang.String"}, new String[]{"2147483648"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getCreatorIndex", ""}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getValueTypeDeserializer", ""}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", actual.getClass().getName());
+  assertEquals("[property '2147483648'] {getCreatorIndex=-1, getManagedReferenceName=null, getName=2147483648, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequir...#209#1904103718", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput132() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withSimpleName", new String[]{"java.lang.String"}, new String[]{"21174882648"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getCreatorIndex", ""}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getValueTypeDeserializer", ""}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", actual.getClass().getName());
+  assertEquals("[property '21174882648'] {getCreatorIndex=-1, getManagedReferenceName=null, getName=21174882648, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequ...#211#1771303722", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput133() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withSimpleName", new String[]{"java.lang.String"}, new String[]{"null"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getCreatorIndex", ""}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getValueTypeDeserializer", ""}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", actual.getClass().getName());
+  assertEquals("[property 'null'] {getCreatorIndex=-1, getManagedReferenceName=null, getName=null, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput134() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "handlePrimaryContextualization", new String[]{"com.fasterxml.jackson.databind.JsonDeserializer", "com.fasterxml.jackson.databind.BeanProperty"}, new String[]{"<sample:4>", "<sample:2>"}, false);
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.deser.impl.FailingDeserializer", actual.getClass().getName());
+  assertEquals("{isCachable=false}", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput135() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "readValue", new String[]{"com.fasterxml.jackson.core.JsonParser", "com.fasterxml.jackson.databind.JavaType"}, new String[]{"<sample:6>", "<sample:1>"}, false); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput136() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "unknownTypeException", new String[]{"com.fasterxml.jackson.databind.JavaType", "java.lang.String"}, new String[]{"<null>", "123456789012345678901234567890"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "handleSecondaryContextualization", "com.fasterxml.jackson.databind.JsonDeserializer,com.fasterxml.jackson.databind.BeanProperty,com.fasterxml.jackson.databind.JavaType", "<sample:5>", "<sample:2>", "<sample:4>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "returnObjectBuffer", "com.fasterxml.jackson.databind.util.ObjectBuffer", "<sample:0>"}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.JsonMappingException", actual.getClass().getName());
+  assertEquals("com.fasterxml.jackson.databind.JsonMappingException: Could not resolve type id '123456789012345678901234567890' into a subtype of null {getLocalizedMessage=Could not resolve type id '12345678901234567...#492#-1499604412", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput137() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "hasValueDeserializerFor", new String[]{"com.fasterxml.jackson.databind.JavaType"}, new String[]{"<sample:3>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "findObjectId", "java.lang.Object,com.fasterxml.jackson.annotation.ObjectIdGenerator", "<b:true>", "<sample:1>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "mappingException", "java.lang.Class", "<sample:2>"}}); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput138() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "_throwAsIOE", new String[]{"java.lang.Exception"}, new String[]{"<sample:2>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withSimpleName", "java.lang.String", "1.12345678901234567"}}); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("com.fasterxml.jackson.databind.JsonMappingException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput139() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "findObjectId", new String[]{"java.lang.Object", "com.fasterxml.jackson.annotation.ObjectIdGenerator"}, new String[]{"<i:2>", "<sample:6>"}, false, 1, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "getContextualType", ""}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.deser.impl.ReadableObjectId", actual.getClass().getName());
+  assertEquals("{hasReferringProperties=false}", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput140() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "hasValueDeserializerFor", new String[]{"com.fasterxml.jackson.databind.JavaType"}, new String[]{"<null>"}, false, 1, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "findObjectId", "java.lang.Object,com.fasterxml.jackson.annotation.ObjectIdGenerator", "<s:a>", "<sample:1>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "mappingException", "java.lang.Class", "<sample:3>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "weirdStringException", "java.lang.Class,java.lang.String", "<sample:3>", "+1"}}); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.IllegalArgumentException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput141() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "getTimeZone", new String[]{}, new String[]{}, false); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput142() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "getConfig", new String[]{}, new String[]{}, false, 4, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "readValue", "com.fasterxml.jackson.core.JsonParser,com.fasterxml.jackson.databind.JavaType", "<sample:3>", "<sample:0>"}});
+  assertNull(actual);
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput143() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withValueDeserializer", new String[]{"com.fasterxml.jackson.databind.JsonDeserializer"}, new String[]{"<sample:1>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getValueTypeDeserializer", ""}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getAnnotation", "java.lang.Class", "<sample:2>"}}), new String[][]{{"hasValueDeserializer", "", "7"}});
+  assertNotNull(actual);
+  assertEquals("java.lang.Boolean", actual.getClass().getName());
+  assertEquals("false", String.valueOf(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput144() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withValueDeserializer", new String[]{"com.fasterxml.jackson.databind.JsonDeserializer"}, new String[]{"<sample:5>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getValueTypeDeserializer", ""}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getAnnotation", "java.lang.Class", "<sample:2>"}}), new String[][]{{"hasValueDeserializer", "", "7"}});
+  assertNotNull(actual);
+  assertEquals("java.lang.Boolean", actual.getClass().getName());
+  assertEquals("true", String.valueOf(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput145() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withValueDeserializer", new String[]{"com.fasterxml.jackson.databind.JsonDeserializer"}, new String[]{"<sample:2>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getValueTypeDeserializer", ""}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getAnnotation", "java.lang.Class", "<sample:0>"}}), new String[][]{{"hasValueDeserializer", "", "7"}, {"getName", "", "0"}});
+  assertNotNull(actual);
+  assertEquals("java.lang.String", actual.getClass().getName());
+  assertEquals("", String.valueOf(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput146() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withValueDeserializer", new String[]{"com.fasterxml.jackson.databind.JsonDeserializer"}, new String[]{"<sample:4>"}, false, 7, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getValueTypeDeserializer", ""}}), new String[][]{{"hasValueDeserializer", "", "7"}, {"getName", "", "0"}});
+  assertNotNull(actual);
+  assertEquals("java.lang.String", actual.getClass().getName());
+  assertEquals("sample", String.valueOf(actual));
+  assertEquals("receiver state after the call", "[property 'sample'] {getCreatorIndex=-1, getManagedReferenceName=null, getName=sample, getPropertyIndex=-1, hasValueDeserializer=true, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput147() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "setObjectIdInfo", new String[]{"com.fasterxml.jackson.databind.introspect.ObjectIdInfo"}, new String[]{"<sample:0>"}, false);
+  assertNull(actual);
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput148() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "setObjectIdInfo", new String[]{"com.fasterxml.jackson.databind.introspect.ObjectIdInfo"}, new String[]{"<sample:5>"}, false, 3, new String[][]{});
+  assertNull(actual);
+  assertEquals("receiver state after the call", "[property 'sample'] {getCreatorIndex=-1, getManagedReferenceName=null, getName=sample, getPropertyIndex=-1, hasValueDeserializer=true, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput149() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "_valueDesc", new String[]{}, new String[]{}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "mappingException", "java.lang.Class", "<sample:1>"}});
+  assertNotNull(actual);
+  assertEquals("java.lang.String", actual.getClass().getName());
+  assertEquals("[N/A]", String.valueOf(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput150() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "assignIndex", new String[]{"int"}, new String[]{"10"}, false);
+  assertNull(actual);
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=10, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput151() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "assignIndex", new String[]{"int"}, new String[]{"5"}, false);
+  assertNull(actual);
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=5, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput152() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "assignIndex", new String[]{"int"}, new String[]{"2"}, false);
+  assertNull(actual);
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=2, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput153() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "assignIndex", new String[]{"int"}, new String[]{"-2"}, false);
+  assertNull(actual);
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-2, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput154() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "getNodeFactory", new String[]{}, new String[]{}, false, 4, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "mappingException", "java.lang.Class,com.fasterxml.jackson.core.JsonToken", "<null>", "<sample:7>"}}); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput155() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "getNodeFactory", new String[]{}, new String[]{}, false, 7, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "mappingException", "java.lang.Class,com.fasterxml.jackson.core.JsonToken", "<null>", "<sample:7>"}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.node.JsonNodeFactory", actual.getClass().getName());
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=true}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput156() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "getNodeFactory", new String[]{}, new String[]{}, false, 19, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "mappingException", "java.lang.String", ".5"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "checkUnresolvedObjectId", ""}}), new String[][]{{"arrayNode", "", "1"}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.node.ArrayNode", actual.getClass().getName());
+  assertEquals("[] {canConvertToInt=false, canConvertToLong=false, getNodeType=ARRAY, isArray=true, isBigDecimal=false, isBigInteger=false, isBinary=false, isBoolean=false, isContainerNode=true, isDouble=false, isFlo...#310#-1644340141", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=true}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput157() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getDeclaringClass", new String[]{}, new String[]{}, false, 15, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "hasViews", ""}}); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput158() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withValueDeserializer", new String[]{"com.fasterxml.jackson.databind.JsonDeserializer"}, new String[]{"<sample:2>"}, false, 4, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getFullName", ""}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", actual.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput159() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "instantiationException", new String[]{"java.lang.Class", "java.lang.String"}, new String[]{"<sample:2>", "1.5d"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "findObjectId", "java.lang.Object,com.fasterxml.jackson.annotation.ObjectIdGenerator", "<i:0>", "<sample:6>"}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.JsonMappingException", actual.getClass().getName());
+  assertEquals("com.fasterxml.jackson.databind.JsonMappingException: Can not construct instance of generated.algorithm.SearchInputFactory_scaffolding$GenericBase, problem: 1.5d {getLocalizedMessage=Can not construct ...#518#-846778714", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput160() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "instantiationException", new String[]{"java.lang.Class", "java.lang.String"}, new String[]{"<sample:2>", "1.5\"H"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "findObjectId", "java.lang.Object,com.fasterxml.jackson.annotation.ObjectIdGenerator", "<i:0>", "<sample:6>"}}), new String[][]{{"prependPath", "com.fasterxml.jackson.databind.JsonMappingException$Reference", "3"}, {"getPath", "", "0"}});
+  assertNotNull(actual);
+  assertEquals("java.util.Collections$UnmodifiableList", actual.getClass().getName());
+  assertEquals("[java.lang.String[\"a\"]]", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput161() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "instantiationException", new String[]{"java.lang.Class", "java.lang.String"}, new String[]{"<empty>", "1.5\"H"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "findObjectId", "java.lang.Object,com.fasterxml.jackson.annotation.ObjectIdGenerator", "<i:-2147483566>", "<sample:6>"}}), new String[][]{{"prependPath", "com.fasterxml.jackson.databind.JsonMappingException$Reference", "3"}, {"getPath", "", "0"}, {"subList", "int,int", "6"}}); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.IndexOutOfBoundsException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput162() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "deserializeSetAndReturn", new String[]{"com.fasterxml.jackson.core.JsonParser", "com.fasterxml.jackson.databind.DeserializationContext", "java.lang.Object"}, new String[]{"<sample:6>", "<sample:3>", "<i:-1>"}, false, 4, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getValueTypeDeserializer", ""}}); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput163() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "endOfInputException", new String[]{"java.lang.Class"}, new String[]{"<null>"}, false); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput164() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "endOfInputException", new String[]{"java.lang.Class"}, new String[]{"<sample:1>"}, false);
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.JsonMappingException", actual.getClass().getName());
+  assertEquals("com.fasterxml.jackson.databind.JsonMappingException: Unexpected end-of-input when trying to deserialize a generated.algorithm.SearchInputFactory_scaffolding$GenericSub {getLocalizedMessage=Unexpected ...#525#1281814152", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput165() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "endOfInputException", new String[]{"java.lang.Class"}, new String[]{"<sample:2>"}, false), new String[][]{{"getSuppressed", "", "5"}});
+  assertNotNull(actual);
+  assertEquals("[Ljava.lang.Throwable;", actual.getClass().getName());
+  assertEquals("[]", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput166() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "checkUnresolvedObjectId", new String[]{}, new String[]{}, false, 7, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "getFactory", ""}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "findClass", "java.lang.String", "2020-02-30T25:61:61"}});
+  assertNull(actual);
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=true}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput167() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "checkUnresolvedObjectId", new String[]{}, new String[]{}, false, 8, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "getFactory", ""}});
+  assertNull(actual);
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput168() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "weirdStringException", new String[]{"java.lang.Class", "java.lang.String"}, new String[]{"<empty>", "a,b,c"}, false); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput169() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "parseDate", new String[]{"java.lang.String"}, new String[]{"Hello, World"}, false); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput170() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "setViews", new String[]{"java.lang.Class[]"}, new String[]{"<sample:0>"}, false);
+  assertNull(actual);
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=true, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput171() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "setViews", new String[]{"java.lang.Class[]"}, new String[]{"<null>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "visibleInView", "java.lang.Class", "<null>"}});
+  assertNull(actual);
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput172() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "copy", new String[]{}, new String[]{}, false, 7, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "canOverrideAccessModifiers", ""}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "_valueDesc", ""}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", actual.getClass().getName());
+  assertEquals("{canOverrideAccessModifiers=true}", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=true}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput173() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "copy", new String[]{}, new String[]{}, false, 7, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "canOverrideAccessModifiers", ""}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "_valueDesc", ""}}), new String[][]{{"findContextualValueDeserializer", "com.fasterxml.jackson.databind.JavaType,com.fasterxml.jackson.databind.BeanProperty", "7"}}); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput174() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "constructCalendar", new String[]{"java.util.Date"}, new String[]{"<null>"}, false); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput175() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "wrongTokenException", new String[]{"com.fasterxml.jackson.core.JsonParser", "com.fasterxml.jackson.core.JsonToken", "java.lang.String"}, new String[]{"<sample:6>", "<sample:4>", "[1,2]"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "checkUnresolvedObjectId", ""}}), new String[][]{{"fillInStackTrace", "", "3"}, {"getStackTrace", "", "4"}});
+  assertNotNull(actual);
+  assertEquals("[Ljava.lang.StackTraceElement;", actual.getClass().getName());
+  assertEquals("[java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke0(Native Method), java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke(NativeMethodAccessorImpl.java:62), java.base/jdk.interna...#792#258377651", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput176() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "wrongTokenException", new String[]{"com.fasterxml.jackson.core.JsonParser", "com.fasterxml.jackson.core.JsonToken", "java.lang.String"}, new String[]{"<sample:6>", "<sample:2>", "[1,2]"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "deserializerInstance", "com.fasterxml.jackson.databind.introspect.Annotated,java.lang.Object", "<null>", "<i:2>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "checkUnresolvedObjectId", ""}}), new String[][]{{"fillInStackTrace", "", "3"}, {"getStackTrace", "", "1"}});
+  assertNotNull(actual);
+  assertEquals("[Ljava.lang.StackTraceElement;", actual.getClass().getName());
+  assertEquals("[java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke0(Native Method), java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke(NativeMethodAccessorImpl.java:62), java.base/jdk.interna...#792#258377651", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput177() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "wrongTokenException", new String[]{"com.fasterxml.jackson.core.JsonParser", "com.fasterxml.jackson.core.JsonToken", "java.lang.String"}, new String[]{"<sample:7>", "<sample:3>", "[11,T2]a,b,c"}, false, 8, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "deserializerInstance", "com.fasterxml.jackson.databind.introspect.Annotated,java.lang.Object", "<sample:7>", "<i:2>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "findContextualValueDeserializer", "com.fasterxml.jackson.databind.JavaType,com.fasterxml.jackson.databind.BeanProperty", "<sample:6>", "<sample:1>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "hasValueDeserializerFor", "com.fasterxml.jackson.databind.JavaType,java.util.concurrent.atomic.AtomicReference", "<null>", "<empty>"}}); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput178() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "wrongTokenException", new String[]{"com.fasterxml.jackson.core.JsonParser", "com.fasterxml.jackson.core.JsonToken", "java.lang.String"}, new String[]{"<sample:6>", "<sample:2>", "[21,dT2]a,b,c"}, false, 3, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "deserializerInstance", "com.fasterxml.jackson.databind.introspect.Annotated,java.lang.Object", "<sample:4>", "<i:2>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "hasValueDeserializerFor", "com.fasterxml.jackson.databind.JavaType,java.util.concurrent.atomic.AtomicReference", "<sample:5>", "<empty>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "handleSecondaryContextualization", "com.fasterxml.jackson.databind.JsonDeserializer,com.fasterxml.jackson.databind.BeanProperty,com.fasterxml.jackson.databind.JavaType", "<sample:4>", "<sample:0>", "<sample:7>"}}), new String[][]{{"fillInStackTrace", "", "3"}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.JsonMappingException", actual.getClass().getName());
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=true}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput179() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "canOverrideAccessModifiers", new String[]{}, new String[]{}, false); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput180() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getMember", new String[]{}, new String[]{}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "assignIndex", "int", "0"}});
+  assertNull(actual);
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=0, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput181() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getMember", new String[]{}, new String[]{}, false, 2, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "assignIndex", "int", "0"}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "hasValueDeserializer", ""}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "set", "java.lang.Object,java.lang.Object", "<s:key>", "<sample:0>"}});
+  assertNull(actual);
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=0, hasValueDeserializer=true, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput182() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getMember", new String[]{}, new String[]{}, false, 3, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "assignIndex", "int", "0"}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "hasValueDeserializer", ""}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "set", "java.lang.Object,java.lang.Object", "<s:key>", "<sample:0>"}});
+  assertNull(actual);
+  assertEquals("receiver state after the call", "[property 'sample'] {getCreatorIndex=-1, getManagedReferenceName=null, getName=sample, getPropertyIndex=0, hasValueDeserializer=true, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput183() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getMember", new String[]{}, new String[]{}, false, 5, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "hasValueDeserializer", ""}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "set", "java.lang.Object,java.lang.Object", "<s:key>", "<sample:0>"}});
+  assertNull(actual);
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput184() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "getParser", new String[]{}, new String[]{}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "findRootValueDeserializer", "com.fasterxml.jackson.databind.JavaType", "<sample:4>"}});
+  assertNull(actual);
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput185() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "isEnabled", new String[]{"com.fasterxml.jackson.databind.MapperFeature"}, new String[]{"<sample:1>"}, false); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput186() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "getLocale", new String[]{}, new String[]{}, false); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput187() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "getLocale", new String[]{}, new String[]{}, false, 11, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "readValue", "com.fasterxml.jackson.core.JsonParser,com.fasterxml.jackson.databind.JavaType", "<sample:0>", "<sample:4>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "weirdNumberException", "java.lang.Number,java.lang.Class,java.lang.String", "<d:1.5>", "<null>", "{\"a:1}"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "constructCalendar", "java.util.Date", "<sample:0>"}});
+  assertNotNull(actual);
+  assertEquals("java.util.Locale", actual.getClass().getName());
+  assertEquals("a {getCountry=, getDisplayCountry=, getDisplayLanguage=a, getDisplayName=a, getDisplayScript=, getDisplayVariant=, getISO3Country=, getISO3Language=!MissingResourceException, getLanguage=a, getScript=...#235#869437072", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=true}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput188() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "hasValueTypeDeserializer", new String[]{}, new String[]{}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getMember", ""}});
+  assertNotNull(actual);
+  assertEquals("java.lang.Boolean", actual.getClass().getName());
+  assertEquals("false", String.valueOf(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput189() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "hasValueTypeDeserializer", new String[]{}, new String[]{}, false, 2, new String[][]{});
+  assertNotNull(actual);
+  assertEquals("java.lang.Boolean", actual.getClass().getName());
+  assertEquals("false", String.valueOf(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=true, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput190() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "hasValueTypeDeserializer", new String[]{}, new String[]{}, false, 3, new String[][]{});
+  assertNotNull(actual);
+  assertEquals("java.lang.Boolean", actual.getClass().getName());
+  assertEquals("false", String.valueOf(actual));
+  assertEquals("receiver state after the call", "[property 'sample'] {getCreatorIndex=-1, getManagedReferenceName=null, getName=sample, getPropertyIndex=-1, hasValueDeserializer=true, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput191() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "getConfig", new String[]{}, new String[]{}, false, 2, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "endOfInputException", "java.lang.Class", "<sample:0>"}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.DeserializationConfig", actual.getClass().getName());
+  assertEquals("{canOverrideAccessModifiers=true, getDeserializationFeatures=1838224, getRootName=null, isAnnotationProcessingEnabled=true, shouldSortPropertiesAlphabetically=false}", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=true}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput192() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "handlePrimaryContextualization", new String[]{"com.fasterxml.jackson.databind.JsonDeserializer", "com.fasterxml.jackson.databind.BeanProperty", "com.fasterxml.jackson.databind.JavaType"}, new String[]{"<sample:4>", "<sample:0>", "<sample:0>"}, false);
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.deser.impl.FailingDeserializer", actual.getClass().getName());
+  assertEquals("{isCachable=false}", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput193() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getAnnotation", new String[]{"java.lang.Class"}, new String[]{"<sample:3>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getValueDeserializer", ""}});
+  assertNull(actual);
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput194() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getAnnotation", new String[]{"java.lang.Class"}, new String[]{"<sample:0>"}, false, 3, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getType", ""}});
+  assertNull(actual);
+  assertEquals("receiver state after the call", "[property 'sample'] {getCreatorIndex=-1, getManagedReferenceName=null, getName=sample, getPropertyIndex=-1, hasValueDeserializer=true, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput195() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getAnnotation", new String[]{"java.lang.Class"}, new String[]{"<sample:0>"}, false, 2, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getType", ""}});
+  assertNull(actual);
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=true, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput196() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "unknownTypeException", new String[]{"com.fasterxml.jackson.databind.JavaType", "java.lang.String", "java.lang.String"}, new String[]{"<sample:2>", "1e10", "-1.5"}, false);
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.JsonMappingException", actual.getClass().getName());
+  assertEquals("com.fasterxml.jackson.databind.JsonMappingException: Could not resolve type id '1e10' into a subtype of [collection type; class java.lang.String, contains [simple type, class generated.algorithm.Searc...#602#194482066", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput197() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "unknownTypeException", new String[]{"com.fasterxml.jackson.databind.JavaType", "java.lang.String", "java.lang.String"}, new String[]{"<sample:6>", "1e1", "-1.5"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "readValue", "com.fasterxml.jackson.core.JsonParser,com.fasterxml.jackson.databind.JavaType", "<sample:0>", "<sample:7>"}}), new String[][]{{"getLocalizedMessage", "", "5"}});
+  assertNotNull(actual);
+  assertEquals("java.lang.String", actual.getClass().getName());
+  assertEquals("Could not resolve type id '1e1' into a subtype of [simple type, class generated.algorithm.SearchInputFactory_scaffolding$GenericSub]: -1.5", String.valueOf(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput198() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "unknownTypeException", new String[]{"com.fasterxml.jackson.databind.JavaType", "java.lang.String", "java.lang.String"}, new String[]{"<sample:7>", "Title", "0x123456789"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "getActiveView", ""}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "isEnabled", "com.fasterxml.jackson.databind.MapperFeature", "<sample:5>"}}), new String[][]{{"getPath", "", "2"}, {"removeAll", "java.util.Collection", "4"}, {"isEmpty", "", "5"}});
+  assertNotNull(actual);
+  assertEquals("java.lang.Boolean", actual.getClass().getName());
+  assertEquals("true", String.valueOf(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput199() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withSimpleName", new String[]{"java.lang.String"}, new String[]{"12:30:45"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getWrapperName", ""}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", actual.getClass().getName());
+  assertEquals("[property '12:30:45'] {getCreatorIndex=-1, getManagedReferenceName=null, getName=12:30:45, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=f...#205#-1639279082", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput200() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withSimpleName", new String[]{"java.lang.String"}, new String[]{"1b:30:45-1.4"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getWrapperName", ""}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", actual.getClass().getName());
+  assertEquals("[property '1b:30:45-1.4'] {getCreatorIndex=-1, getManagedReferenceName=null, getName=1b:30:45-1.4, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRe...#213#1855058378", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput201() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withSimpleName", new String[]{"java.lang.String"}, new String[]{"1b:30:45-1.4"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getWrapperName", ""}}), new String[][]{{"getType", "", "0"}});
+  assertNull(actual);
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput202() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withSimpleName", new String[]{"java.lang.String"}, new String[]{"1L"}, false, 2, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getWrapperName", ""}}), new String[][]{{"getType", "", "2"}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.type.SimpleType", actual.getClass().getName());
+  assertEquals("[simple type, class generated.algorithm.SearchInputFactory_scaffolding$GenericSub] {getErasedSignature=Lgenerated/algorithm/SearchInputFactory_scaffolding$GenericS.., getGenericSignature=Lgenerated/al...#565#-1574031991", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=true, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput203() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withSimpleName", new String[]{"java.lang.String"}, new String[]{"11I"}, false, 5, new String[][]{});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", actual.getClass().getName());
+  assertEquals("[property '11I'] {getCreatorIndex=-1, getManagedReferenceName=null, getName=11I, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput204() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withSimpleName", new String[]{"java.lang.String"}, new String[]{"<F-E5TTITLE"}, false, 11, new String[][]{}), new String[][]{{"getValueTypeDeserializer", "", "7"}, {"getWrapperName", "", "3"}, {"getWrapperName", "", "1"}});
+  assertNull(actual);
+  assertEquals("receiver state after the call", "[property 'sample'] {getCreatorIndex=-1, getManagedReferenceName=null, getName=sample, getPropertyIndex=-1, hasValueDeserializer=true, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput205() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "deserializerInstance", new String[]{"com.fasterxml.jackson.databind.introspect.Annotated", "java.lang.Object"}, new String[]{"<sample:6>", "<i:2>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "constructSpecializedType", "com.fasterxml.jackson.databind.JavaType,java.lang.Class", "<sample:0>", "<sample:0>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "getActiveView", ""}}); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.IllegalStateException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput206() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "deserializerInstance", new String[]{"com.fasterxml.jackson.databind.introspect.Annotated", "java.lang.Object"}, new String[]{"<sample:6>", "<null>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "constructSpecializedType", "com.fasterxml.jackson.databind.JavaType,java.lang.Class", "<sample:0>", "<sample:0>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "getActiveView", ""}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "checkUnresolvedObjectId", ""}});
+  assertNull(actual);
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput207() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getFullName", new String[]{}, new String[]{}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getContextAnnotation", "java.lang.Class", "<null>"}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.PropertyName", actual.getClass().getName());
+  assertEquals("{a} {getNamespace=a, getSimpleName=, hasNamespace=true, hasSimpleName=false, isEmpty=false}", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput208() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "findInjectableValue", new String[]{"java.lang.Object", "com.fasterxml.jackson.databind.BeanProperty", "java.lang.Object"}, new String[]{"<s:a>", "<sample:1>", "<sample:1>"}, false); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.IllegalStateException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput209() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "constructType", new String[]{"java.lang.reflect.Type"}, new String[]{"<sample:2>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "weirdStringException", "java.lang.Class,java.lang.String", "<null>", "abc"}}); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput210() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getInjectableValueId", new String[]{}, new String[]{}, false);
+  assertNull(actual);
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput211() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getInjectableValueId", new String[]{}, new String[]{}, false, 2, new String[][]{});
+  assertNull(actual);
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=true, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput212() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getInjectableValueId", new String[]{}, new String[]{}, false, 3, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getCreatorIndex", ""}});
+  assertNull(actual);
+  assertEquals("receiver state after the call", "[property 'sample'] {getCreatorIndex=-1, getManagedReferenceName=null, getName=sample, getPropertyIndex=-1, hasValueDeserializer=true, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput213() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "instantiationException", new String[]{"java.lang.Class", "java.lang.Throwable"}, new String[]{"<sample:1>", "<null>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "getTypeFactory", ""}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "findObjectId", "java.lang.Object,com.fasterxml.jackson.annotation.ObjectIdGenerator", "<b:true>", "<sample:2>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "copy", ""}}); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput214() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "instantiationException", new String[]{"java.lang.Class", "java.lang.Throwable"}, new String[]{"<sample:3>", "<empty>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "getTypeFactory", ""}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "findObjectId", "java.lang.Object,com.fasterxml.jackson.annotation.ObjectIdGenerator", "<b:true>", "<sample:2>"}}), new String[][]{{"getPath", "", "5"}});
+  assertNotNull(actual);
+  assertEquals("java.util.Collections$EmptyList", actual.getClass().getName());
+  assertEquals("[]", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput215() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "getAnnotationIntrospector", new String[]{}, new String[]{}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "findObjectId", "java.lang.Object,com.fasterxml.jackson.annotation.ObjectIdGenerator,com.fasterxml.jackson.annotation.ObjectIdResolver", "<i:1>", "<sample:2>", "<sample:1>"}}); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput216() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "instantiationException", new String[]{"java.lang.Class", "java.lang.Throwable"}, new String[]{"<sample:3>", "<sample:0>"}, false, 5, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "findObjectId", "java.lang.Object,com.fasterxml.jackson.annotation.ObjectIdGenerator", "<sample:0>", "<sample:3>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "canOverrideAccessModifiers", ""}}), new String[][]{{"addSuppressed", "java.lang.Throwable", "1"}, {"getPathReference", "java.lang.StringBuilder", "0"}});
+  assertNotNull(actual);
+  assertEquals("java.lang.StringBuilder", actual.getClass().getName());
+  assertEquals("", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput217() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "instantiationException", new String[]{"java.lang.Class", "java.lang.Throwable"}, new String[]{"<sample:3>", "<sample:0>"}, false, 5, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "findObjectId", "java.lang.Object,com.fasterxml.jackson.annotation.ObjectIdGenerator", "<sample:0>", "<sample:3>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "canOverrideAccessModifiers", ""}}), new String[][]{{"addSuppressed", "java.lang.Throwable", "1"}, {"getPathReference", "java.lang.StringBuilder", "0"}, {"append", "char[],int,int", "7"}}); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.IndexOutOfBoundsException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput218() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "_desc", new String[]{"java.lang.String"}, new String[]{"1E-5"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "_desc", "java.lang.String", "1.1234567890123456"}});
+  assertNotNull(actual);
+  assertEquals("java.lang.String", actual.getClass().getName());
+  assertEquals("1E-5", String.valueOf(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput219() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "leaseObjectBuffer", new String[]{}, new String[]{}, false, 10, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "hasValueDeserializerFor", "com.fasterxml.jackson.databind.JavaType", "<sample:4>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "determineClassName", "java.lang.Object", "<i:1>"}}), new String[][]{{"completeAndClearBuffer", "java.lang.Object[],int,java.lang.Class", "5"}}); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.ClassCastException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput220() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "weirdStringException", new String[]{"java.lang.Class", "java.lang.String"}, new String[]{"<sample:6>", "null"}, false, 3, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "canOverrideAccessModifiers", ""}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "getTimeZone", ""}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.exc.InvalidFormatException", actual.getClass().getName());
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=true}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput221() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withName", new String[]{"java.lang.String"}, new String[]{"http://example/om/a?b=c"}, false, 1, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getPropertyIndex", ""}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getFullName", ""}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", actual.getClass().getName());
+  assertEquals("[property 'http://example/om/a?b=c'] {getCreatorIndex=-1, getManagedReferenceName=null, getName=http://example/om/a?b=c, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false...#235#-505519158", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput222() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withName", new String[]{"java.lang.String"}, new String[]{"0.5"}, false, 1, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getPropertyIndex", ""}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getFullName", ""}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", actual.getClass().getName());
+  assertEquals("[property '0.5'] {getCreatorIndex=-1, getManagedReferenceName=null, getName=0.5, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput223() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withName", new String[]{"java.lang.String"}, new String[]{"0.5a,b,c"}, false, 1, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getPropertyIndex", ""}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getFullName", ""}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", actual.getClass().getName());
+  assertEquals("[property '0.5a,b,c'] {getCreatorIndex=-1, getManagedReferenceName=null, getName=0.5a,b,c, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=f...#205#-1542842694", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput224() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withName", new String[]{"java.lang.String"}, new String[]{"05a,b,c"}, false, 1, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getPropertyIndex", ""}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getFullName", ""}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", actual.getClass().getName());
+  assertEquals("[property '05a,b,c'] {getCreatorIndex=-1, getManagedReferenceName=null, getName=05a,b,c, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=fal...#203#-2102008470", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput225() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withName", new String[]{"java.lang.String"}, new String[]{"05F,b,c"}, false, 1, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getPropertyIndex", ""}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getFullName", ""}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", actual.getClass().getName());
+  assertEquals("[property '05F,b,c'] {getCreatorIndex=-1, getManagedReferenceName=null, getName=05F,b,c, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=fal...#203#-154479478", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput226() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "createInstance", new String[]{"com.fasterxml.jackson.databind.DeserializationConfig", "com.fasterxml.jackson.core.JsonParser", "com.fasterxml.jackson.databind.InjectableValues"}, new String[]{"<sample:1>", "<sample:7>", "<sample:3>"}, false), new String[][]{{"findObjectId", "java.lang.Object,com.fasterxml.jackson.annotation.ObjectIdGenerator", "5"}, {"getKey", "", "5"}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.annotation.ObjectIdGenerator$IdKey", actual.getClass().getName());
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput227() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "createInstance", new String[]{"com.fasterxml.jackson.databind.DeserializationConfig", "com.fasterxml.jackson.core.JsonParser", "com.fasterxml.jackson.databind.InjectableValues"}, new String[]{"<sample:6>", "<sample:7>", "<sample:7>"}, false, 2, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "_valueDesc", ""}}), new String[][]{{"findObjectId", "java.lang.Object,com.fasterxml.jackson.annotation.ObjectIdGenerator", "2"}, {"getKey", "", "6"}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.annotation.ObjectIdGenerator$IdKey", actual.getClass().getName());
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=true}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput228() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getContextAnnotation", new String[]{"java.lang.Class"}, new String[]{"<null>"}, false, 5, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "hasViews", ""}}); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput229() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "instantiationException", new String[]{"java.lang.Class", "java.lang.String"}, new String[]{"<sample:3>", "0xFFFFFFFF"}, false, 7, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "getTypeFactory", ""}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "wrongTokenException", "com.fasterxml.jackson.core.JsonParser,com.fasterxml.jackson.core.JsonToken,java.lang.String", "<sample:5>", "<null>", ""}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.JsonMappingException", actual.getClass().getName());
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=true}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput230() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getName", new String[]{}, new String[]{}, false);
+  assertNotNull(actual);
+  assertEquals("java.lang.String", actual.getClass().getName());
+  assertEquals("", String.valueOf(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput231() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getName", new String[]{}, new String[]{}, false, 2, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withSimpleName", "java.lang.String", "-1.5"}});
+  assertNotNull(actual);
+  assertEquals("java.lang.String", actual.getClass().getName());
+  assertEquals("", String.valueOf(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=true, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput232() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getName", new String[]{}, new String[]{}, false, 3, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withSimpleName", "java.lang.String", "-1.5"}});
+  assertNotNull(actual);
+  assertEquals("java.lang.String", actual.getClass().getName());
+  assertEquals("sample", String.valueOf(actual));
+  assertEquals("receiver state after the call", "[property 'sample'] {getCreatorIndex=-1, getManagedReferenceName=null, getName=sample, getPropertyIndex=-1, hasValueDeserializer=true, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput233() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getName", new String[]{}, new String[]{}, false, 4, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withSimpleName", "java.lang.String", "-1.5"}}); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput234() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "getFactory", new String[]{}, new String[]{}, false);
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.deser.BeanDeserializerFactory", actual.getClass().getName());
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput235() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "mappingException", new String[]{"java.lang.String"}, new String[]{"[1,2]"}, false);
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.JsonMappingException", actual.getClass().getName());
+  assertEquals("com.fasterxml.jackson.databind.JsonMappingException: [1,2] {getLocalizedMessage=[1,2], getMessage=[1,2], getOriginalMessage=[1,2], getPathReference=, getStackTrace=[com.fasterxml.jackson.databind.Json...#245#-1037722864", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput236() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "findObjectId", new String[]{"java.lang.Object", "com.fasterxml.jackson.annotation.ObjectIdGenerator"}, new String[]{"<i:0>", "<null>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "getFactory", ""}}); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput237() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "findClass", new String[]{"java.lang.String"}, new String[]{"1.25"}, false); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.ClassNotFoundException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput238() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "findObjectId", new String[]{"java.lang.Object", "com.fasterxml.jackson.annotation.ObjectIdGenerator"}, new String[]{"<d:-0.75>", "<sample:1>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "keyDeserializerInstance", "com.fasterxml.jackson.databind.introspect.Annotated,java.lang.Object", "<sample:3>", "<d:-2469.9199999999996>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "weirdNumberException", "java.lang.Class,java.lang.String", "<sample:1>", "1.1234567890123456"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "getFactory", ""}}), new String[][]{{"resolve", "", "3"}, {"appendReferring", "com.fasterxml.jackson.databind.deser.impl.ReadableObjectId$Referring", "7"}, {"hasReferringProperties", "", "6"}});
+  assertNotNull(actual);
+  assertEquals("java.lang.Boolean", actual.getClass().getName());
+  assertEquals("true", String.valueOf(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput239() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "set", new String[]{"java.lang.Object", "java.lang.Object"}, new String[]{"<null>", "<i:-1>"}, false); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.UnsupportedOperationException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput240() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "findObjectId", new String[]{"java.lang.Object", "com.fasterxml.jackson.annotation.ObjectIdGenerator"}, new String[]{"<s:>", "<sample:0>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "constructSpecializedType", "com.fasterxml.jackson.databind.JavaType,java.lang.Class", "<sample:8>", "<null>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "handlePrimaryContextualization", "com.fasterxml.jackson.databind.JsonDeserializer,com.fasterxml.jackson.databind.BeanProperty", "<sample:2>", "<sample:5>"}}), new String[][]{{"resolve", "", "2"}, {"getKey", "", "7"}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.annotation.ObjectIdGenerator$IdKey", actual.getClass().getName());
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput241() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "getTypeFactory", new String[]{}, new String[]{}, false); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput242() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "findObjectId", new String[]{"java.lang.Object", "com.fasterxml.jackson.annotation.ObjectIdGenerator"}, new String[]{"<i:36>", "<sample:9>"}, false, 11, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "constructSpecializedType", "com.fasterxml.jackson.databind.JavaType,java.lang.Class", "<sample:9>", "<empty>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "handlePrimaryContextualization", "com.fasterxml.jackson.databind.JsonDeserializer,com.fasterxml.jackson.databind.BeanProperty", "<sample:2>", "<sample:8>"}}), new String[][]{{"resolve", "", "1"}, {"getKey", "", "7"}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.annotation.ObjectIdGenerator$IdKey", actual.getClass().getName());
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=true}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput243() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "wrongTokenException", new String[]{"com.fasterxml.jackson.core.JsonParser", "com.fasterxml.jackson.core.JsonToken", "java.lang.String"}, new String[]{"<sample:0>", "<sample:5>", "Hello, World"}, false), new String[][]{{"getCause", "", "6"}});
+  assertNull(actual);
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput244() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "findRootValueDeserializer", new String[]{"com.fasterxml.jackson.databind.JavaType"}, new String[]{"<sample:7>"}, false, 5, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "findContextualValueDeserializer", "com.fasterxml.jackson.databind.JavaType,com.fasterxml.jackson.databind.BeanProperty", "<sample:7>", "<sample:5>"}}); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput245() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "getActiveView", new String[]{}, new String[]{}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "getConfig", ""}});
+  assertNull(actual);
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput246() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "getBase64Variant", new String[]{}, new String[]{}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "weirdKeyException", "java.lang.Class,java.lang.String,java.lang.String", "<sample:3>", "2020-02-30T25:61:61", "5."}}); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput247() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "findObjectId", new String[]{"java.lang.Object", "com.fasterxml.jackson.annotation.ObjectIdGenerator"}, new String[]{"<s:E>", "<sample:8>"}, false, 9, new String[][]{}), new String[][]{{"resolve", "", "4"}});
+  assertNull(actual);
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput248() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "findObjectId", new String[]{"java.lang.Object", "com.fasterxml.jackson.annotation.ObjectIdGenerator"}, new String[]{"<sample:1>", "<sample:8>"}, false, 9, new String[][]{}), new String[][]{{"hasReferringProperties", "", "5"}});
+  assertNotNull(actual);
+  assertEquals("java.lang.Boolean", actual.getClass().getName());
+  assertEquals("false", String.valueOf(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput249() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "mappingException", new String[]{"java.lang.Class"}, new String[]{"<sample:0>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "parseDate", "java.lang.String", "-1.5"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "getContextualType", ""}}); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput250() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "findObjectId", new String[]{"java.lang.Object", "com.fasterxml.jackson.annotation.ObjectIdGenerator"}, new String[]{"<sample:0>", "<sample:6>"}, false), new String[][]{{"referringProperties", "", "1"}});
+  assertNotNull(actual);
+  assertEquals("java.util.Collections$EmptyIterator", actual.getClass().getName());
+  assertEquals("{hasNext=false}", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput251() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "findNonContextualValueDeserializer", new String[]{"com.fasterxml.jackson.databind.JavaType"}, new String[]{"<sample:6>"}, false); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput252() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getFullName", new String[]{}, new String[]{}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "setViews", "java.lang.Class[]", "<sample:0>"}}), new String[][]{{"isEmpty", "", "7"}, {"withSimpleName", "java.lang.String", "0"}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.PropertyName", actual.getClass().getName());
+  assertEquals("{a} {getNamespace=a, getSimpleName=, hasNamespace=true, hasSimpleName=false, isEmpty=false}", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=true, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput253() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getFullName", new String[]{}, new String[]{}, false, 2, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "setViews", "java.lang.Class[]", "<sample:0>"}}), new String[][]{{"isEmpty", "", "7"}, {"withSimpleName", "java.lang.String", "0"}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.PropertyName", actual.getClass().getName());
+  assertEquals(" {getNamespace=null, getSimpleName=, hasNamespace=false, hasSimpleName=false, isEmpty=true}", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=true, hasValueTypeDeserializer=false, hasViews=true, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput254() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getFullName", new String[]{}, new String[]{}, false, 2, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "setAndReturn", "java.lang.Object,java.lang.Object", "<d:1.5>", "<sample:0>"}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "setViews", "java.lang.Class[]", "<sample:0>"}}), new String[][]{{"isEmpty", "", "7"}, {"withSimpleName", "java.lang.String", "1"}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.PropertyName", actual.getClass().getName());
+  assertEquals("a {getNamespace=null, getSimpleName=a, hasNamespace=false, hasSimpleName=true, isEmpty=false}", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=true, hasValueTypeDeserializer=false, hasViews=true, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput255() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getFullName", new String[]{}, new String[]{}, false, 2, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "setAndReturn", "java.lang.Object,java.lang.Object", "<s:key>", "<sample:0>"}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "setViews", "java.lang.Class[]", "<sample:0>"}}), new String[][]{{"isEmpty", "", "7"}, {"withSimpleName", "java.lang.String", "1"}, {"getSimpleName", "", "6"}});
+  assertNotNull(actual);
+  assertEquals("java.lang.String", actual.getClass().getName());
+  assertEquals("a", String.valueOf(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=true, hasValueTypeDeserializer=false, hasViews=true, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput256() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getFullName", new String[]{}, new String[]{}, false, 3, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "setAndReturn", "java.lang.Object,java.lang.Object", "<s:key>", "<sample:0>"}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "setViews", "java.lang.Class[]", "<sample:0>"}}), new String[][]{{"isEmpty", "", "7"}, {"withSimpleName", "java.lang.String", "1"}, {"getSimpleName", "", "6"}});
+  assertNotNull(actual);
+  assertEquals("java.lang.String", actual.getClass().getName());
+  assertEquals("a", String.valueOf(actual));
+  assertEquals("receiver state after the call", "[property 'sample'] {getCreatorIndex=-1, getManagedReferenceName=null, getName=sample, getPropertyIndex=-1, hasValueDeserializer=true, hasValueTypeDeserializer=false, hasViews=true, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput257() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getFullName", new String[]{}, new String[]{}, false, 4, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "setAndReturn", "java.lang.Object,java.lang.Object", "<s:key>", "<sample:0>"}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "setViews", "java.lang.Class[]", "<sample:3>"}});
+  assertNull(actual);
+ }
+ @Test(timeout = 20000)
+ public void generatedInput258() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getFullName", new String[]{}, new String[]{}, false, 3, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "setAndReturn", "java.lang.Object,java.lang.Object", "<s:key>", "<d:1.5>"}}), new String[][]{{"isEmpty", "", "7"}, {"withSimpleName", "java.lang.String", "1"}, {"getSimpleName", "", "6"}});
+  assertNotNull(actual);
+  assertEquals("java.lang.String", actual.getClass().getName());
+  assertEquals("a", String.valueOf(actual));
+  assertEquals("receiver state after the call", "[property 'sample'] {getCreatorIndex=-1, getManagedReferenceName=null, getName=sample, getPropertyIndex=-1, hasValueDeserializer=true, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput259() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getFullName", new String[]{}, new String[]{}, false, 5, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "setAndReturn", "java.lang.Object,java.lang.Object", "<i:2>", "<d:1.5>"}}), new String[][]{{"isEmpty", "", "7"}, {"withSimpleName", "java.lang.String", "1"}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.PropertyName", actual.getClass().getName());
+  assertEquals("{a}a {getNamespace=a, getSimpleName=a, hasNamespace=true, hasSimpleName=true, isEmpty=false}", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput260() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getFullName", new String[]{}, new String[]{}, false, 13, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "assignIndex", "int", "-2147483648"}}), new String[][]{{"isEmpty", "", "7"}, {"withSimpleName", "java.lang.String", "1"}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.PropertyName", actual.getClass().getName());
+  assertEquals("{a}a {getNamespace=a, getSimpleName=a, hasNamespace=true, hasSimpleName=true, isEmpty=false}", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-2147483648, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput261() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getFullName", new String[]{}, new String[]{}, false, 13, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "assignIndex", "int", "2147483647"}}), new String[][]{{"isEmpty", "", "7"}, {"withSimpleName", "java.lang.String", "2"}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.PropertyName", actual.getClass().getName());
+  assertEquals("{a}0 {getNamespace=a, getSimpleName=0, hasNamespace=true, hasSimpleName=true, isEmpty=false}", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=2147483647, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput262() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getFullName", new String[]{}, new String[]{}, false, 14, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "assignIndex", "int", "2147483647"}}), new String[][]{{"isEmpty", "", "7"}, {"withSimpleName", "java.lang.String", "2"}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.PropertyName", actual.getClass().getName());
+  assertEquals("0 {getNamespace=null, getSimpleName=0, hasNamespace=false, hasSimpleName=true, isEmpty=false}", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=2147483647, hasValueDeserializer=true, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput263() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "setManagedReferenceName", new String[]{"java.lang.String"}, new String[]{"11.5f"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "depositSchemaProperty", "com.fasterxml.jackson.databind.jsonFormatVisitors.JsonObjectFormatVisitor", "<sample:0>"}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "toString", ""}});
+  assertNull(actual);
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=11.5f, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput264() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "deserializeAndSet", new String[]{"com.fasterxml.jackson.core.JsonParser", "com.fasterxml.jackson.databind.DeserializationContext", "java.lang.Object"}, new String[]{"<sample:7>", "<sample:6>", "<i:1>"}, false); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("com.fasterxml.jackson.databind.JsonMappingException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput265() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getMember", new String[]{}, new String[]{}, false, 3, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withName", "com.fasterxml.jackson.databind.PropertyName", "<sample:6>"}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "hasViews", ""}});
+  assertNull(actual);
+  assertEquals("receiver state after the call", "[property 'sample'] {getCreatorIndex=-1, getManagedReferenceName=null, getName=sample, getPropertyIndex=-1, hasValueDeserializer=true, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput266() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "_calcName", new String[]{"java.lang.Class"}, new String[]{"<sample:6>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "findNonContextualValueDeserializer", "com.fasterxml.jackson.databind.JavaType", "<sample:4>"}});
+  assertNotNull(actual);
+  assertEquals("java.lang.String", actual.getClass().getName());
+  assertEquals("java.util.List", String.valueOf(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput267() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "readPropertyValue", new String[]{"com.fasterxml.jackson.core.JsonParser", "com.fasterxml.jackson.databind.BeanProperty", "java.lang.Class"}, new String[]{"<sample:5>", "<null>", "<sample:0>"}, false, 7, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "parseDate", "java.lang.String", "Title"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "endOfInputException", "java.lang.Class", "<null>"}}); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput268() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getValueTypeDeserializer", new String[]{}, new String[]{}, false, 5, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withName", "java.lang.String", "5."}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "hasViews", ""}});
+  assertNull(actual);
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput269() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withName", new String[]{"java.lang.String"}, new String[]{"1.5"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "toString", ""}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", actual.getClass().getName());
+  assertEquals("[property '1.5'] {getCreatorIndex=-1, getManagedReferenceName=null, getName=1.5, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput270() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withName", new String[]{"java.lang.String"}, new String[]{"/a/b"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "hasValueDeserializer", ""}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "toString", ""}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", actual.getClass().getName());
+  assertEquals("[property '/a/b'] {getCreatorIndex=-1, getManagedReferenceName=null, getName=/a/b, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput271() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "withName", new String[]{"java.lang.String"}, new String[]{"/a.b"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "hasValueDeserializer", ""}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", actual.getClass().getName());
+  assertEquals("[property '/a.b'] {getCreatorIndex=-1, getManagedReferenceName=null, getName=/a.b, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput272() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getFullName", new String[]{}, new String[]{}, false, 3, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getMetadata", ""}}, 2);
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.PropertyName", actual.getClass().getName());
+  assertEquals("sample {getNamespace=null, getSimpleName=sample, hasNamespace=false, hasSimpleName=true, isEmpty=false}", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "[property 'sample'] {getCreatorIndex=-1, getManagedReferenceName=null, getName=sample, getPropertyIndex=-1, hasValueDeserializer=true, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput273() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getFullName", new String[]{}, new String[]{}, false, 3, new String[][]{}, 2), new String[][]{{"hasNamespace", "", "0"}});
+  assertNotNull(actual);
+  assertEquals("java.lang.Boolean", actual.getClass().getName());
+  assertEquals("false", String.valueOf(actual));
+  assertEquals("receiver state after the call", "[property 'sample'] {getCreatorIndex=-1, getManagedReferenceName=null, getName=sample, getPropertyIndex=-1, hasValueDeserializer=true, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput274() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getFullName", new String[]{}, new String[]{}, false, 4, new String[][]{}, 2);
+  assertNull(actual);
+ }
+ @Test(timeout = 20000)
+ public void generatedInput275() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getFullName", new String[]{}, new String[]{}, false, 5, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getFullName", ""}}, 2), new String[][]{{"hasNamespace", "", "0"}});
+  assertNotNull(actual);
+  assertEquals("java.lang.Boolean", actual.getClass().getName());
+  assertEquals("true", String.valueOf(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput276() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getFullName", new String[]{}, new String[]{}, false, 5, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getCreatorIndex", ""}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getFullName", ""}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "assignIndex", "int", "2"}}, 2), new String[][]{{"hasNamespace", "", "0"}});
+  assertNotNull(actual);
+  assertEquals("java.lang.Boolean", actual.getClass().getName());
+  assertEquals("true", String.valueOf(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=2, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput277() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "objectIdGeneratorInstance", new String[]{"com.fasterxml.jackson.databind.introspect.Annotated", "com.fasterxml.jackson.databind.introspect.ObjectIdInfo"}, new String[]{"<sample:3>", "<sample:6>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "_desc", "java.lang.String", "i"}}); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.NullPointerException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput278() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getObjectIdInfo", new String[]{}, new String[]{}, false);
+  assertNull(actual);
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput279() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getFullName", new String[]{}, new String[]{}, false, 9, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getMetadata", ""}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "deserializeAndSet", "com.fasterxml.jackson.core.JsonParser,com.fasterxml.jackson.databind.DeserializationContext,java.lang.Object", "<sample:7>", "<sample:7>", "<i:-1>"}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getCreatorIndex", ""}}, 1), new String[][]{{"hasSimpleName", "java.lang.String", "0"}});
+  assertNotNull(actual);
+  assertEquals("java.lang.Boolean", actual.getClass().getName());
+  assertEquals("true", String.valueOf(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput280() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getFullName", new String[]{}, new String[]{}, false, 10, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getMetadata", ""}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "deserializeAndSet", "com.fasterxml.jackson.core.JsonParser,com.fasterxml.jackson.databind.DeserializationContext,java.lang.Object", "<sample:7>", "<sample:7>", "<i:-1>"}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getCreatorIndex", ""}}, 1);
+  assertNull(actual);
+ }
+ @Test(timeout = 20000)
+ public void generatedInput281() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "getBase64Variant", new String[]{}, new String[]{}, false, 3, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "handlePrimaryContextualization", "com.fasterxml.jackson.databind.JsonDeserializer,com.fasterxml.jackson.databind.BeanProperty,com.fasterxml.jackson.databind.JavaType", "<sample:0>", "<sample:5>", "<sample:1>"}}, 1);
+  assertNull(actual);
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=true}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput282() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "getBase64Variant", new String[]{}, new String[]{}, false, 3, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "handlePrimaryContextualization", "com.fasterxml.jackson.databind.JsonDeserializer,com.fasterxml.jackson.databind.BeanProperty,com.fasterxml.jackson.databind.JavaType", "<sample:0>", "<sample:5>", "<sample:1>"}});
+  assertNull(actual);
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=true}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput283() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getMetadata", new String[]{}, new String[]{}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getManagedReferenceName", ""}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.PropertyMetadata", actual.getClass().getName());
+  assertEquals("{getDefaultValue=a, getDescription=sample, getIndex=5, getRequired=false, hasDefaultValue=true, hasDefuaultValue=true, hasIndex=true, isRequired=false}", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=false, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput284() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "getMetadata", new String[]{}, new String[]{}, false, 2, new String[][]{});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.PropertyMetadata", actual.getClass().getName());
+  assertEquals("{getDefaultValue=a, getDescription=sample, getIndex=5, getRequired=false, hasDefaultValue=true, hasDefuaultValue=true, hasIndex=true, isRequired=false}", SearchInputFactory_scaffolding.observe(actual));
+  assertEquals("receiver state after the call", "[property ''] {getCreatorIndex=-1, getManagedReferenceName=null, getName=, getPropertyIndex=-1, hasValueDeserializer=true, hasValueTypeDeserializer=false, hasViews=false, isRequired=false}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput285() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.follow(SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "createInstance", new String[]{"com.fasterxml.jackson.databind.DeserializationConfig", "com.fasterxml.jackson.core.JsonParser", "com.fasterxml.jackson.databind.InjectableValues"}, new String[]{"<sample:5>", "<sample:6>", "<sample:0>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "getTimeZone", ""}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "mappingException", "java.lang.Class", "<sample:2>"}}, 2), new String[][]{{"mappingException", "java.lang.Class", "1"}});
+  assertNotNull(actual);
+  assertEquals("com.fasterxml.jackson.databind.JsonMappingException", actual.getClass().getName());
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput286() throws Throwable {
+  Throwable thrown = null;
+  try { SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "deserializerInstance", new String[]{"com.fasterxml.jackson.databind.introspect.Annotated", "java.lang.Object"}, new String[]{"<sample:0>", "<i:-1>"}, false, 0, null, 3); } catch (Throwable caught) { thrown = caught; }
+  assertNotNull("expected an exception", thrown);
+  assertEquals("java.lang.IllegalStateException", thrown.getClass().getName());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput287() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "handlePrimaryContextualization", new String[]{"com.fasterxml.jackson.databind.JsonDeserializer", "com.fasterxml.jackson.databind.BeanProperty", "com.fasterxml.jackson.databind.JavaType"}, new String[]{"<sample:2>", "<sample:3>", "<sample:1>"}, false, 5, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "weirdNumberException", "java.lang.Class,java.lang.String", "<sample:1>", "a"}});
+  assertNull(actual);
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput288() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "determineClassName", new String[]{"java.lang.Object"}, new String[]{"<sample:0>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "instantiationException", "java.lang.Class,java.lang.Throwable", "<null>", "<empty>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "deserializerInstance", "com.fasterxml.jackson.databind.introspect.Annotated,java.lang.Object", "<sample:4>", "<i:2>"}});
+  assertNotNull(actual);
+  assertEquals("java.lang.String", actual.getClass().getName());
+  assertEquals("java.lang.String", String.valueOf(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput289() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "determineClassName", new String[]{"java.lang.Object"}, new String[]{"<s:-e>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "handleUnknownProperty", "com.fasterxml.jackson.core.JsonParser,com.fasterxml.jackson.databind.JsonDeserializer,java.lang.Object,java.lang.String", "<sample:2>", "<sample:0>", "<null>", "2020-02-30T25:61:61"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "instantiationException", "java.lang.Class,java.lang.Throwable", "<empty>", "<null>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "deserializerInstance", "com.fasterxml.jackson.databind.introspect.Annotated,java.lang.Object", "<sample:6>", "<i:2>"}}, 3);
+  assertNotNull(actual);
+  assertEquals("java.lang.String", actual.getClass().getName());
+  assertEquals("java.lang.String", String.valueOf(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput290() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "determineClassName", new String[]{"java.lang.Object"}, new String[]{"<i:1>"}, false, 0, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "instantiationException", "java.lang.Class,java.lang.Throwable", "<empty>", "<null>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "deserializerInstance", "com.fasterxml.jackson.databind.introspect.Annotated,java.lang.Object", "<sample:6>", "<i:2>"}}, 3);
+  assertNotNull(actual);
+  assertEquals("java.lang.String", actual.getClass().getName());
+  assertEquals("java.lang.Integer", String.valueOf(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput291() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "determineClassName", new String[]{"java.lang.Object"}, new String[]{"<i:-1>"}, false, 1, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "instantiationException", "java.lang.Class,java.lang.Throwable", "<empty>", "<null>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "deserializerInstance", "com.fasterxml.jackson.databind.introspect.Annotated,java.lang.Object", "<sample:6>", "<i:23>"}});
+  assertNotNull(actual);
+  assertEquals("java.lang.String", actual.getClass().getName());
+  assertEquals("java.lang.Integer", String.valueOf(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput292() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "determineClassName", new String[]{"java.lang.Object"}, new String[]{"<i:-1>"}, false, 15, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "instantiationException", "java.lang.Class,java.lang.Throwable", "<empty>", "<null>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "deserializerInstance", "com.fasterxml.jackson.databind.introspect.Annotated,java.lang.Object", "<sample:6>", "<i:23>"}});
+  assertNotNull(actual);
+  assertEquals("java.lang.String", actual.getClass().getName());
+  assertEquals("java.lang.Integer", String.valueOf(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=true}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput293() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "determineClassName", new String[]{"java.lang.Object"}, new String[]{"<i:-1>"}, false, 15, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "instantiationException", "java.lang.Class,java.lang.Throwable", "<empty>", "<null>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "deserializerInstance", "com.fasterxml.jackson.databind.introspect.Annotated,java.lang.Object", "<sample:6>", "<i:23>"}}, 2);
+  assertNotNull(actual);
+  assertEquals("java.lang.String", actual.getClass().getName());
+  assertEquals("java.lang.Integer", String.valueOf(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=true}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput294() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "determineClassName", new String[]{"java.lang.Object"}, new String[]{"<s:.>"}, false, 15, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "instantiationException", "java.lang.Class,java.lang.Throwable", "<empty>", "<null>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "deserializerInstance", "com.fasterxml.jackson.databind.introspect.Annotated,java.lang.Object", "<sample:6>", "<i:23>"}}, 2);
+  assertNotNull(actual);
+  assertEquals("java.lang.String", actual.getClass().getName());
+  assertEquals("java.lang.String", String.valueOf(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=true}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput295() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "com.fasterxml.jackson.databind.deser.DefaultDeserializationContext$Impl", "determineClassName", new String[]{"java.lang.Object"}, new String[]{"<s:9>"}, false, 16, new String[][]{{"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "constructSpecializedType", "com.fasterxml.jackson.databind.JavaType,java.lang.Class", "<sample:6>", "<null>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "instantiationException", "java.lang.Class,java.lang.Throwable", "<sample:1>", "<sample:0>"}, {"com.fasterxml.jackson.databind.deser.DefaultDeserializationContext", "deserializerInstance", "com.fasterxml.jackson.databind.introspect.Annotated,java.lang.Object", "<sample:6>", "<i:23>"}}, 2);
+  assertNotNull(actual);
+  assertEquals("java.lang.String", actual.getClass().getName());
+  assertEquals("java.lang.String", String.valueOf(actual));
+  assertEquals("receiver state after the call", "{canOverrideAccessModifiers=!NullPointerException}", SearchInputFactory_scaffolding.receiverState());
+ }
+ @Test(timeout = 20000)
+ public void generatedInput296() throws Throwable {
+  Object actual = SearchInputFactory_scaffolding.call("com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "setObjectIdInfo", new String[]{"com.fasterxml.jackson.databind.introspect.ObjectIdInfo"}, new String[]{"<null>"}, false, 4, new String[][]{{"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "set", "java.lang.Object,java.lang.Object", "<null>", "<i:0>"}, {"com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty", "_throwAsIOE", "java.lang.Exception", "<null>"}}, 3);
+  assertNull(actual);
+ }
+}

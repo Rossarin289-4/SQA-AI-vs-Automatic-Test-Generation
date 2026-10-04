@@ -1,0 +1,686 @@
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Joiner;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Predicate;
+import com.google.common.collect.ImmutableSet;
+import com.google.javascript.jscomp.CodingConvention.Bind;
+import com.google.javascript.rhino.IR;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.jstype.TernaryValue;
+import java.util.regex.Pattern;
+
+public class PeepholeSubstituteAlternateSyntaxTest {
+    @Test
+    public void testTryMinimizeNot_EQ() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(false);
+        Node original = IR.eq(IR.name("a"), IR.name("b"));
+        Node notEq = IR.not(original);
+        Node parent = IR.exprResult(notEq);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        assertEquals(Token.NE, replacement.getType());
+    }
+
+    @Test
+    public void testTryMinimizeNot_NE() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(false);
+        Node original = IR.ne(IR.name("a"), IR.name("b"));
+        Node notNe = IR.not(original);
+        Node parent = IR.exprResult(notNe);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        assertEquals(Token.EQ, replacement.getType());
+    }
+
+    @Test
+    public void testTryMinimizeNot_SHEQ() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(false);
+        Node original = IR.sheq(IR.name("a"), IR.name("b"));
+        Node notSheq = IR.not(original);
+        Node parent = IR.exprResult(notSheq);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        assertEquals(Token.SHNE, replacement.getType());
+    }
+
+    @Test
+    public void testTryMinimizeNot_SHNE() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(false);
+        Node original = IR.shne(IR.name("a"), IR.name("b"));
+        Node notShne = IR.not(original);
+        Node parent = IR.exprResult(notShne);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        assertEquals(Token.SHEQ, replacement.getType());
+    }
+
+    @Test
+    public void testTryMinimizeNot_UnsupportedOperator() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(false);
+        Node original = IR.lt(IR.name("a"), IR.name("b"));
+        Node notLt = IR.not(original);
+        Node parent = IR.exprResult(notLt);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        assertEquals(Token.NOT, replacement.getType());
+        assertEquals(Token.LT, replacement.getFirstChild().getType());
+    }
+
+    @Test
+    public void testTryMinimizeIf_FoldableElseBranch() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(false);
+        Node cond = IR.name("a");
+        Node thenBranch = IR.exprResult(IR.assign(IR.name("x"), IR.number(1)));
+        Node elseBranch = IR.exprResult(IR.assign(IR.name("x"), IR.number(2)));
+        Node ifNode = IR.ifNode(cond, IR.block(thenBranch), IR.block(elseBranch));
+        Node parent = IR.exprResult(ifNode);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        assertEquals(Token.ASSIGN, replacement.getFirstChild().getType());
+        assertEquals(Token.HOOK, replacement.getFirstChild().getLastChild().getType());
+    }
+
+    @Test
+    public void testTryMinimizeIf_FoldableThenBranch() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(false);
+        Node cond = IR.name("a");
+        Node thenBranch = IR.block(IR.returnNode(IR.number(1)));
+        Node elseBranch = IR.block(IR.returnNode(IR.number(2)));
+        Node ifNode = IR.ifNode(cond, thenBranch, elseBranch);
+        Node parent = IR.block(ifNode, IR.returnNode(IR.number(3)));
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        assertEquals(Token.RETURN, replacement.getType());
+        assertEquals(Token.HOOK, replacement.getFirstChild().getType());
+    }
+
+    @Test
+    public void testTryMinimizeIf_NotCondition() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(false);
+        Node cond = IR.name("a");
+        Node notCond = IR.not(cond);
+        Node thenBranch = IR.exprResult(IR.call(IR.name("foo")));
+        Node elseBranch = IR.exprResult(IR.call(IR.name("bar")));
+        Node ifNode = IR.ifNode(notCond, IR.block(thenBranch), IR.block(elseBranch));
+        Node parent = IR.exprResult(ifNode);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        assertEquals(Token.EXPR_RESULT, replacement.getType());
+        assertEquals(Token.AND, replacement.getFirstChild().getType());
+        assertEquals(Token.NAME, replacement.getFirstChild().getFirstChild().getType()); // Should be 'a'
+        assertEquals(Token.CALL, replacement.getFirstChild().getLastChild().getType()); // Should be bar()
+    }
+
+    @Test
+    public void testTryMinimizeIf_LiteralConditionTrue() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(false);
+        Node cond = IR.trueNode();
+        Node thenBranch = IR.exprResult(IR.call(IR.name("foo")));
+        Node elseBranch = IR.exprResult(IR.call(IR.name("bar")));
+        Node ifNode = IR.ifNode(cond, IR.block(thenBranch), IR.block(elseBranch));
+        Node parent = IR.exprResult(ifNode);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        assertEquals(Token.CALL, replacement.getType());
+        assertEquals("foo", replacement.getFirstChild().getString());
+    }
+
+    @Test
+    public void testTryMinimizeIf_LiteralConditionFalse() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(false);
+        Node cond = IR.falseNode();
+        Node thenBranch = IR.exprResult(IR.call(IR.name("foo")));
+        Node elseBranch = IR.exprResult(IR.call(IR.name("bar")));
+        Node ifNode = IR.ifNode(cond, IR.block(thenBranch), IR.block(elseBranch));
+        Node parent = IR.exprResult(ifNode);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        assertEquals(Token.CALL, replacement.getType());
+        assertEquals("bar", replacement.getFirstChild().getString());
+    }
+
+    @Test
+    public void testTryFoldSimpleFunctionCall_StringImmutable() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(false);
+        Node value = IR.string("hello");
+        Node call = IR.call(IR.name("String"), value);
+        Node parent = IR.exprResult(call);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        assertEquals(Token.ADD, replacement.getType());
+        assertEquals(Token.STRING, replacement.getFirstChild().getType());
+        assertEquals("", replacement.getFirstChild().getString());
+        assertEquals(Token.STRING, replacement.getLastChild().getType());
+        assertEquals("hello", replacement.getLastChild().getString());
+    }
+
+    @Test
+    public void testTryFoldSimpleFunctionCall_StringMutable() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(false);
+        Node value = IR.name("variable");
+        Node call = IR.call(IR.name("String"), value);
+        Node parent = IR.exprResult(call);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        assertEquals(Token.CALL, replacement.getType());
+        assertEquals("String", replacement.getFirstChild().getString());
+    }
+
+    @Test
+    public void testTrySplitComma_ExprResult() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(false);
+        Node left = IR.number(1);
+        Node right = IR.number(2);
+        Node comma = IR.comma(left, right);
+        Node parent = IR.exprResult(comma);
+        Node grandParent = IR.block(parent);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        assertEquals(Token.EXPR_RESULT, replacement.getType());
+        assertEquals(Token.NUMBER, replacement.getFirstChild().getType());
+        assertEquals(1, replacement.getFirstChild().getDouble(), 0.0);
+
+        Node statementAfter = replacement.getNext();
+        assertNotNull(statementAfter);
+        assertEquals(Token.EXPR_RESULT, statementAfter.getType());
+        assertEquals(Token.NUMBER, statementAfter.getFirstChild().getType());
+        assertEquals(2, statementAfter.getFirstChild().getDouble(), 0.0);
+    }
+
+    @Test
+    public void testTryReplaceIf_IfReturnIfReturn() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(true); // late=true
+        Node cond1 = IR.name("a");
+        Node return1 = IR.returnNode(IR.number(1));
+        Node if1 = IR.ifNode(cond1, IR.block(return1));
+
+        Node cond2 = IR.name("b");
+        Node return2 = IR.returnNode(IR.number(1));
+        Node if2 = IR.ifNode(cond2, IR.block(return2));
+
+        Node parent = IR.block(if1, if2, IR.returnNode(IR.number(2)));
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        assertEquals(Token.IF, replacement.getType());
+        assertEquals(Token.OR, replacement.getFirstChild().getType());
+        assertEquals(Token.NAME, replacement.getFirstChild().getFirstChild().getType()); // cond1
+        assertEquals(Token.NAME, replacement.getFirstChild().getLastChild().getType()); // cond2
+    }
+
+    @Test
+    public void testTryReplaceIf_IfReturnElseIfReturn() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(true); // late=true
+        Node cond1 = IR.name("a");
+        Node return1 = IR.returnNode(IR.number(1));
+        Node if1 = IR.ifNode(cond1, IR.block(return1));
+
+        Node cond2 = IR.name("b");
+        Node return2 = IR.returnNode(IR.number(1));
+        Node else2 = IR.block(return2);
+        Node if2 = IR.ifNode(cond2, IR.block(IR.exprResult(IR.name("foo"))), else2);
+
+        Node parent = IR.block(if1, if2, IR.returnNode(IR.number(2)));
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        assertEquals(Token.IF, replacement.getType());
+        assertEquals(Token.AND, replacement.getFirstChild().getType());
+        assertEquals(Token.NOT, replacement.getFirstChild().getFirstChild().getType()); // !cond1
+        assertEquals(Token.NAME, replacement.getFirstChild().getFirstChild().getLastChild().getType()); // cond1
+        assertEquals(Token.NAME, replacement.getFirstChild().getLastChild().getType()); // cond2
+    }
+
+    @Test
+    public void testTryReplaceIf_IfReturnNextReturn() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(false);
+        Node cond = IR.name("a");
+        Node thenBranch = IR.block(IR.returnNode(IR.number(1)));
+        Node nextReturn = IR.returnNode(IR.number(2));
+        Node ifNode = IR.ifNode(cond, thenBranch);
+        Node parent = IR.block(ifNode, nextReturn);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        assertEquals(Token.RETURN, replacement.getType());
+        assertEquals(Token.HOOK, replacement.getFirstChild().getType());
+        assertEquals(Token.NAME, replacement.getFirstChild().getFirstChild().getType()); // cond
+        assertEquals(Token.NUMBER, replacement.getFirstChild().getChildAtIndex(1).getType()); // 1
+        assertEquals(Token.NUMBER, replacement.getFirstChild().getLastChild().getType()); // 2
+    }
+
+    @Test
+    public void testTryReduceReturn_VoidOperand() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(false);
+        Node voidExpr = IR.voidNode(IR.number(0));
+        Node returnNode = IR.returnNode(voidExpr);
+        Node parent = IR.block(returnNode);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        assertEquals(Token.RETURN, replacement.getType());
+        assertNull(replacement.getFirstChild());
+    }
+
+    @Test
+    public void testTryReduceReturn_UndefinedName() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(false);
+        Node undefinedName = IR.name("undefined");
+        Node returnNode = IR.returnNode(undefinedName);
+        Node parent = IR.block(returnNode);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        assertEquals(Token.RETURN, replacement.getType());
+        assertNull(replacement.getFirstChild());
+    }
+
+    @Test
+    public void testTryReduceReturn_WithValue() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(false);
+        Node value = IR.number(10);
+        Node returnNode = IR.returnNode(value);
+        Node parent = IR.block(returnNode);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        assertEquals(Token.RETURN, replacement.getType());
+        assertEquals(Token.NUMBER, replacement.getFirstChild().getType());
+        assertEquals(10, replacement.getFirstChild().getDouble(), 0.0);
+    }
+
+    @Test
+    public void testTryReplaceExitWithBreak_MatchingReturn() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(false);
+        Node ifStatement = IR.ifNode(IR.trueNode(), IR.block(IR.returnNode(IR.number(1))));
+        Node returnStatement = IR.returnNode(IR.number(1));
+        Node block = IR.block(ifStatement, returnStatement);
+
+        Node replacement = peephole.optimizeSubtree(returnStatement);
+        assertEquals(Token.BREAK, replacement.getType());
+    }
+
+    @Test
+    public void testTryRemoveRedundantExit_MatchingReturn() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(false);
+        Node ifStatement = IR.ifNode(IR.trueNode(), IR.block(IR.returnNode(IR.number(1))));
+        Node returnStatement = IR.returnNode(IR.number(1));
+        Node block = IR.block(ifStatement, returnStatement);
+
+        Node replacement = peephole.optimizeSubtree(returnStatement);
+        assertNull(replacement); // Should be removed
+    }
+
+    @Test
+    public void testTryMinimizeCondition_NotAndToOrNot() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(false);
+        Node left = IR.not(IR.name("a"));
+        Node right = IR.not(IR.name("b"));
+        Node andNode = IR.and(left, right);
+        Node notAnd = IR.not(andNode);
+        Node parent = IR.exprResult(notAnd);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        assertEquals(Token.OR, replacement.getType());
+        assertEquals(Token.NAME, replacement.getFirstChild().getType()); // a
+        assertEquals(Token.NAME, replacement.getLastChild().getType()); // b
+    }
+
+    @Test
+    public void testTryMinimizeCondition_NotOrToAndNot() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(false);
+        Node left = IR.not(IR.name("a"));
+        Node right = IR.not(IR.name("b"));
+        Node orNode = IR.or(left, right);
+        Node notOr = IR.not(orNode);
+        Node parent = IR.exprResult(notOr);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        assertEquals(Token.AND, replacement.getType());
+        assertEquals(Token.NAME, replacement.getFirstChild().getType()); // a
+        assertEquals(Token.NAME, replacement.getLastChild().getType()); // b
+    }
+
+    @Test
+    public void testTryMinimizeCondition_DoubleNot() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(false);
+        Node nameNode = IR.name("a");
+        Node notName = IR.not(nameNode);
+        Node notNotName = IR.not(notName);
+        Node parent = IR.exprResult(notNotName);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        assertEquals(Token.NAME, replacement.getType());
+        assertEquals("a", replacement.getString());
+    }
+
+    @Test
+    public void testTryMinimizeCondition_OrFalse() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(false);
+        Node left = IR.name("a");
+        Node right = IR.falseNode();
+        Node orNode = IR.or(left, right);
+        Node parent = IR.exprResult(orNode);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        assertEquals(Token.NAME, replacement.getType());
+        assertEquals("a", replacement.getString());
+    }
+
+    @Test
+    public void testTryMinimizeCondition_OrTrue() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(false);
+        Node left = IR.name("a");
+        Node right = IR.trueNode();
+        Node orNode = IR.or(left, right);
+        Node parent = IR.exprResult(orNode);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        assertEquals(Token.TRUE, replacement.getType());
+    }
+
+    @Test
+    public void testTryMinimizeCondition_AndTrue() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(false);
+        Node left = IR.name("a");
+        Node right = IR.trueNode();
+        Node andNode = IR.and(left, right);
+        Node parent = IR.exprResult(andNode);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        assertEquals(Token.NAME, replacement.getType());
+        assertEquals("a", replacement.getString());
+    }
+
+    @Test
+    public void testTryMinimizeCondition_AndFalse() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(false);
+        Node left = IR.name("a");
+        Node right = IR.falseNode();
+        Node andNode = IR.and(left, right);
+        Node parent = IR.exprResult(andNode);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        assertEquals(Token.FALSE, replacement.getType());
+    }
+
+    @Test
+    public void testTryMinimizeCondition_HookTrueFalse() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(false);
+        Node cond = IR.name("a");
+        Node trueNode = IR.trueNode();
+        Node falseNode = IR.falseNode();
+        Node hookNode = IR.hook(cond, trueNode, falseNode);
+        Node parent = IR.exprResult(hookNode);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        assertEquals(Token.NAME, replacement.getType());
+        assertEquals("a", replacement.getString());
+    }
+
+    @Test
+    public void testTryMinimizeCondition_HookFalseTrue() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(false);
+        Node cond = IR.name("a");
+        Node trueNode = IR.falseNode();
+        Node falseNode = IR.trueNode();
+        Node hookNode = IR.hook(cond, trueNode, falseNode);
+        Node parent = IR.exprResult(hookNode);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        assertEquals(Token.NOT, replacement.getType());
+        assertEquals(Token.NAME, replacement.getFirstChild().getType());
+        assertEquals("a", replacement.getFirstChild().getString());
+    }
+
+    @Test
+    public void testTryMinimizeCondition_HookTrueLiteral() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(false);
+        Node cond = IR.name("a");
+        Node trueNode = IR.trueNode();
+        Node falseNode = IR.number(1);
+        Node hookNode = IR.hook(cond, trueNode, falseNode);
+        Node parent = IR.exprResult(hookNode);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        assertEquals(Token.OR, replacement.getType());
+        assertEquals(Token.NAME, replacement.getFirstChild().getType()); // a
+        assertEquals(Token.TRUE, replacement.getLastChild().getType()); // true
+    }
+
+    @Test
+    public void testTryMinimizeCondition_HookLiteralFalse() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(false);
+        Node cond = IR.name("a");
+        Node trueNode = IR.number(1);
+        Node falseNode = IR.falseNode();
+        Node hookNode = IR.hook(cond, trueNode, falseNode);
+        Node parent = IR.exprResult(hookNode);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        assertEquals(Token.AND, replacement.getType());
+        assertEquals(Token.NAME, replacement.getFirstChild().getType()); // a
+        assertEquals(Token.NUMBER, replacement.getLastChild().getType()); // 1
+    }
+
+    @Test
+    public void testTryFoldStandardConstructors_Object() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(true); // late = true
+        Node newObj = IR.newNode(Token.NEW, IR.name("Object"));
+        Node parent = IR.exprResult(newObj);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        assertEquals(Token.CALL, replacement.getType());
+        assertEquals("Object", replacement.getFirstChild().getString());
+    }
+
+    @Test
+    public void testTryFoldLiteralConstructor_ObjectNoArgs() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(true); // late = true
+        Node callObj = IR.call(IR.name("Object"));
+        Node parent = IR.exprResult(callObj);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        assertEquals(Token.OBJECTLIT, replacement.getType());
+        assertFalse(replacement.hasChildren());
+    }
+
+    @Test
+    public void testTryFoldLiteralConstructor_ArrayNoArgs() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(true); // late = true
+        Node callArray = IR.call(IR.name("Array"));
+        Node parent = IR.exprResult(callArray);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        assertEquals(Token.ARRAYLIT, replacement.getType());
+        assertFalse(replacement.hasChildren());
+    }
+
+    @Test
+    public void testTryFoldLiteralConstructor_ArrayWithOneNumberArg() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(true); // late = true
+        Node arg = IR.number(5);
+        Node callArray = IR.call(IR.name("Array"), arg);
+        Node parent = IR.exprResult(callArray);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        // Array(5) should not be folded to [5] because it means an array of size 5.
+        assertEquals(Token.CALL, replacement.getType());
+        assertEquals("Array", replacement.getFirstChild().getString());
+    }
+
+    @Test
+    public void testTryFoldLiteralConstructor_ArrayWithTwoNumberArgs() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(true); // late = true
+        Node arg1 = IR.number(1);
+        Node arg2 = IR.number(2);
+        Node callArray = IR.call(IR.name("Array"), arg1, arg2);
+        Node parent = IR.exprResult(callArray);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        assertEquals(Token.ARRAYLIT, replacement.getType());
+        assertEquals(Token.NUMBER, replacement.getFirstChild().getType());
+        assertEquals(1, replacement.getFirstChild().getDouble(), 0.0);
+        assertEquals(Token.NUMBER, replacement.getLastChild().getType());
+        assertEquals(2, replacement.getLastChild().getDouble(), 0.0);
+    }
+
+    @Test
+    public void testTryFoldLiteralConstructor_ArrayWithStringArg() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(true); // late = true
+        Node arg = IR.string("test");
+        Node callArray = IR.call(IR.name("Array"), arg);
+        Node parent = IR.exprResult(callArray);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        assertEquals(Token.ARRAYLIT, replacement.getType());
+        assertEquals(Token.STRING, replacement.getFirstChild().getType());
+        assertEquals("test", replacement.getFirstChild().getString());
+    }
+
+    @Test
+    public void testTryFoldLiteralConstructor_RegExpSimple() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(true); // late = true
+        Node pattern = IR.string("abc");
+        Node callRegExp = IR.call(IR.name("RegExp"), pattern);
+        Node parent = IR.exprResult(callRegExp);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        assertEquals(Token.REGEXP, replacement.getType());
+        assertEquals("abc", replacement.getFirstChild().getString());
+        assertNull(replacement.getLastChild()); // No flags
+    }
+
+    @Test
+    public void testTryFoldLiteralConstructor_RegExpWithFlags() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(true); // late = true
+        Node pattern = IR.string("abc");
+        Node flags = IR.string("gi");
+        Node callRegExp = IR.call(IR.name("RegExp"), pattern, flags);
+        Node parent = IR.exprResult(callRegExp);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        assertEquals(Token.REGEXP, replacement.getType());
+        assertEquals("abc", replacement.getFirstChild().getString());
+        assertEquals("gi", replacement.getLastChild().getString());
+    }
+
+    @Test
+    public void testTryFoldLiteralConstructor_RegExpInvalidFlags() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(true); // late = true
+        Node pattern = IR.string("abc");
+        Node flags = IR.string("xyz");
+        Node callRegExp = IR.call(IR.name("RegExp"), pattern, flags);
+        Node parent = IR.exprResult(callRegExp);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        // Should not fold if flags are invalid.
+        assertEquals(Token.CALL, replacement.getType());
+        assertEquals("RegExp", replacement.getFirstChild().getString());
+    }
+
+    @Test
+    public void testReduceTrueFalse_LateMode() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(true); // late = true
+        Node trueNode = IR.trueNode();
+        Node parent = IR.exprResult(trueNode);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        assertEquals(Token.CALL, replacement.getType()); // Should be transformed to !0
+        assertEquals(Token.NOT, replacement.getFirstChild().getType());
+        assertEquals(Token.NUMBER, replacement.getFirstChild().getFirstChild().getType());
+        assertEquals(0, replacement.getFirstChild().getFirstChild().getDouble(), 0.0);
+    }
+
+    @Test
+    public void testReduceTrueFalse_NotLateMode() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(false); // late = false
+        Node trueNode = IR.trueNode();
+        Node parent = IR.exprResult(trueNode);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        assertEquals(Token.TRUE, replacement.getType()); // Should not change
+    }
+
+    @Test
+    public void testTryMinimizeArrayLiteral_AllStrings() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(true); // late = true
+        Node str1 = IR.string("a");
+        Node str2 = IR.string("b");
+        Node arrayLit = IR.arraylit(str1, str2);
+        Node parent = IR.exprResult(arrayLit);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        assertEquals(Token.CALL, replacement.getType());
+        assertEquals("split", replacement.getLastChild().getString());
+        assertEquals("a,b", replacement.getFirstChild().getString()); // Joined string
+        assertEquals(",", replacement.getLastChild().getFirstChild().getString()); // Delimiter
+    }
+
+    @Test
+    public void testTryMinimizeArrayLiteral_MixedTypes() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(true); // late = true
+        Node str1 = IR.string("a");
+        Node num1 = IR.number(1);
+        Node arrayLit = IR.arraylit(str1, num1);
+        Node parent = IR.exprResult(arrayLit);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        // Should not minimize if not all strings.
+        assertEquals(Token.ARRAYLIT, replacement.getType());
+    }
+
+    @Test
+    public void testTryMinimizeStringArrayLiteral_SavingTooSmall() throws Exception {
+        PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(true); // late = true
+        Node str1 = IR.string("a");
+        Node arrayLit = IR.arraylit(str1);
+        Node parent = IR.exprResult(arrayLit);
+
+        Node replacement = peephole.optimizeSubtree(parent);
+
+        // Saving is 1*2 - ".split('.')".length() = 2 - 9 = -7. Should not optimize.
+        assertEquals(Token.ARRAYLIT, replacement.getType());
+    }
+}

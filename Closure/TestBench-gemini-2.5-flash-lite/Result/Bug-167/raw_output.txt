@@ -1,0 +1,665 @@
+```java
+package com.google.javascript.jscomp.type;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.javascript.rhino.jstype.JSType;
+import com.google.common.base.Function;
+import com.google.javascript.jscomp.CodingConvention;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.jstype.FunctionType;
+import com.google.javascript.rhino.jstype.JSType.TypePair;
+import com.google.javascript.rhino.jstype.JSTypeNative;
+import com.google.javascript.rhino.jstype.JSTypeRegistry;
+import com.google.javascript.rhino.jstype.ObjectType;
+import com.google.javascript.rhino.jstype.StaticSlot;
+import com.google.javascript.rhino.jstype.UnionType;
+import com.google.javascript.rhino.jstype.Visitor;
+import com.google.common.base.Predicate;
+import com.google.javascript.rhino.ErrorReporter;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.jstype.JSTypeRegistry.ResolveMode;
+import java.io.Serializable;
+import java.util.Comparator;
+import com.google.javascript.rhino.jstype.AllType;
+import com.google.javascript.rhino.jstype.ArrowType;
+import com.google.javascript.rhino.jstype.SimpleReference;
+import com.google.javascript.jscomp.PreprocessorSymbolTable;
+import com.google.javascript.jscomp.Scope;
+import com.google.javascript.jscomp.GlobalNamespace;
+import com.google.javascript.rhino.jstype.ModificationVisitor;
+
+public class SemanticReverseAbstractInterpreterTest {
+
+    // Mock objects for dependencies
+    private final CodingConvention mockConvention = null;
+    private final JSTypeRegistry mockTypeRegistry = new JSTypeRegistry(null);
+    private final ErrorReporter mockErrorReporter = null;
+    private final Node mockNode = new Node(Token.NAME);
+    private final FlowScope mockBlindScope = new MockFlowScope();
+
+    // Helper to create a SemanticReverseAbstractInterpreter instance
+    private SemanticReverseAbstractInterpreter createInterpreter() {
+        return new SemanticReverseAbstractInterpreter(mockConvention, mockTypeRegistry);
+    }
+
+    // Mock FlowScope implementation for testing
+    private static class MockFlowScope implements FlowScope {
+        @Override
+        public FlowScope createChildFlowScope() { return this; }
+        @Override
+        public void inferSlotType(String symbol, JSType type) {}
+        @Override
+        public void inferQualifiedSlot(Node node, String symbol, JSType bottomType, JSType inferredType) {}
+        @Override
+        public FlowScope optimize() { return this; }
+        @Override
+        public StaticSlot<JSType> findUniqueRefinedSlot(FlowScope blindScope) { return null; }
+        @Override
+        public void completeScope(StaticScope<JSType> scope) {}
+        @Override
+        public JSType getType(String name) { return null; }
+        @Override
+        public JSType getGlobalType(String name) { return null; }
+        @Override
+        public JSType getResolvedType(String name) { return null; }
+        @Override
+        public StaticSlot<JSType> getSlot(String name) { return null; }
+        @Override
+        public StaticSlot<JSType> getNamespace(String name) { return null; }
+        @Override
+        public StaticSlot<JSType> findSlot(String name) { return null; }
+        @Override
+        public StaticSlot<JSType> findObservableSlot(String name) { return null; }
+        @Override
+        public FunctionType getConstructor(String name) { return null; }
+        @Override
+        public ObjectType getObjectPrototype() { return null; }
+        @Override
+        public JSType getFunctionPrototype() { return null; }
+        @Override
+        public boolean isGlobal()) { return false;}
+        @Override
+        public JSType resolve(ErrorReporter t, StaticScope<JSType> scope) { return null; }
+        @Override
+        public JSType getTypeIfRefinable(Node node, FlowScope scope) { return null; }
+        @Override
+        public void declareNameInScope(FlowScope scope, Node node, JSType type) {}
+    }
+
+    @Test
+    public void testCaseTypeOf_stringEquals() throws Exception {
+        SemanticReverseAbstractInterpreter interpreter = createInterpreter();
+        Node operandNode = new Node(Token.STRING, "hello");
+        JSType stringType = mockTypeRegistry.getNativeType(JSTypeNative.STRING_OBJECT);
+        Node stringNode = Node.newString("string");
+        FlowScope resultScope = interpreter.caseTypeOf(operandNode, stringType, "string", true, mockBlindScope);
+        // Assert that the scope is not the original blind scope (indicating a refinement)
+        assertNotSame(mockBlindScope, resultScope);
+    }
+
+    @Test
+    public void testCaseTypeOf_numberNotEquals() throws Exception {
+        SemanticReverseAbstractInterpreter interpreter = createInterpreter();
+        Node operandNode = Node.newNumber(123);
+        JSType numberType = mockTypeRegistry.getNativeType(JSTypeNative.NUMBER_OBJECT);
+        Node stringNode = Node.newString("number");
+        FlowScope resultScope = interpreter.caseTypeOf(operandNode, numberType, "number", false, mockBlindScope);
+        // Assert that the scope is not the original blind scope
+        assertNotSame(mockBlindScope, resultScope);
+    }
+
+    @Test
+    public void testCaseTypeOf_booleanEquals() throws Exception {
+        SemanticReverseAbstractInterpreter interpreter = createInterpreter();
+        Node operandNode = Node.newFalse();
+        JSType booleanType = mockTypeRegistry.getNativeType(JSTypeNative.BOOLEAN_OBJECT);
+        Node stringNode = Node.newString("boolean");
+        FlowScope resultScope = interpreter.caseTypeOf(operandNode, booleanType, "boolean", true, mockBlindScope);
+        assertNotSame(mockBlindScope, resultScope);
+    }
+
+    @Test
+    public void testCaseTypeOf_undefinedNotEquals() throws Exception {
+        SemanticReverseAbstractInterpreter interpreter = createInterpreter();
+        Node operandNode = new Node(Token.NAME); // Represents undefined
+        operandNode.setType(Token.NAME); // Default type for NAME node, often undefined
+        JSType undefinedType = mockTypeRegistry.getNativeType(JSTypeNative.VOID_TYPE);
+        Node stringNode = Node.newString("undefined");
+        FlowScope resultScope = interpreter.caseTypeOf(operandNode, undefinedType, "undefined", false, mockBlindScope);
+        assertNotSame(mockBlindScope, resultScope);
+    }
+
+    @Test
+    public void testCaseEquality_eq_numbers() throws Exception {
+        SemanticReverseAbstractInterpreter interpreter = createInterpreter();
+        Node left = Node.newNumber(10);
+        Node right = Node.newNumber(10);
+        // EQ function is used for equality checks
+        Function<TypePair, TypePair> merging = SemanticReverseAbstractInterpreter.EQ;
+        FlowScope resultScope = interpreter.caseEquality(left, right, mockBlindScope, merging);
+        assertNotSame(mockBlindScope, resultScope);
+    }
+
+    @Test
+    public void testCaseEquality_ne_numbers() throws Exception {
+        SemanticReverseAbstractInterpreter interpreter = createInterpreter();
+        Node left = Node.newNumber(10);
+        Node right = Node.newNumber(20);
+        // NE function is used for inequality checks
+        Function<TypePair, TypePair> merging = SemanticReverseAbstractInterpreter.NE;
+        FlowScope resultScope = interpreter.caseEquality(left, right, mockBlindScope, merging);
+        assertNotSame(mockBlindScope, resultScope);
+    }
+
+    @Test
+    public void testCaseEquality_sheq_strings() throws Exception {
+        SemanticReverseAbstractInterpreter interpreter = createInterpreter();
+        Node left = Node.newString("hello");
+        Node right = Node.newString("hello");
+        Function<TypePair, TypePair> merging = SemanticReverseAbstractInterpreter.SHEQ;
+        FlowScope resultScope = interpreter.caseEquality(left, right, mockBlindScope, merging);
+        assertNotSame(mockBlindScope, resultScope);
+    }
+
+    @Test
+    public void testCaseEquality_shne_strings() throws Exception {
+        SemanticReverseAbstractInterpreter interpreter = createInterpreter();
+        Node left = Node.newString("hello");
+        Node right = Node.newString("world");
+        Function<TypePair, TypePair> merging = SemanticReverseAbstractInterpreter.SHNE;
+        FlowScope resultScope = interpreter.caseEquality(left, right, mockBlindScope, merging);
+        assertNotSame(mockBlindScope, resultScope);
+    }
+
+    @Test
+    public void testCaseAndOrNotShortCircuiting_and_true() throws Exception {
+        SemanticReverseAbstractInterpreter interpreter = createInterpreter();
+        Node left = Node.newTrue();
+        Node right = new Node(Token.NAME);
+        FlowScope resultScope = interpreter.caseAndOrNotShortCircuiting(left, right, mockBlindScope, true);
+        assertNotSame(mockBlindScope, resultScope);
+    }
+
+    @Test
+    public void testCaseAndOrNotShortCircuiting_or_false() throws Exception {
+        SemanticReverseAbstractInterpreter interpreter = createInterpreter();
+        Node left = Node.newFalse();
+        Node right = new Node(Token.NAME);
+        FlowScope resultScope = interpreter.caseAndOrNotShortCircuiting(left, right, mockBlindScope, false);
+        assertNotSame(mockBlindScope, resultScope);
+    }
+
+    @Test
+    public void testCaseAndOrMaybeShortCircuiting_and_true() throws Exception {
+        SemanticReverseAbstractInterpreter interpreter = createInterpreter();
+        Node left = Node.newTrue();
+        Node right = new Node(Token.NAME);
+        FlowScope resultScope = interpreter.caseAndOrMaybeShortCircuiting(left, right, mockBlindScope, true);
+        assertNotSame(mockBlindScope, resultScope);
+    }
+
+    @Test
+    public void testCaseAndOrMaybeShortCircuiting_or_false() throws Exception {
+        SemanticReverseAbstractInterpreter interpreter = createInterpreter();
+        Node left = Node.newFalse();
+        Node right = new Node(Token.NAME);
+        FlowScope resultScope = interpreter.caseAndOrMaybeShortCircuiting(left, right, mockBlindScope, false);
+        assertNotSame(mockBlindScope, resultScope);
+    }
+
+    @Test
+    public void testMaybeRestrictName_restricted() throws Exception {
+        SemanticReverseAbstractInterpreter interpreter = createInterpreter();
+        Node node = new Node(Token.NAME);
+        JSType originalType = mockTypeRegistry.getNativeType(JSTypeNative.STRING_OBJECT);
+        JSType restrictedType = mockTypeRegistry.getNativeType(JSTypeNative.NUMBER_OBJECT);
+        FlowScope resultScope = interpreter.maybeRestrictName(mockBlindScope, node, originalType, restrictedType);
+        assertNotSame(mockBlindScope, resultScope);
+    }
+
+    @Test
+    public void testMaybeRestrictName_notRestricted() throws Exception {
+        SemanticReverseAbstractInterpreter interpreter = createInterpreter();
+        Node node = new Node(Token.NAME);
+        JSType originalType = mockTypeRegistry.getNativeType(JSTypeNative.STRING_OBJECT);
+        FlowScope resultScope = interpreter.maybeRestrictName(mockBlindScope, node, originalType, originalType);
+        assertSame(mockBlindScope, resultScope);
+    }
+
+    @Test
+    public void testMaybeRestrictTwoNames_bothRestricted() throws Exception {
+        SemanticReverseAbstractInterpreter interpreter = createInterpreter();
+        Node left = new Node(Token.NAME, "left");
+        Node right = new Node(Token.NAME, "right");
+        JSType originalLeft = mockTypeRegistry.getNativeType(JSTypeNative.STRING_OBJECT);
+        JSType restrictedLeft = mockTypeRegistry.getNativeType(JSTypeNative.NUMBER_OBJECT);
+        JSType originalRight = mockTypeRegistry.getNativeType(JSTypeNative.BOOLEAN_OBJECT);
+        JSType restrictedRight = mockTypeRegistry.getNativeType(JSTypeNative.STRING_OBJECT);
+        FlowScope resultScope = interpreter.maybeRestrictTwoNames(mockBlindScope,
+                left, originalLeft, restrictedLeft,
+                right, originalRight, restrictedRight);
+        assertNotSame(mockBlindScope, resultScope);
+    }
+
+    @Test
+    public void testMaybeRestrictTwoNames_oneRestricted() throws Exception {
+        SemanticReverseAbstractInterpreter interpreter = createInterpreter();
+        Node left = new Node(Token.NAME, "left");
+        Node right = new Node(Token.NAME, "right");
+        JSType originalLeft = mockTypeRegistry.getNativeType(JSTypeNative.STRING_OBJECT);
+        JSType restrictedLeft = mockTypeRegistry.getNativeType(JSTypeNative.NUMBER_OBJECT);
+        JSType originalRight = mockTypeRegistry.getNativeType(JSTypeNative.BOOLEAN_OBJECT);
+        FlowScope resultScope = interpreter.maybeRestrictTwoNames(mockBlindScope,
+                left, originalLeft, restrictedLeft,
+                right, originalRight, originalRight); // right is not restricted
+        assertNotSame(mockBlindScope, resultScope);
+    }
+
+    @Test
+    public void testMaybeRestrictTwoNames_noneRestricted() throws Exception {
+        SemanticReverseAbstractInterpreter interpreter = createInterpreter();
+        Node left = new Node(Token.NAME, "left");
+        Node right = new Node(Token.NAME, "right");
+        JSType originalLeft = mockTypeRegistry.getNativeType(JSTypeNative.STRING_OBJECT);
+        JSType originalRight = mockTypeRegistry.getNativeType(JSTypeNative.BOOLEAN_OBJECT);
+        FlowScope resultScope = interpreter.maybeRestrictTwoNames(mockBlindScope,
+                left, originalLeft, originalLeft,
+                right, originalRight, originalRight);
+        assertSame(mockBlindScope, resultScope);
+    }
+
+    @Test
+    public void testCaseNameOrGetProp_outcomeTrue() throws Exception {
+        SemanticReverseAbstractInterpreter interpreter = createInterpreter();
+        Node nameNode = new Node(Token.NAME, "myVar");
+        // Mock getTypeIfRefinable to return a non-null type
+        // This is a simplification; in reality, it depends on the blindScope
+        ObjectType stringObject = ObjectType.cast(mockTypeRegistry.getNativeType(JSTypeNative.STRING_OBJECT));
+        if (stringObject != null) {
+             // Need to mock this method or create a valid scenario where it returns a type
+             // For now, assume it returns a type that can be restricted.
+             // We'll assume it returns a string type for demonstration.
+             // A proper test would involve setting up the blindScope and node correctly.
+             // For this mock, we bypass the real getTypeIfRefinable and directly test restrict
+             JSType type = mockTypeRegistry.getNativeType(JSTypeNative.STRING_OBJECT);
+             JSType restrictedType = type.getRestrictedTypeGivenToBooleanOutcome(true);
+             FlowScope resultScope = interpreter.caseNameOrGetProp(nameNode, mockBlindScope, true);
+             assertNotSame(mockBlindScope, resultScope); // Expecting some refinement
+        }
+    }
+
+    @Test
+    public void testCaseInstanceOf_true() throws Exception {
+        SemanticReverseAbstractInterpreter interpreter = createInterpreter();
+        Node left = new Node(Token.NAME, "obj");
+        Node right = new Node(Token.NAME, "MyClass"); // Represents a constructor
+        // Mock the types involved
+        JSType objectType = mockTypeRegistry.getNativeType(JSTypeNative.OBJECT_TYPE);
+        ObjectType functionType = ObjectType.cast(mockTypeRegistry.getNativeFunctionType(JSTypeNative.FUNCTION));
+        mockTypeRegistry.registerNamedObject("MyClass", functionType, null); // Register for getJSType
+        if (functionType != null) {
+             // Need to ensure 'obj' has a type that could be an instance of MyClass
+             // For this test, let's assume 'obj' is initially unknown type.
+             // A more robust test would require proper type inference setup.
+             // We'll focus on the direct call to caseInstanceOf logic.
+
+            // Manually create a scenario where caseInstanceOf is called with outcome true
+            // This is a simplified call to test the internal logic of caseInstanceOf
+            // The actual call path is through getPreciserScopeKnowingConditionOutcome
+            // For this direct test, we'll bypass the full setup.
+
+            // We need a concrete JSType for the 'right' node (the constructor)
+            // and a JSType for the 'left' node (the instance).
+            // This requires more setup of the JSTypeRegistry.
+            // Let's simulate the types.
+            ObjectType myClassProto = mockTypeRegistry.createObjectType("MyClassProto");
+            FunctionType myClassConstructor = FunctionType.forInterface(mockTypeRegistry, "MyClass", null);
+            myClassConstructor.setPrototype(myClassProto, null);
+
+            // Setting up the 'left' node's type as something that could be an instance
+            JSType instanceType = myClassProto; // Assume it is an instance
+            left.setJSType(instanceType);
+            right.setJSType(myClassConstructor);
+
+            // To test caseInstanceOf, we need a non-null leftType from getTypeIfRefinable
+            // And a non-null rightType.
+            // This requires more sophisticated mocking or a proper test setup.
+
+            // Given the complexity of setting up JSTypes correctly for instanceof,
+            // we will make a simpler assertion focusing on the structure.
+            // The actual logic is complex and relies heavily on JSType interactions.
+            // A basic check that it doesn't crash and returns a different scope if the types are "refineable"
+            // (which is a simplification here).
+
+            // This test will likely need more setup to be truly effective.
+            // For now, we'll assume `getTypeIfRefinable` can return a type.
+            JSType inferredLeftType = mockTypeRegistry.getNativeType(JSTypeNative.OBJECT_TYPE); // Simplified
+            // We need to simulate the call to caseInstanceOf.
+            // It's called from getPreciserScopeKnowingConditionOutcome.
+            // Let's construct a Node for instanceof.
+            Node condition = new Node(Token.INSTANCEOF, left, right);
+
+            // The outcome is true.
+            boolean outcome = true;
+            FlowScope resultScope = interpreter.getPreciserScopeKnowingConditionOutcome(condition, mockBlindScope, outcome);
+
+            assertNotSame(mockBlindScope, resultScope); // Expecting some refinement.
+        }
+    }
+
+     @Test
+    public void testCaseIn_propertyExists() throws Exception {
+        SemanticReverseAbstractInterpreter interpreter = createInterpreter();
+        Node objectNode = new Node(Token.NAME, "obj");
+        String propertyName = "toString";
+
+        // Mock setup: objectNode has a type that has the property
+        ObjectType objType = ObjectType.cast(mockTypeRegistry.getNativeType(JSTypeNative.OBJECT_TYPE));
+        // Ensure objType has a property like "toString"
+        if (objType != null) {
+            objType.defineProperty("toString", mockTypeRegistry.getNativeType(JSTypeNative.FUNCTION_OBJECT), false, null);
+            objectNode.setJSType(objType);
+        }
+
+        // The "in" operator outcome is true. We want to test caseIn which assumes 'outcome' is true.
+        // The `caseIn` method is called when `outcome` is true and `condition.getFirstChild().isString()` is true.
+        // So the call to `caseIn` is directly tested here.
+        FlowScope resultScope = interpreter.caseIn(objectNode, propertyName, mockBlindScope);
+
+        // Since the property exists, it should return the original scope.
+        assertSame(mockBlindScope, resultScope);
+    }
+
+    @Test
+    public void testCaseIn_propertyDoesNotExistAndQualifiedName() throws Exception {
+        SemanticReverseAbstractInterpreter interpreter = createInterpreter();
+        Node objectNode = new Node(Token.NAME, "myObj");
+        String propertyName = "nonExistentProp";
+
+        // Mock setup: objectNode has a type, but no such property.
+        ObjectType objType = ObjectType.cast(mockTypeRegistry.createObjectType("MyCustomObject"));
+        objectNode.setJSType(objType);
+        objectNode.setQualifier(new Node(Token.GETPROP)); // Simulating qualified name context
+        objectNode.setJSType(objType);
+        objectNode.setQualifiedName("myObj"); // Set a qualified name
+
+        // Mock blind scope to not contain the qualified slot
+        // (This is implicitly handled by MockFlowScope returning null for getSlot)
+
+        // Call caseIn, expecting a new scope if qualified name exists and slot is not found.
+        FlowScope resultScope = interpreter.caseIn(objectNode, propertyName, mockBlindScope);
+
+        // Expecting a new scope because the property doesn't exist and we are creating a qualified slot.
+        assertNotSame(mockBlindScope, resultScope);
+    }
+
+    @Test
+    public void testGetPreciserScopeKnowingConditionOutcome_typeofStringEq() throws Exception {
+        SemanticReverseAbstractInterpreter interpreter = createInterpreter();
+        Node operand = Node.newString("test");
+        Node condition = new Node(Token.EQ, new Node(Token.TYPEOF, operand), Node.newString("string"));
+        boolean outcome = true;
+        FlowScope resultScope = interpreter.getPreciserScopeKnowingConditionOutcome(condition, mockBlindScope, outcome);
+        assertNotSame(mockBlindScope, resultScope);
+    }
+
+    @Test
+    public void testGetPreciserScopeKnowingConditionOutcome_typeofNumberNe() throws Exception {
+        SemanticReverseAbstractInterpreter interpreter = createInterpreter();
+        Node operand = Node.newNumber(123);
+        Node condition = new Node(Token.NE, new Node(Token.TYPEOF, operand), Node.newString("number"));
+        boolean outcome = true;
+        FlowScope resultScope = interpreter.getPreciserScopeKnowingConditionOutcome(condition, mockBlindScope, outcome);
+        assertNotSame(mockBlindScope, resultScope);
+    }
+
+    @Test
+    public void testGetPreciserScopeKnowingConditionOutcome_andTrue() throws Exception {
+        SemanticReverseAbstractInterpreter interpreter = createInterpreter();
+        Node left = Node.newTrue();
+        Node right = Node.newFalse();
+        Node condition = new Node(Token.AND, left, right);
+        boolean outcome = true;
+        FlowScope resultScope = interpreter.getPreciserScopeKnowingConditionOutcome(condition, mockBlindScope, outcome);
+        assertNotSame(mockBlindScope, resultScope);
+    }
+
+    @Test
+    public void testGetPreciserScopeKnowingConditionOutcome_orFalse() throws Exception {
+        SemanticReverseAbstractInterpreter interpreter = createInterpreter();
+        Node left = Node.newTrue();
+        Node right = Node.newFalse();
+        Node condition = new Node(Token.OR, left, right);
+        boolean outcome = false;
+        FlowScope resultScope = interpreter.getPreciserScopeKnowingConditionOutcome(condition, mockBlindScope, outcome);
+        assertNotSame(mockBlindScope, resultScope);
+    }
+
+    @Test
+    public void testGetPreciserScopeKnowingConditionOutcome_nameTrue() throws Exception {
+        SemanticReverseAbstractInterpreter interpreter = createInterpreter();
+        Node nameNode = new Node(Token.NAME, "myVar");
+        // Mock type to be restricted by boolean outcome
+        ObjectType stringObject = ObjectType.cast(mockTypeRegistry.getNativeType(JSTypeNative.STRING_OBJECT));
+        if (stringObject != null) {
+            nameNode.setJSType(stringObject); // Assign a type to the node
+            boolean outcome = true;
+            FlowScope resultScope = interpreter.getPreciserScopeKnowingConditionOutcome(nameNode, mockBlindScope, outcome);
+            assertNotSame(mockBlindScope, resultScope);
+        }
+    }
+
+    @Test
+    public void testGetPreciserScopeKnowingConditionOutcome_assign() throws Exception {
+        SemanticReverseAbstractInterpreter interpreter = createInterpreter();
+        Node lhs = new Node(Token.NAME, "x");
+        Node rhs = Node.newNumber(10);
+        Node condition = new Node(Token.ASSIGN, lhs, rhs);
+        boolean outcome = true;
+        FlowScope resultScope = interpreter.getPreciserScopeKnowingConditionOutcome(condition, mockBlindScope, outcome);
+        assertNotSame(mockBlindScope, resultScope);
+    }
+
+    @Test
+    public void testGetPreciserScopeKnowingConditionOutcome_not() throws Exception {
+        SemanticReverseAbstractInterpreter interpreter = createInterpreter();
+        Node operand = Node.newFalse();
+        Node condition = new Node(Token.NOT, operand);
+        boolean outcome = true; // !false is true
+        FlowScope resultScope = interpreter.getPreciserScopeKnowingConditionOutcome(condition, mockBlindScope, outcome);
+        assertNotSame(mockBlindScope, resultScope);
+    }
+
+    @Test
+    public void testGetPreciserScopeKnowingConditionOutcome_greaterThan() throws Exception {
+        SemanticReverseAbstractInterpreter interpreter = createInterpreter();
+        Node left = Node.newNumber(10);
+        Node right = Node.newNumber(5);
+        Node condition = new Node(Token.GT, left, right);
+        boolean outcome = true;
+        FlowScope resultScope = interpreter.getPreciserScopeKnowingConditionOutcome(condition, mockBlindScope, outcome);
+        assertNotSame(mockBlindScope, resultScope);
+    }
+
+    @Test
+    public void testGetPreciserScopeKnowingConditionOutcome_lessThanOrEqual() throws Exception {
+        SemanticReverseAbstractInterpreter interpreter = createInterpreter();
+        Node left = Node.newNumber(5);
+        Node right = Node.newNumber(10);
+        Node condition = new Node(Token.LE, left, right);
+        boolean outcome = true;
+        FlowScope resultScope = interpreter.getPreciserScopeKnowingConditionOutcome(condition, mockBlindScope, outcome);
+        assertNotSame(mockBlindScope, resultScope);
+    }
+
+    @Test
+    public void testGetPreciserScopeKnowingConditionOutcome_instanceof() throws Exception {
+        SemanticReverseAbstractInterpreter interpreter = createInterpreter();
+        Node left = new Node(Token.NAME, "obj"); // Assume this has an ObjectType
+        Node right = mockTypeRegistry.createFunctionType("Constructor").getInstanceType(); // Mock constructor
+        Node condition = new Node(Token.INSTANCEOF, left, right);
+        boolean outcome = true;
+        // For instanceof, we need actual types to be set on nodes for accurate testing.
+        // Mocking here is complex. We'll rely on the internal caseInstanceOf logic being tested.
+        // This call should return a different scope if instanceof outcome is true and left has a type.
+        FlowScope resultScope = interpreter.getPreciserScopeKnowingConditionOutcome(condition, mockBlindScope, outcome);
+        assertNotSame(mockBlindScope, resultScope);
+    }
+
+    @Test
+    public void testGetPreciserScopeKnowingConditionOutcome_caseTrue() throws Exception {
+        SemanticReverseAbstractInterpreter interpreter = createInterpreter();
+        Node switchCondition = new Node(Token.NAME, "val"); // The switch variable
+        Node caseValue = Node.newString("expected");
+        Node caseNode = new Node(Token.CASE, caseValue);
+        caseNode.setParent(new Node(Token.SWITCH, switchCondition, caseNode)); // Setup parent relationship for CASE
+        boolean outcome = true;
+        FlowScope resultScope = interpreter.getPreciserScopeKnowingConditionOutcome(caseNode, mockBlindScope, outcome);
+        assertNotSame(mockBlindScope, resultScope);
+    }
+
+    @Test
+    public void testGetPreciserScopeKnowingConditionOutcome_caseFalse() throws Exception {
+        SemanticReverseAbstractInterpreter interpreter = createInterpreter();
+        Node switchCondition = new Node(Token.NAME, "val");
+        Node caseValue = Node.newString("expected");
+        Node caseNode = new Node(Token.CASE, caseValue);
+        caseNode.setParent(new Node(Token.SWITCH, switchCondition, caseNode));
+        boolean outcome = false;
+        FlowScope resultScope = interpreter.getPreciserScopeKnowingConditionOutcome(caseNode, mockBlindScope, outcome);
+        assertNotSame(mockBlindScope, resultScope);
+    }
+
+    @Test
+    public void testcaseEquality_nullEqNull() throws Exception {
+        SemanticReverseAbstractInterpreter interpreter = createInterpreter();
+        Node left = new Node(Token.NULL);
+        Node right = new Node(Token.NULL);
+        Function<TypePair, TypePair> merging = SemanticReverseAbstractInterpreter.EQ;
+        FlowScope resultScope = interpreter.caseEquality(left, right, mockBlindScope, merging);
+        assertNotSame(mockBlindScope, resultScope);
+    }
+
+    @Test
+    public void testcaseEquality_undefinedNeNull() throws Exception {
+        SemanticReverseAbstractInterpreter interpreter = createInterpreter();
+        Node left = new Node(Token.NAME); // Represents undefined
+        left.setType(Token.NAME);
+        Node right = new Node(Token.NULL);
+        Function<TypePair, TypePair> merging = SemanticReverseAbstractInterpreter.NE;
+        FlowScope resultScope = interpreter.caseEquality(left, right, mockBlindScope, merging);
+        assertNotSame(mockBlindScope, resultScope);
+    }
+
+    @Test
+    public void testcaseEquality_numberEqNumber() throws Exception {
+        SemanticReverseAbstractInterpreter interpreter = createInterpreter();
+        Node left = Node.newNumber(42.0);
+        Node right = Node.newNumber(42.0);
+        Function<TypePair, TypePair> merging = SemanticReverseAbstractInterpreter.EQ;
+        FlowScope resultScope = interpreter.caseEquality(left, right, mockBlindScope, merging);
+        assertNotSame(mockBlindScope, resultScope);
+    }
+
+    @Test
+    public void testcaseEquality_stringEqString() throws Exception {
+        SemanticReverseAbstractInterpreter interpreter = createInterpreter();
+        Node left = Node.newString("abc");
+        Node right = Node.newString("abc");
+        Function<TypePair, TypePair> merging = SemanticReverseAbstractInterpreter.EQ;
+        FlowScope resultScope = interpreter.caseEquality(left, right, mockBlindScope, merging);
+        assertNotSame(mockBlindScope, resultScope);
+    }
+
+    @Test
+    public void testcaseEquality_objectEqObject() throws Exception {
+        SemanticReverseAbstractInterpreter interpreter = createInterpreter();
+        Node left = new Node(Token.OBJECTLIT);
+        Node right = new Node(Token.OBJECTLIT);
+        // In JS, two different object literals are not strictly equal.
+        // However, for type inference, EQ might refine types based on properties.
+        // We are testing the call to caseEquality, not the JS runtime behavior strictly.
+        Function<TypePair, TypePair> merging = SemanticReverseAbstractInterpreter.EQ;
+        FlowScope resultScope = interpreter.caseEquality(left, right, mockBlindScope, merging);
+        assertNotSame(mockBlindScope, resultScope);
+    }
+
+    @Test
+    public void testcaseEquality_booleanEqBoolean() throws Exception {
+        SemanticReverseAbstractInterpreter interpreter = createInterpreter();
+        Node left = Node.newTrue();
+        Node right = Node.newTrue();
+        Function<TypePair, TypePair> merging = SemanticReverseAbstractInterpreter.EQ;
+        FlowScope resultScope = interpreter.caseEquality(left, right, mockBlindScope, merging);
+        assertNotSame(mockBlindScope, resultScope);
+    }
+
+    @Test
+    public void testcaseEquality_numberNeString() throws Exception {
+        SemanticReverseAbstractInterpreter interpreter = createInterpreter();
+        Node left = Node.newNumber(10);
+        Node right = Node.newString("10");
+        Function<TypePair, TypePair> merging = SemanticReverseAbstractInterpreter.NE;
+        FlowScope resultScope = interpreter.caseEquality(left, right, mockBlindScope, merging);
+        assertNotSame(mockBlindScope, resultScope);
+    }
+}
+```
+
+```text
+1. SOURCE CODE ANALYSIS
+The tests target the `getPreciserScopeKnowingConditionOutcome` method and its internal handlers (`caseTypeOf`, `caseEquality`, `caseAndOrNotShortCircuiting`, `caseAndOrMaybeShortCircuiting`, `maybeRestrictName`, `maybeRestrictTwoNames`, `caseNameOrGetProp`, `caseIn`, `caseInstanceOf`). These methods determine more precise types based on conditional outcomes and comparisons.
+
+2. TEST CASE DESIGN
+- testCaseTypeOf_stringEquals: Checks 'typeof x == "string"' outcome for a string literal. Expected: Refined scope.
+- testCaseTypeOf_numberNotEquals: Checks 'typeof x != "number"' outcome for a number literal. Expected: Refined scope.
+- testCaseTypeOf_booleanEquals: Checks 'typeof x == "boolean"' outcome for a boolean literal. Expected: Refined scope.
+- testCaseTypeOf_undefinedNotEquals: Checks 'typeof x != "undefined"' outcome for undefined. Expected: Refined scope.
+- testCaseEquality_eq_numbers: Tests 'number == number'. Expected: Refined scope.
+- testCaseEquality_ne_numbers: Tests 'number != number'. Expected: Refined scope.
+- testCaseEquality_sheq_strings: Tests 'string === string'. Expected: Refined scope.
+- testCaseEquality_shne_strings: Tests 'string !== string'. Expected: Refined scope.
+- testCaseAndOrNotShortCircuiting_and_true: Tests 'true && expr'. Expected: Refined scope.
+- testCaseAndOrNotShortCircuiting_or_false: Tests 'false || expr'. Expected: Refined scope.
+- testCaseAndOrMaybeShortCircuiting_and_true: Tests 'expr && true' (short-circuiting right). Expected: Refined scope.
+- testCaseAndOrMaybeShortCircuiting_or_false: Tests 'expr || false' (short-circuiting right). Expected: Refined scope.
+- testMaybeRestrictName_restricted: Tests `maybeRestrictName` when a restriction occurs. Expected: New scope.
+- testMaybeRestrictName_notRestricted: Tests `maybeRestrictName` when no restriction occurs. Expected: Original scope.
+- testMaybeRestrictTwoNames_bothRestricted: Tests `maybeRestrictTwoNames` when both names are restricted. Expected: New scope.
+- testMaybeRestrictTwoNames_oneRestricted: Tests `maybeRestrictTwoNames` when only one name is restricted. Expected: New scope.
+- testMaybeRestrictTwoNames_noneRestricted: Tests `maybeRestrictTwoNames` when no names are restricted. Expected: Original scope.
+- testCaseNameOrGetProp_outcomeTrue: Tests refining scope based on truthiness of a variable. Expected: Refined scope.
+- testCaseInstanceOf_true: Tests 'instanceof' with true outcome. Expected: Refined scope.
+- testCaseIn_propertyExists: Tests 'prop in obj' when property exists. Expected: Original scope.
+- testCaseIn_propertyDoesNotExistAndQualifiedName: Tests 'prop in obj' when property does not exist and qualified name is used. Expected: New scope.
+- testGetPreciserScopeKnowingConditionOutcome_typeofStringEq: Tests 'typeof x == "string"' condition. Expected: Refined scope.
+- testGetPreciserScopeKnowingConditionOutcome_typeofNumberNe: Tests 'typeof x != "number"' condition. Expected: Refined scope.
+- testGetPreciserScopeKnowingConditionOutcome_andTrue: Tests 'A && B' with A being true. Expected: Refined scope.
+- testGetPreciserScopeKnowingConditionOutcome_orFalse: Tests 'A || B' with A being false. Expected: Refined scope.
+- testGetPreciserScopeKnowingConditionOutcome_nameTrue: Tests truthiness of a variable name. Expected: Refined scope.
+- testGetPreciserScopeKnowingConditionOutcome_assign: Tests assignment in a condition. Expected: Refined scope.
+- testGetPreciserScopeKnowingConditionOutcome_not: Tests '!' operator. Expected: Refined scope.
+- testGetPreciserScopeKnowingConditionOutcome_greaterThan: Tests '>' comparison. Expected: Refined scope.
+- testGetPreciserScopeKnowingConditionOutcome_lessThanOrEqual: Tests '<=' comparison. Expected: Refined scope.
+- testGetPreciserScopeKnowingConditionOutcome_instanceof: Tests instanceof operator. Expected: Refined scope.
+- testGetPreciserScopeKnowingConditionOutcome_caseTrue: Tests CASE statement with true outcome. Expected: Refined scope.
+- testGetPreciserScopeKnowingConditionOutcome_caseFalse: Tests CASE statement with false outcome. Expected: Refined scope.
+- testcaseEquality_nullEqNull: Tests 'null == null'. Expected: Refined scope.
+- testcaseEquality_undefinedNeNull: Tests 'undefined != null'. Expected: Refined scope.
+- testcaseEquality_numberEqNumber: Tests 'number == number'. Expected: Refined scope.
+- testcaseEquality_stringEqString: Tests 'string == string'. Expected: Refined scope.
+- testcaseEquality_objectEqObject: Tests 'object == object'. Expected: Refined scope.
+- testcaseEquality_booleanEqBoolean: Tests 'boolean == boolean'. Expected: Refined scope.
+- testcaseEquality_numberNeString: Tests 'number != string'. Expected: Refined scope.
+
+4. DEFECT DETECTION STRATEGY
+Tests cover various conditional expressions and type comparison/refinement logic within `SemanticReverseAbstractInterpreter`, focusing on how different operators and types affect the resulting `FlowScope`. They aim to detect defects in the precise type inference rules.
+
+5. SUMMARY
+38 tests.
+
+6. LIMITATIONS
+The tests rely on mocked dependencies and simplified type setups due to the complexity of JSType and FlowScope initialization. Effective testing of `caseInstanceOf` and `caseIn` requires more intricate mocking of the `JSTypeRegistry` and `FlowScope` to accurately represent type relationships and property lookups. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.
+```

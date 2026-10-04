@@ -1,0 +1,304 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Predicates;
+import com.google.common.collect.Lists;
+import com.google.javascript.jscomp.NodeTraversal.AbstractPostOrderCallback;
+import com.google.javascript.jscomp.NodeTraversal.AbstractShallowCallback;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import java.util.List;
+import java.util.regex.Pattern;
+
+public class FoldConstantsTest {
+    @Test
+    public void testAddNumbers() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        root.addChildToBack(NodeUtil.newExpr(
+                new Node(Token.ADD, Node.newNumber(2), Node.newNumber(3))));
+        new FoldConstants(null).process(null, root);
+        Node folded = root.getFirstChild().getFirstChild();
+        assertEquals(Token.NUMBER, folded.getType());
+        assertEquals(5.0, folded.getDouble(), 0.0);
+    }
+
+    @Test
+    public void testAddStrings() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        root.addChildToBack(NodeUtil.newExpr(
+                new Node(Token.ADD, Node.newString("ab"), Node.newString("cd"))));
+        new FoldConstants(null).process(null, root);
+        Node folded = root.getFirstChild().getFirstChild();
+        assertEquals(Token.STRING, folded.getType());
+        assertEquals("abcd", folded.getString());
+    }
+
+    @Test
+    public void testDivideByZeroRemainsUnfolded() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node division = new Node(Token.DIV, Node.newNumber(5), Node.newNumber(0));
+        root.addChildToBack(NodeUtil.newExpr(division));
+        new FoldConstants(null).process(null, root);
+        assertSame(division, root.getFirstChild().getFirstChild());
+        assertEquals(Token.DIV, division.getType());
+    }
+
+    @Test
+    public void testArithmeticFoldUsesCompactResult() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        root.addChildToBack(NodeUtil.newExpr(
+                new Node(Token.MUL, Node.newNumber(2), Node.newNumber(3))));
+        new FoldConstants(null).process(null, root);
+        assertEquals(6.0, root.getFirstChild().getFirstChild().getDouble(), 0.0);
+    }
+
+    @Test
+    public void testArithmeticMayRemainWhenResultIsLonger() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node add = new Node(Token.ADD, Node.newNumber(9), Node.newNumber(9));
+        root.addChildToBack(NodeUtil.newExpr(add));
+        new FoldConstants(null).process(null, root);
+        assertEquals(Token.ADD, root.getFirstChild().getFirstChild().getType());
+    }
+
+    @Test
+    public void testBitAndFoldAtIntegerMaximum() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        root.addChildToBack(NodeUtil.newExpr(new Node(Token.BITAND,
+                Node.newNumber(2147483647.0), Node.newNumber(1))));
+        new FoldConstants(null).process(null, root);
+        assertEquals(1.0, root.getFirstChild().getFirstChild().getDouble(), 0.0);
+    }
+
+    @Test
+    public void testBitAndDoesNotFoldOutsideIntegerRange() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node bitAnd = new Node(Token.BITAND,
+                Node.newNumber(2147483648.0), Node.newNumber(1));
+        root.addChildToBack(NodeUtil.newExpr(bitAnd));
+        new FoldConstants(null).process(null, root);
+        assertSame(bitAnd, root.getFirstChild().getFirstChild());
+    }
+
+    @Test
+    public void testBitAndDoesNotFoldFractionalOperand() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node bitAnd = new Node(Token.BITAND,
+                Node.newNumber(1.5), Node.newNumber(1));
+        root.addChildToBack(NodeUtil.newExpr(bitAnd));
+        new FoldConstants(null).process(null, root);
+        assertSame(bitAnd, root.getFirstChild().getFirstChild());
+    }
+
+    @Test
+    public void testLeftShiftAtMaximumValidShift() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        root.addChildToBack(NodeUtil.newExpr(new Node(Token.LSH,
+                Node.newNumber(1), Node.newNumber(31))));
+        new FoldConstants(null).process(null, root);
+        assertEquals(-2147483648.0,
+                root.getFirstChild().getFirstChild().getDouble(), 0.0);
+    }
+
+    @Test
+    public void testShiftWithFirstOutOfRangeAmountRemains() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node shift = new Node(Token.LSH, Node.newNumber(1), Node.newNumber(32));
+        root.addChildToBack(NodeUtil.newExpr(shift));
+        new FoldConstants(null).process(null, root);
+        assertSame(shift, root.getFirstChild().getFirstChild());
+    }
+
+    @Test
+    public void testArrayLengthFolds() throws Exception {
+        Node array = new Node(Token.ARRAYLIT,
+                Node.newNumber(3), Node.newNumber(4));
+        Node root = new Node(Token.SCRIPT);
+        root.addChildToBack(NodeUtil.newExpr(new Node(Token.GETPROP,
+                array, Node.newString("length"))));
+        new FoldConstants(null).process(null, root);
+        assertEquals(2.0, root.getFirstChild().getFirstChild().getDouble(), 0.0);
+    }
+
+    @Test
+    public void testStringLengthFolds() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        root.addChildToBack(NodeUtil.newExpr(new Node(Token.GETPROP,
+                Node.newString("abc"), Node.newString("length"))));
+        new FoldConstants(null).process(null, root);
+        assertEquals(3.0, root.getFirstChild().getFirstChild().getDouble(), 0.0);
+    }
+
+    @Test
+    public void testArrayIndexZeroFoldsAndRemovesElement() throws Exception {
+        Node array = new Node(Token.ARRAYLIT,
+                Node.newString("first"), Node.newString("second"));
+        Node root = new Node(Token.SCRIPT);
+        root.addChildToBack(NodeUtil.newExpr(new Node(Token.GETELEM,
+                array, Node.newNumber(0))));
+        new FoldConstants(null).process(null, root);
+        Node result = root.getFirstChild().getFirstChild();
+        assertEquals(Token.STRING, result.getType());
+        assertEquals("first", result.getString());
+        assertEquals(1, array.getChildCount());
+    }
+
+    @Test
+    public void testArrayLastValidIndexFolds() throws Exception {
+        Node array = new Node(Token.ARRAYLIT,
+                Node.newString("first"), Node.newString("last"));
+        Node root = new Node(Token.SCRIPT);
+        root.addChildToBack(NodeUtil.newExpr(new Node(Token.GETELEM,
+                array, Node.newNumber(1))));
+        new FoldConstants(null).process(null, root);
+        assertEquals("last",
+                root.getFirstChild().getFirstChild().getString());
+    }
+
+    @Test
+    public void testFractionalArrayIndexRemainsUnfolded() throws Exception {
+        Node array = new Node(Token.ARRAYLIT, Node.newString("x"));
+        Node getElem = new Node(Token.GETELEM, array, Node.newNumber(0.5));
+        Node root = new Node(Token.SCRIPT);
+        root.addChildToBack(NodeUtil.newExpr(getElem));
+        new FoldConstants(null).process(null, root);
+        assertSame(getElem, root.getFirstChild().getFirstChild());
+    }
+
+    @Test
+    public void testOutOfBoundsArrayIndexRemainsUnfolded() throws Exception {
+        Node array = new Node(Token.ARRAYLIT, Node.newString("x"));
+        Node getElem = new Node(Token.GETELEM, array, Node.newNumber(1));
+        Node root = new Node(Token.SCRIPT);
+        root.addChildToBack(NodeUtil.newExpr(getElem));
+        new FoldConstants(null).process(null, root);
+        assertSame(getElem, root.getFirstChild().getFirstChild());
+    }
+
+    @Test
+    public void testFalseAndFoldsToFalse() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        root.addChildToBack(NodeUtil.newExpr(
+                new Node(Token.AND, new Node(Token.FALSE), Node.newString("x"))));
+        new FoldConstants(null).process(null, root);
+        assertEquals(Token.FALSE, root.getFirstChild().getFirstChild().getType());
+    }
+
+    @Test
+    public void testTrueOrFoldsToTrue() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        root.addChildToBack(NodeUtil.newExpr(
+                new Node(Token.OR, new Node(Token.TRUE), Node.newString("x"))));
+        new FoldConstants(null).process(null, root);
+        assertEquals(Token.TRUE, root.getFirstChild().getFirstChild().getType());
+    }
+
+    @Test
+    public void testLiteralNegationFolds() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        root.addChildToBack(NodeUtil.newExpr(
+                new Node(Token.NEG, Node.newNumber(4))));
+        new FoldConstants(null).process(null, root);
+        assertEquals(-4.0, root.getFirstChild().getFirstChild().getDouble(), 0.0);
+    }
+
+    @Test
+    public void testBitwiseNotFolds() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        root.addChildToBack(NodeUtil.newExpr(
+                new Node(Token.BITNOT, Node.newNumber(0))));
+        new FoldConstants(null).process(null, root);
+        assertEquals(-1.0, root.getFirstChild().getFirstChild().getDouble(), 0.0);
+    }
+
+    @Test
+    public void testNotEqualityMinimizesToInequality() throws Exception {
+        Node equality = new Node(Token.EQ, Node.newNumber(1), Node.newNumber(2));
+        Node root = new Node(Token.SCRIPT);
+        root.addChildToBack(NodeUtil.newExpr(new Node(Token.NOT, equality)));
+        new FoldConstants(null).process(null, root);
+        assertEquals(Token.NE, root.getFirstChild().getFirstChild().getType());
+    }
+
+    @Test
+    public void testTypeofStringFolds() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        root.addChildToBack(NodeUtil.newExpr(
+                new Node(Token.TYPEOF, Node.newString("x"))));
+        new FoldConstants(null).process(null, root);
+        assertEquals("string", root.getFirstChild().getFirstChild().getString());
+    }
+
+    @Test
+    public void testComparisonNumbersFolds() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        root.addChildToBack(NodeUtil.newExpr(
+                new Node(Token.LT, Node.newNumber(1), Node.newNumber(2))));
+        new FoldConstants(null).process(null, root);
+        assertEquals(Token.TRUE, root.getFirstChild().getFirstChild().getType());
+    }
+
+    @Test
+    public void testReturnUndefinedBecomesBareReturn() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        root.addChildToBack(new Node(Token.RETURN, Node.newString(Token.NAME, "undefined")));
+        new FoldConstants(null).process(null, root);
+        assertFalse(root.getFirstChild().hasChildren());
+    }
+
+    @Test
+    public void testContainsUnicodeEscapeRecognizesUnicodeEscape() throws Exception {
+        assertTrue(FoldConstants.containsUnicodeEscape("\\u1234"));
+    }
+
+    @Test
+    public void testContainsUnicodeEscapeIgnoresEscapedBackslash() throws Exception {
+        assertFalse(FoldConstants.containsUnicodeEscape("\\\\u1234"));
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+Tested arithmetic and bitwise folding, shifts, array/string length and indexing, logical and unary folding, comparisons, `typeof`, and return reduction.
+The tests exercise `process`, which traverses the syntax tree and applies the public folding behavior implemented by `visit`.
+
+### 2. TEST CASE DESIGN
+- `testAddNumbers`: `2 + 3`; expected number `5`, from numeric addition.
+- `testAddStrings`: `"ab" + "cd"`; expected `"abcd"`, from string concatenation.
+- `testDivideByZeroRemainsUnfolded`: `5 / 0`; expected DIV node retained because division by zero reports an error instead of folding.
+- `testArithmeticFoldUsesCompactResult`: `2 * 3`; expected `6`, and its representation fits the source-size condition.
+- `testArithmeticMayRemainWhenResultIsLonger`: `9 + 9`; expected ADD retained because `"18"` is longer than the operand strings plus operator allowance.
+- `testBitAndFoldAtIntegerMaximum`: `2147483647 & 1`; expected `1`, at the inclusive integer maximum.
+- `testBitAndDoesNotFoldOutsideIntegerRange`: `2147483648 & 1`; expected original node retained, above the allowed integer range.
+- `testBitAndDoesNotFoldFractionalOperand`: `1.5 & 1`; expected original node retained because the operand is fractional.
+- `testLeftShiftAtMaximumValidShift`: `1 << 31`; expected `-2147483648`, from Java 32-bit integer shifting.
+- `testShiftWithFirstOutOfRangeAmountRemains`: shift amount `32`; expected original node retained because valid amounts are below 32.
+- `testArrayLengthFolds`: two-element array `.length`; expected `2`.
+- `testStringLengthFolds`: `"abc".length`; expected `3`.
+- `testArrayIndexZeroFoldsAndRemovesElement`: index `0`; expected `"first"` and one remaining array child.
+- `testArrayLastValidIndexFolds`: index `1` in a two-element array; expected `"last"`.
+- `testFractionalArrayIndexRemainsUnfolded`: index `0.5`; expected GETELEM retained because the index is not integral.
+- `testOutOfBoundsArrayIndexRemainsUnfolded`: index `1` in a one-element array; expected GETELEM retained because it is out of bounds.
+- `testFalseAndFoldsToFalse`: `false && "x"`; expected `false`.
+- `testTrueOrFoldsToTrue`: `true || "x"`; expected `true`.
+- `testLiteralNegationFolds`: `-4`; expected `-4`.
+- `testBitwiseNotFolds`: `~0`; expected `-1`.
+- `testNotEqualityMinimizesToInequality`: `!(1 == 2)`; expected comparison operator NE after minimization.
+- `testTypeofStringFolds`: `typeof "x"`; expected `"string"`.
+- `testComparisonNumbersFolds`: `1 < 2`; expected true.
+- `testReturnUndefinedBecomesBareReturn`: return of the name `undefined`; expected no return child.
+- `testContainsUnicodeEscapeRecognizesUnicodeEscape`: `\u1234`; expected true according to the escape scan.
+- `testContainsUnicodeEscapeIgnoresEscapedBackslash`: escaped backslash before `u`; expected false because the unicode escape marker is escaped.
+
+### 4. DEFECT DETECTION STRATEGY
+The assertions pin folded values and structural outcomes on both foldable cases and guarded cases where the source preserves the original expression. They do not establish detection of any unseen defect.
+
+### 5. SUMMARY
+26 tests.
+
+### 6. LIMITATIONS
+The tests cover selected public traversal behavior, not every optimization branch or diagnostic. Actual execution is needed to establish compatibility with this project’s available compiler and test environment.
+Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

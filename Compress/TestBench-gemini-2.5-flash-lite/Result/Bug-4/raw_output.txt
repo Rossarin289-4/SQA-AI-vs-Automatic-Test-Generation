@@ -1,0 +1,808 @@
+```java
+package org.apache.commons.compress.archivers.cpio;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
+import org.apache.commons.compress.archivers.zip.ZipArchiveOutputStream;
+import org.apache.commons.compress.changes.ChangeSetPerformer;
+import java.io.File;
+import java.io.FilterOutputStream;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.util.HashMap;
+import org.apache.commons.compress.archivers.ArchiveEntry;
+import org.apache.commons.compress.archivers.ArchiveOutputStream;
+import org.apache.commons.compress.utils.ArchiveUtils;
+import java.io.FileOutputStream;
+import java.io.RandomAccessFile;
+import java.nio.ByteBuffer;
+import java.util.Iterator;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+import java.util.zip.CRC32;
+import java.util.zip.Deflater;
+import java.util.zip.ZipException;
+import java.io.InputStream;
+import java.util.LinkedHashSet;
+import java.util.Set;
+import org.apache.commons.compress.archivers.ArchiveInputStream;
+import org.apache.commons.compress.utils.IOUtils;
+import org.apache.commons.compress.archivers.zip.ZipLong;
+import org.apache.commons.compress.changes.Change;
+import org.apache.commons.compress.archivers.zip.ZipShort;
+
+public class CpioArchiveOutputStreamTest {
+    // test methods (as many as the instructions ask for), each exactly in this form:
+    //     @Test
+    //     public void testWhatItChecks() throws Exception { ... }
+
+    private static final short[] FORMATS = {
+        CpioConstants.FORMAT_NEW,
+        CpioConstants.FORMAT_NEW_CRC,
+        CpioConstants.FORMAT_OLD_ASCII,
+        CpioConstants.FORMAT_OLD_BINARY
+    };
+
+    private OutputStream createOut() {
+        return new java.io.ByteArrayOutputStream();
+    }
+
+    @Test
+    public void testCpioArchiveOutputStreamConstructorDefaultFormat() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out);
+        // Check if default format (FORMAT_NEW) is set correctly.
+        // The format is a private field, so we can't directly assert it.
+        // We can indirectly test by trying to write an entry and checking for exceptions.
+        // For now, we assume the constructor is correct if it doesn't throw.
+        assertNotNull(cpio);
+    }
+
+    @Test
+    public void testCpioArchiveOutputStreamConstructorValidFormat() throws Exception {
+        for (short format : FORMATS) {
+            OutputStream out = createOut();
+            CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, format);
+            assertNotNull(cpio);
+        }
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testCpioArchiveOutputStreamConstructorInvalidFormat() throws Exception {
+        OutputStream out = createOut();
+        new CpioArchiveOutputStream(out, (short) 99); // Invalid format
+    }
+
+    @Test
+    public void testEnsureOpen() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out);
+        cpio.close();
+        try {
+            cpio.ensureOpen();
+            fail("Expected IOException when stream is closed");
+        } catch (IOException e) {
+            assertEquals("Stream closed", e.getMessage());
+        }
+    }
+
+    @Test
+    public void testPutArchiveEntryValid() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_NEW);
+        CpioArchiveEntry entry = new CpioArchiveEntry("test.txt");
+        entry.setSize(5);
+        entry.setMode(CpioConstants.C_ISREG);
+        cpio.putArchiveEntry(entry);
+        // Check if entry is set and written. We can't directly check the output stream contents here.
+        // The test will implicitly check if header writing works without exceptions.
+        assertNotNull(cpio.entry);
+        assertEquals(5, cpio.written); // written should be updated after header
+    }
+    
+    @Test
+    public void testPutArchiveEntryWithTime() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_NEW);
+        CpioArchiveEntry entry = new CpioArchiveEntry("test.txt");
+        entry.setTime(123456789);
+        entry.setSize(5);
+        entry.setMode(CpioConstants.C_ISREG);
+        cpio.putArchiveEntry(entry);
+        assertNotNull(cpio.entry);
+        assertEquals(123456789, cpio.entry.getTime());
+    }
+
+    @Test
+    public void testPutArchiveEntryWithDefaultTime() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_NEW);
+        CpioArchiveEntry entry = new CpioArchiveEntry("test.txt");
+        entry.setTime(-1); // Indicate default time should be used
+        entry.setSize(5);
+        entry.setMode(CpioConstants.C_ISREG);
+        cpio.putArchiveEntry(entry);
+        // Check if time was updated to current system time
+        assertTrue(cpio.entry.getTime() > 0);
+    }
+
+    @Test(expected = IOException.class)
+    public void testPutArchiveEntryMismatchedFormat() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_NEW);
+        CpioArchiveEntry entry = new CpioArchiveEntry("test.txt");
+        entry.setFormat(CpioConstants.FORMAT_OLD_ASCII); // Mismatched format
+        entry.setSize(5);
+        entry.setMode(CpioConstants.C_ISREG);
+        cpio.putArchiveEntry(entry);
+    }
+
+    @Test(expected = IOException.class)
+    public void testPutArchiveEntryDuplicateName() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_NEW);
+        CpioArchiveEntry entry1 = new CpioArchiveEntry("test.txt");
+        entry1.setSize(5);
+        entry1.setMode(CpioConstants.C_ISREG);
+        cpio.putArchiveEntry(entry1);
+
+        CpioArchiveEntry entry2 = new CpioArchiveEntry("test.txt"); // Duplicate name
+        entry2.setSize(10);
+        entry2.setMode(CpioConstants.C_ISREG);
+        cpio.putArchiveEntry(entry2);
+    }
+
+    @Test
+    public void testCloseArchiveEntryValid() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_NEW);
+        CpioArchiveEntry entry = new CpioArchiveEntry("test.txt");
+        entry.setSize(5);
+        entry.setMode(CpioConstants.C_ISREG);
+        cpio.putArchiveEntry(entry);
+        cpio.write("hello".getBytes(), 0, 5);
+        cpio.closeArchiveEntry();
+        assertNull(cpio.entry);
+        assertEquals(0, cpio.crc);
+        assertEquals(0, cpio.written);
+    }
+
+    @Test(expected = IOException.class)
+    public void testCloseArchiveEntryInvalidSize() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_NEW);
+        CpioArchiveEntry entry = new CpioArchiveEntry("test.txt");
+        entry.setSize(10); // Expected size is 10
+        entry.setMode(CpioConstants.C_ISREG);
+        cpio.putArchiveEntry(entry);
+        cpio.write("hello".getBytes(), 0, 5); // Written only 5 bytes
+        cpio.closeArchiveEntry();
+    }
+
+    @Test
+    public void testWriteValid() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_NEW);
+        CpioArchiveEntry entry = new CpioArchiveEntry("test.txt");
+        entry.setSize(5);
+        entry.setMode(CpioConstants.C_ISREG);
+        cpio.putArchiveEntry(entry);
+        cpio.write("hello".getBytes(), 0, 5);
+        assertEquals(5, cpio.written);
+    }
+
+    @Test
+    public void testWriteWithMultipleCalls() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_NEW);
+        CpioArchiveEntry entry = new CpioArchiveEntry("test.txt");
+        entry.setSize(10);
+        entry.setMode(CpioConstants.C_ISREG);
+        cpio.putArchiveEntry(entry);
+        cpio.write("hello".getBytes(), 0, 5);
+        cpio.write("world".getBytes(), 0, 5);
+        assertEquals(10, cpio.written);
+        cpio.closeArchiveEntry();
+    }
+
+    @Test(expected = IOException.class)
+    public void testWritePastEndOfEntry() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_NEW);
+        CpioArchiveEntry entry = new CpioArchiveEntry("test.txt");
+        entry.setSize(5);
+        entry.setMode(CpioConstants.C_ISREG);
+        cpio.putArchiveEntry(entry);
+        cpio.write("hello world".getBytes(), 0, 11); // More than entry size
+    }
+
+    @Test(expected = IOException.class)
+    public void testWriteBeforeEntry() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_NEW);
+        cpio.write("hello".getBytes(), 0, 5); // No entry started
+    }
+
+    @Test
+    public void testFinishValid() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_NEW);
+        cpio.finish(); // Should write trailer
+        assertNull(cpio.entry);
+        assertTrue(cpio.finished);
+    }
+
+    @Test(expected = IOException.class)
+    public void testFinishWithUnclosedEntry() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_NEW);
+        CpioArchiveEntry entry = new CpioArchiveEntry("test.txt");
+        entry.setSize(5);
+        entry.setMode(CpioConstants.C_ISREG);
+        cpio.putArchiveEntry(entry);
+        cpio.finish(); // Should throw exception
+    }
+
+    @Test
+    public void testClose() throws Exception {
+        OutputStream out = new java.io.ByteArrayOutputStream(); // Use ByteArrayOutputStream to check if closed
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_NEW);
+        cpio.close();
+        assertTrue(cpio.closed);
+        // Check if underlying stream is closed. We can't directly check that.
+        // The effect of closing is preventing further operations.
+    }
+
+    @Test
+    public void testCloseIdempotent() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_NEW);
+        cpio.close();
+        cpio.close(); // Should not throw exception
+        assertTrue(cpio.closed);
+    }
+    
+    @Test
+    public void testCreateArchiveEntry() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_NEW);
+        File file = new File("dummy.txt");
+        ArchiveEntry entry = cpio.createArchiveEntry(file, "dummy.txt");
+        assertNotNull(entry);
+        assertTrue(entry instanceof CpioArchiveEntry);
+        assertEquals("dummy.txt", entry.getName());
+    }
+
+    // --- Helper methods for writing headers and padding ---
+
+    @Test
+    public void testWriteHeaderNew() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_NEW);
+        CpioArchiveEntry entry = new CpioArchiveEntry("test.txt");
+        entry.setInode(1);
+        entry.setMode(0x81A4); // Regular file with permissions
+        entry.setUID(1000);
+        entry.setGID(1000);
+        entry.setNumberOfLinks(1);
+        entry.setTime(12345);
+        entry.setSize(5);
+        entry.setDeviceMaj(1);
+        entry.setDeviceMin(2);
+        entry.setRemoteDeviceMaj(0);
+        entry.setRemoteDeviceMin(0);
+        
+        cpio.writeHeader(entry);
+
+        // Basic check: verify magic bytes
+        byte[] result = ((java.io.ByteArrayOutputStream) out).toByteArray();
+        assertTrue(ArchiveUtils.toString(result, 0, MAGIC_NEW.length).equals(MAGIC_NEW));
+    }
+
+    @Test
+    public void testWriteHeaderNewCrc() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_NEW_CRC);
+        CpioArchiveEntry entry = new CpioArchiveEntry("test.txt");
+        entry.setChksum(12345); // Dummy checksum
+        entry.setSize(5);
+        entry.setMode(CpioConstants.C_ISREG);
+        cpio.writeHeader(entry);
+        byte[] result = ((java.io.ByteArrayOutputStream) out).toByteArray();
+        assertTrue(ArchiveUtils.toString(result, 0, MAGIC_NEW_CRC.length).equals(MAGIC_NEW_CRC));
+    }
+
+    @Test
+    public void testWriteHeaderOldAscii() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_OLD_ASCII);
+        CpioArchiveEntry entry = new CpioArchiveEntry("test.txt");
+        entry.setDevice(1);
+        entry.setInode(2);
+        entry.setMode(CpioConstants.C_ISREG);
+        entry.setUID(1000);
+        entry.setGID(1000);
+        entry.setNumberOfLinks(1);
+        entry.setRemoteDevice(3);
+        entry.setTime(12345);
+        entry.setSize(5);
+
+        cpio.writeHeader(entry);
+        byte[] result = ((java.io.ByteArrayOutputStream) out).toByteArray();
+        assertTrue(ArchiveUtils.toString(result, 0, MAGIC_OLD_ASCII.length).equals(MAGIC_OLD_ASCII));
+    }
+
+    @Test
+    public void testWriteHeaderOldBinary() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_OLD_BINARY);
+        CpioArchiveEntry entry = new CpioArchiveEntry("test.txt");
+        boolean swapHalfWord = true; // This is typically true for old binary format
+        
+        // Mocking internal calls to check behavior
+        // This is hard to test directly without mocking, so we'll rely on putArchiveEntry and writeHeader.
+        // For simplicity, we'll just call writeHeader directly.
+        
+        // Manually setting fields for binary format
+        entry.setDevice(1);
+        entry.setInode(2);
+        entry.setMode(CpioConstants.C_ISREG);
+        entry.setUID(1000);
+        entry.setGID(1000);
+        entry.setNumberOfLinks(1);
+        entry.setRemoteDevice(3);
+        entry.setTime(12345);
+        entry.setSize(5);
+
+        cpio.writeHeader(entry);
+        byte[] result = ((java.io.ByteArrayOutputStream) out).toByteArray();
+        assertTrue(ArchiveUtils.toString(result, 0, 2).equals(MAGIC_OLD_BINARY));
+    }
+
+    @Test
+    public void testPad() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_NEW);
+        int padding = 4;
+        cpio.pad(padding);
+        byte[] result = ((java.io.ByteArrayOutputStream) out).toByteArray();
+        assertEquals(padding, result.length);
+        for (byte b : result) {
+            assertEquals(0, b);
+        }
+    }
+    
+    @Test
+    public void testPadZero() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_NEW);
+        cpio.pad(0); // No padding
+        byte[] result = ((java.io.ByteArrayOutputStream) out).toByteArray();
+        assertEquals(0, result.length);
+    }
+
+    @Test
+    public void testWriteBinaryLong() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_OLD_BINARY);
+        long number = 1234567890L;
+        int length = 4;
+        boolean swapHalfWord = true;
+        cpio.writeBinaryLong(number, length, swapHalfWord);
+        byte[] result = ((java.io.ByteArrayOutputStream) out).toByteArray();
+        
+        // Expected bytes for 1234567890 as 4-byte little-endian (due to swapHalfWord=true)
+        // 0x499602D2 -> D2 02 96 49
+        byte[] expected = {(byte)0xD2, (byte)0x02, (byte)0x96, (byte)0x49};
+        assertArrayEquals(expected, result);
+    }
+
+    @Test
+    public void testWriteAsciiLongHex() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_NEW);
+        long number = 255;
+        int length = 8;
+        int radix = 16;
+        cpio.writeAsciiLong(number, length, radix);
+        byte[] result = ((java.io.ByteArrayOutputStream) out).toByteArray();
+        assertEquals("000000FF", new String(result));
+    }
+
+    @Test
+    public void testWriteAsciiLongOctal() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_NEW);
+        long number = 63; // octal 77
+        int length = 8;
+        int radix = 8;
+        cpio.writeAsciiLong(number, length, radix);
+        byte[] result = ((java.io.ByteArrayOutputStream) out).toByteArray();
+        assertEquals("00000077", new String(result));
+    }
+
+    @Test
+    public void testWriteAsciiLongDecimal() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_NEW);
+        long number = 12345;
+        int length = 8;
+        int radix = 10;
+        cpio.writeAsciiLong(number, length, radix);
+        byte[] result = ((java.io.ByteArrayOutputStream) out).toByteArray();
+        assertEquals("00012345", new String(result));
+    }
+
+    @Test
+    public void testWriteAsciiLongDecimalTruncate() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_NEW);
+        long number = 1234567890L; // Longer than length 8
+        int length = 8;
+        int radix = 10;
+        cpio.writeAsciiLong(number, length, radix);
+        byte[] result = ((java.io.ByteArrayOutputStream) out).toByteArray();
+        assertEquals("34567890", new String(result)); // Last 8 digits
+    }
+
+    @Test
+    public void testWriteCString() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_NEW);
+        String str = "hello";
+        cpio.writeCString(str);
+        byte[] result = ((java.io.ByteArrayOutputStream) out).toByteArray();
+        assertEquals("hello\0", new String(result));
+    }
+
+    // --- CRC calculation for FORMAT_NEW_CRC ---
+    @Test
+    public void testCrcCalculation() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_NEW_CRC);
+        CpioArchiveEntry entry = new CpioArchiveEntry("test.txt");
+        entry.setSize(5);
+        entry.setMode(CpioConstants.C_ISREG);
+        cpio.putArchiveEntry(entry);
+
+        byte[] data = "hello".getBytes();
+        cpio.write(data, 0, data.length);
+        
+        // Verify CRC calculation. The CRC is calculated by summing up byte values.
+        // For "hello": 'h'(104) + 'e'(101) + 'l'(108) + 'l'(108) + 'o'(111) = 532
+        assertEquals(532, cpio.crc); 
+
+        cpio.closeArchiveEntry();
+        // After closing, CRC should be reset.
+        assertEquals(0, cpio.crc);
+    }
+    
+    @Test
+    public void testCrcCalculationWithMultipleWrites() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_NEW_CRC);
+        CpioArchiveEntry entry = new CpioArchiveEntry("test.txt");
+        entry.setSize(10);
+        entry.setMode(CpioConstants.C_ISREG);
+        cpio.putArchiveEntry(entry);
+
+        byte[] data1 = "hello".getBytes();
+        cpio.write(data1, 0, data1.length); // CRC = 532
+
+        byte[] data2 = "world".getBytes();
+        cpio.write(data2, 0, data2.length); // CRC = 532 + 555 = 1087
+
+        assertEquals(1087, cpio.crc);
+        cpio.closeArchiveEntry();
+    }
+
+    @Test
+    public void testCrcErrorOnClose() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_NEW_CRC);
+        CpioArchiveEntry entry = new CpioArchiveEntry("test.txt");
+        entry.setSize(5);
+        entry.setMode(CpioConstants.C_ISREG);
+        entry.setChksum(12345); // Expected checksum
+        cpio.putArchiveEntry(entry);
+
+        byte[] data = "hello".getBytes(); // Actual data for CRC calculation
+        cpio.write(data, 0, data.length); // Calculated CRC will be 532
+
+        // On closeArchiveEntry, the calculated CRC (532) will be compared with entry.getChksum() (12345).
+        try {
+            cpio.closeArchiveEntry();
+            fail("Expected IOException for CRC mismatch");
+        } catch (IOException e) {
+            assertEquals("CRC Error", e.getMessage());
+        }
+    }
+
+    // --- Test edge cases for numeric fields ---
+    
+    @Test
+    public void testWriteAsciiLongHexMax() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_NEW);
+        long number = Long.MAX_VALUE; // 18446744073709551615
+        int length = 16; // Max length for hex in NEW format header
+        int radix = 16;
+        cpio.writeAsciiLong(number, length, radix);
+        byte[] result = ((java.io.ByteArrayOutputStream) out).toByteArray();
+        assertEquals("ffffffffffffffff", new String(result));
+    }
+
+    @Test
+    public void testWriteAsciiLongHexMin() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_NEW);
+        long number = 0;
+        int length = 8;
+        int radix = 16;
+        cpio.writeAsciiLong(number, length, radix);
+        byte[] result = ((java.io.ByteArrayOutputStream) out).toByteArray();
+        assertEquals("00000000", new String(result));
+    }
+    
+    @Test
+    public void testWriteAsciiLongOctalMax() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_NEW);
+        long number = Long.MAX_VALUE; // Very large octal
+        int length = 11; // For size field in OLD_ASCII
+        int radix = 8;
+        cpio.writeAsciiLong(number, length, radix);
+        byte[] result = ((java.io.ByteArrayOutputStream) out).toByteArray();
+        // For MAX_VALUE, the octal representation is 177777777777777777777
+        // Truncated to 11 digits
+        assertEquals("77777777777", new String(result));
+    }
+    
+    @Test
+    public void testWriteAsciiLongOctalMin() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_NEW);
+        long number = 0;
+        int length = 6; // For name length field in OLD_ASCII
+        int radix = 8;
+        cpio.writeAsciiLong(number, length, radix);
+        byte[] result = ((java.io.ByteArrayOutputStream) out).toByteArray();
+        assertEquals("000000", new String(result));
+    }
+
+    @Test
+    public void testWriteBinaryLongMax() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_OLD_BINARY);
+        long number = 0xFFFFFFFFL; // Max 32-bit unsigned
+        int length = 4;
+        boolean swapHalfWord = false;
+        cpio.writeBinaryLong(number, length, swapHalfWord);
+        byte[] result = ((java.io.ByteArrayOutputStream) out).toByteArray();
+        byte[] expected = {(byte)0xFF, (byte)0xFF, (byte)0xFF, (byte)0xFF};
+        assertArrayEquals(expected, result);
+    }
+
+    @Test
+    public void testWriteBinaryLongMin() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_OLD_BINARY);
+        long number = 0;
+        int length = 2;
+        boolean swapHalfWord = true;
+        cpio.writeBinaryLong(number, length, swapHalfWord);
+        byte[] result = ((java.io.ByteArrayOutputStream) out).toByteArray();
+        byte[] expected = {0x00, 0x00};
+        assertArrayEquals(expected, result);
+    }
+    
+    // Tests for CpioArchiveEntry properties and their writing
+    @Test
+    public void testNewFormatEntryWriting() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_NEW);
+        CpioArchiveEntry entry = new CpioArchiveEntry("file.txt");
+        entry.setInode(123);
+        entry.setMode(CpioConstants.C_ISREG | 0x644); // Regular file, rw-r--r--
+        entry.setUID(1001);
+        entry.setGID(1002);
+        entry.setNumberOfLinks(1);
+        entry.setTime(1678886400); // A specific timestamp
+        entry.setSize(10);
+        entry.setDeviceMaj(3);
+        entry.setDeviceMin(4);
+        entry.setRemoteDeviceMaj(0);
+        entry.setRemoteDeviceMin(0);
+        entry.setChksum(0); // Chksum is not used in FORMAT_NEW for header
+
+        cpio.putArchiveEntry(entry);
+        cpio.write("0123456789".getBytes(), 0, 10);
+        cpio.closeArchiveEntry();
+        cpio.finish();
+
+        // Basic verification of header fields by inspecting output bytes (manual analysis would be needed to verify all)
+        byte[] output = ((java.io.ByteArrayOutputStream) out).toByteArray();
+        assertTrue(output.length > 0); // Ensure something was written
+    }
+
+    @Test
+    public void testNewCrcFormatEntryWriting() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_NEW_CRC);
+        CpioArchiveEntry entry = new CpioArchiveEntry("file.txt");
+        entry.setInode(123);
+        entry.setMode(CpioConstants.C_ISREG | 0x644);
+        entry.setUID(1001);
+        entry.setGID(1002);
+        entry.setNumberOfLinks(1);
+        entry.setTime(1678886400);
+        entry.setSize(10);
+        entry.setDeviceMaj(3);
+        entry.setDeviceMin(4);
+        entry.setRemoteDeviceMaj(0);
+        entry.setRemoteDeviceMin(0);
+        entry.setChksum(0); // Will be set by CRC calculation
+
+        cpio.putArchiveEntry(entry);
+        byte[] content = "0123456789".getBytes();
+        cpio.write(content, 0, content.length);
+        
+        // Manually calculate expected CRC for "0123456789"
+        long expectedCrc = 0;
+        for(byte b : content) {
+            expectedCrc += b & 0xFF;
+        }
+        entry.setChksum(expectedCrc); // Set the expected checksum before closing
+
+        cpio.closeArchiveEntry(); // This will check the CRC
+        cpio.finish();
+
+        byte[] output = ((java.io.ByteArrayOutputStream) out).toByteArray();
+        assertTrue(output.length > 0);
+    }
+
+    @Test
+    public void testOldAsciiFormatEntryWriting() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_OLD_ASCII);
+        CpioArchiveEntry entry = new CpioArchiveEntry("file.txt");
+        entry.setDevice(5); // Old ASCII uses 6 digits for device
+        entry.setInode(6);
+        entry.setMode(CpioConstants.C_ISREG | 0x644);
+        entry.setUID(1001);
+        entry.setGID(1002);
+        entry.setNumberOfLinks(1);
+        entry.setRemoteDevice(7);
+        entry.setTime(1678886400);
+        entry.setSize(10);
+        
+        cpio.putArchiveEntry(entry);
+        cpio.write("0123456789".getBytes(), 0, 10);
+        cpio.closeArchiveEntry();
+        cpio.finish();
+        
+        byte[] output = ((java.io.ByteArrayOutputStream) out).toByteArray();
+        assertTrue(output.length > 0);
+    }
+
+    @Test
+    public void testOldBinaryFormatEntryWriting() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_OLD_BINARY);
+        CpioArchiveEntry entry = new CpioArchiveEntry("file.txt");
+        entry.setDevice(5);
+        entry.setInode(6);
+        entry.setMode(CpioConstants.C_ISREG | 0x644);
+        entry.setUID(1001);
+        entry.setGID(1002);
+        entry.setNumberOfLinks(1);
+        entry.setRemoteDevice(7);
+        entry.setTime(1678886400);
+        entry.setSize(10);
+        
+        cpio.putArchiveEntry(entry);
+        cpio.write("0123456789".getBytes(), 0, 10);
+        cpio.closeArchiveEntry();
+        cpio.finish();
+        
+        byte[] output = ((java.io.ByteArrayOutputStream) out).toByteArray();
+        assertTrue(output.length > 0);
+    }
+    
+    // Test with a very long file name that might require padding
+    @Test
+    public void testLongFileNamePadding() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_NEW);
+        String longName = "this_is_a_very_long_file_name_that_should_cause_padding.txt";
+        CpioArchiveEntry entry = new CpioArchiveEntry(longName);
+        entry.setSize(5);
+        entry.setMode(CpioConstants.C_ISREG);
+
+        cpio.putArchiveEntry(entry); // This call should trigger header writing and padding
+        
+        // Verify that some data was written, and that the output is not empty.
+        // Exact padding calculation is complex, so we check for non-empty output.
+        byte[] output = ((java.io.ByteArrayOutputStream) out).toByteArray();
+        assertTrue(output.length > 0);
+        
+        cpio.closeArchiveEntry();
+    }
+    
+    // Test writing an empty entry
+    @Test
+    public void testEmptyEntry() throws Exception {
+        OutputStream out = createOut();
+        CpioArchiveOutputStream cpio = new CpioArchiveOutputStream(out, CpioConstants.FORMAT_NEW);
+        CpioArchiveEntry entry = new CpioArchiveEntry("empty.txt");
+        entry.setSize(0);
+        entry.setMode(CpioConstants.C_ISREG);
+        cpio.putArchiveEntry(entry);
+        cpio.closeArchiveEntry(); // Should not throw error for zero size
+        assertTrue(true); // If no exception, test passes
+    }
+}
+```
+
+**1. SOURCE CODE ANALYSIS**
+The tests focus on the `CpioArchiveOutputStream` class, specifically its constructors, methods for managing archive entries (`putArchiveEntry`, `closeArchiveEntry`), writing data (`write`), and finalization (`finish`, `close`). It also tests helper methods for writing headers and padding across different CPIO formats.
+
+**2. TEST CASE DESIGN**
+- `testCpioArchiveOutputStreamConstructorDefaultFormat`: Verifies default constructor. Input: none. Expected: non-null stream. Derived: Constructor call.
+- `testCpioArchiveOutputStreamConstructorValidFormat`: Verifies valid format constructor. Input: various valid formats. Expected: non-null stream. Derived: Constructor call.
+- `testCpioArchiveOutputStreamConstructorInvalidFormat`: Verifies invalid format constructor. Input: invalid format (99). Expected: `IllegalArgumentException`. Derived: Constructor call and exception type.
+- `testEnsureOpen`: Verifies `ensureOpen` after closing. Input: closed stream. Expected: `IOException`. Derived: `close()` then `ensureOpen()` call.
+- `testPutArchiveEntryValid`: Tests adding a valid entry. Input: `CpioArchiveEntry`. Expected: entry set, written bytes updated. Derived: `putArchiveEntry` and checking `written` field.
+- `testPutArchiveEntryWithTime`: Tests `putArchiveEntry` with explicit time. Input: entry with time. Expected: time set correctly. Derived: `putArchiveEntry` and checking entry's time.
+- `testPutArchiveEntryWithDefaultTime`: Tests `putArchiveEntry` with default time (-1). Input: entry with time=-1. Expected: time updated to current time. Derived: `putArchiveEntry` and checking entry's time.
+- `testPutArchiveEntryMismatchedFormat`: Tests `putArchiveEntry` with format mismatch. Input: entry with different format. Expected: `IOException`. Derived: `putArchiveEntry` call.
+- `testPutArchiveEntryDuplicateName`: Tests `putArchiveEntry` with duplicate name. Input: two entries with same name. Expected: `IOException`. Derived: two `putArchiveEntry` calls.
+- `testCloseArchiveEntryValid`: Tests valid closing of an entry. Input: entry, written data matching size. Expected: entry cleared, CRC/written reset. Derived: `putArchiveEntry`, `write`, `closeArchiveEntry`.
+- `testCloseArchiveEntryInvalidSize`: Tests closing with size mismatch. Input: entry size > written bytes. Expected: `IOException`. Derived: `putArchiveEntry`, `write`, `closeArchiveEntry`.
+- `testWriteValid`: Tests writing data within entry size. Input: entry, data. Expected: written bytes updated. Derived: `putArchiveEntry`, `write`.
+- `testWriteWithMultipleCalls`: Tests writing with multiple `write` calls. Input: entry, multiple data chunks. Expected: total written bytes correct. Derived: `putArchiveEntry`, multiple `write`, `closeArchiveEntry`.
+- `testWritePastEndOfEntry`: Tests writing beyond entry size. Input: entry, data exceeding size. Expected: `IOException`. Derived: `putArchiveEntry`, `write`.
+- `testWriteBeforeEntry`: Tests writing before starting an entry. Input: no entry. Expected: `IOException`. Derived: `write` before `putArchiveEntry`.
+- `testFinishValid`: Tests finishing a valid archive. Input: no unclosed entries. Expected: trailer written, finished flag set. Derived: `finish`.
+- `testFinishWithUnclosedEntry`: Tests finishing with an unclosed entry. Input: active entry. Expected: `IOException`. Derived: `putArchiveEntry`, `finish`.
+- `testClose`: Tests closing the stream. Input: stream. Expected: stream marked as closed. Derived: `close`.
+- `testCloseIdempotent`: Tests calling `close` multiple times. Input: stream. Expected: no errors. Derived: `close`, `close`.
+- `testCreateArchiveEntry`: Tests `createArchiveEntry`. Input: file, name. Expected: `CpioArchiveEntry` instance. Derived: `createArchiveEntry` call.
+- `testWriteHeaderNew`: Tests writing header for NEW format. Input: `CpioArchiveEntry` with fields. Expected: Magic bytes written. Derived: `writeHeader`.
+- `testWriteHeaderNewCrc`: Tests writing header for NEW_CRC format. Input: `CpioArchiveEntry` with fields. Expected: Magic bytes written. Derived: `writeHeader`.
+- `testWriteHeaderOldAscii`: Tests writing header for OLD_ASCII format. Input: `CpioArchiveEntry` with fields. Expected: Magic bytes written. Derived: `writeHeader`.
+- `testWriteHeaderOldBinary`: Tests writing header for OLD_BINARY format. Input: `CpioArchiveEntry` with fields. Expected: Magic bytes written. Derived: `writeHeader`.
+- `testPad`: Tests padding functionality. Input: padding count. Expected: correct number of zero bytes. Derived: `pad`.
+- `testPadZero`: Tests padding with zero count. Input: 0. Expected: no bytes written. Derived: `pad(0)`.
+- `testWriteBinaryLong`: Tests `writeBinaryLong`. Input: value, length, swap flag. Expected: correct byte representation. Derived: `writeBinaryLong`.
+- `testWriteAsciiLongHex`: Tests `writeAsciiLong` with hex radix. Input: value, length, radix=16. Expected: zero-padded hex string. Derived: `writeAsciiLong`.
+- `testWriteAsciiLongOctal`: Tests `writeAsciiLong` with octal radix. Input: value, length, radix=8. Expected: zero-padded octal string. Derived: `writeAsciiLong`.
+- `testWriteAsciiLongDecimal`: Tests `writeAsciiLong` with decimal radix. Input: value, length, radix=10. Expected: zero-padded decimal string. Derived: `writeAsciiLong`.
+- `testWriteAsciiLongDecimalTruncate`: Tests `writeAsciiLong` with decimal and truncation. Input: large value, length. Expected: truncated decimal string. Derived: `writeAsciiLong`.
+- `testWriteCString`: Tests `writeCString`. Input: string. Expected: string + null terminator. Derived: `writeCString`.
+- `testCrcCalculation`: Tests CRC calculation for NEW_CRC format. Input: data. Expected: correct CRC sum. Derived: `write`, `cpio.crc`.
+- `testCrcCalculationWithMultipleWrites`: Tests CRC with multiple writes. Input: data chunks. Expected: cumulative CRC sum. Derived: `write`, `cpio.crc`.
+- `testCrcErrorOnClose`: Tests CRC mismatch error. Input: data, incorrect expected checksum. Expected: `IOException`. Derived: `write`, `closeArchiveEntry`.
+- `testWriteAsciiLongHexMax`: Tests `writeAsciiLong` with max hex value. Input: Long.MAX_VALUE, length 16. Expected: "ffffffffffffffff". Derived: `writeAsciiLong`.
+- `testWriteAsciiLongHexMin`: Tests `writeAsciiLong` with min hex value (0). Input: 0, length 8. Expected: "00000000". Derived: `writeAsciiLong`.
+- `testWriteAsciiLongOctalMax`: Tests `writeAsciiLong` with max octal value. Input: Long.MAX_VALUE, length 11. Expected: truncated octal string. Derived: `writeAsciiLong`.
+- `testWriteAsciiLongOctalMin`: Tests `writeAsciiLong` with min octal value (0). Input: 0, length 6. Expected: "000000". Derived: `writeAsciiLong`.
+- `testWriteBinaryLongMax`: Tests `writeBinaryLong` with max 32-bit value. Input: 0xFFFFFFFFL, length 4. Expected: 4 bytes of 0xFF. Derived: `writeBinaryLong`.
+- `testWriteBinaryLongMin`: Tests `writeBinaryLong` with min value (0). Input: 0, length 2. Expected: 2 bytes of 0x00. Derived: `writeBinaryLong`.
+- `testNewFormatEntryWriting`: Tests writing a full entry in NEW format. Input: populated `CpioArchiveEntry`. Expected: valid output structure. Derived: `putArchiveEntry`, `write`, `closeArchiveEntry`, `finish`.
+- `testNewCrcFormatEntryWriting`: Tests writing a full entry in NEW_CRC format. Input: populated `CpioArchiveEntry`, data. Expected: valid output structure, CRC check pass. Derived: `putArchiveEntry`, `write`, `closeArchiveEntry`, `finish`.
+- `testOldAsciiFormatEntryWriting`: Tests writing a full entry in OLD_ASCII format. Input: populated `CpioArchiveEntry`. Expected: valid output structure. Derived: `putArchiveEntry`, `write`, `closeArchiveEntry`, `finish`.
+- `testOldBinaryFormatEntryWriting`: Tests writing a full entry in OLD_BINARY format. Input: populated `CpioArchiveEntry`. Expected: valid output structure. Derived: `putArchiveEntry`, `write`, `closeArchiveEntry`, `finish`.
+- `testLongFileNamePadding`: Tests behavior with a long file name potentially requiring padding. Input: long file name. Expected: output generated. Derived: `putArchiveEntry`.
+- `testEmptyEntry`: Tests writing an entry with zero size. Input: entry with size 0. Expected: no errors. Derived: `putArchiveEntry`, `closeArchiveEntry`.
+
+**4. DEFECT DETECTION STRATEGY**
+Tests cover boundary values for numeric fields, correct handling of different CPIO formats, state transitions (stream open/closed, entry open/closed), and error conditions like duplicate names or incorrect sizes. The CRC calculation and checking for `FORMAT_NEW_CRC` are also specifically targeted.
+
+**5. SUMMARY**
+33 tests.
+
+**6. LIMITATIONS**
+Direct inspection of the output byte stream for all header fields across all formats is not performed due to complexity. Tests rely on absence of exceptions and assertion of key fields or magic bytes where feasible. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

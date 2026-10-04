@@ -1,0 +1,731 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Preconditions;
+import com.google.javascript.jscomp.mozilla.rhino.ScriptRuntime;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.jstype.TernaryValue;
+
+public class PeepholeFoldConstantsTest {
+
+    @Test
+    public void testFoldTypeofString() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node typeofNode = new Node(Token.TYPEOF, Node.newString("hello"));
+        Node parent = new Node(Token.EXPR_RESULT, typeofNode);
+        Node result = peephole.optimizeSubtree(typeofNode);
+        assertEquals(Token.STRING, result.getType());
+        assertEquals("string", result.getString());
+    }
+
+    @Test
+    public void testFoldTypeofNumber() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node typeofNode = new Node(Token.TYPEOF, Node.newNumber(123));
+        Node parent = new Node(Token.EXPR_RESULT, typeofNode);
+        Node result = peephole.optimizeSubtree(typeofNode);
+        assertEquals(Token.STRING, result.getType());
+        assertEquals("number", result.getString());
+    }
+
+    @Test
+    public void testFoldTypeofBoolean() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node typeofNode = new Node(Token.TYPEOF, Node.newTrue());
+        Node parent = new Node(Token.EXPR_RESULT, typeofNode);
+        Node result = peephole.optimizeSubtree(typeofNode);
+        assertEquals(Token.STRING, result.getType());
+        assertEquals("boolean", result.getString());
+    }
+
+    @Test
+    public void testFoldTypeofObject() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node typeofNode = new Node(Token.TYPEOF, new Node(Token.OBJECTLIT));
+        Node parent = new Node(Token.EXPR_RESULT, typeofNode);
+        Node result = peephole.optimizeSubtree(typeofNode);
+        assertEquals(Token.STRING, result.getType());
+        assertEquals("object", result.getString());
+    }
+
+    @Test
+    public void testFoldTypeofUndefined() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node typeofNode = new Node(Token.TYPEOF, new Node(Token.VOID));
+        Node parent = new Node(Token.EXPR_RESULT, typeofNode);
+        Node result = peephole.optimizeSubtree(typeofNode);
+        assertEquals(Token.STRING, result.getType());
+        assertEquals("undefined", result.getString());
+    }
+
+    @Test
+    public void testFoldTypeofNameUndefined() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node typeofNode = new Node(Token.TYPEOF, Node.newName("undefined"));
+        Node parent = new Node(Token.EXPR_RESULT, typeofNode);
+        Node result = peephole.optimizeSubtree(typeofNode);
+        assertEquals(Token.STRING, result.getType());
+        assertEquals("undefined", result.getString());
+    }
+
+    @Test
+    public void testFoldNotTrue() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node notNode = new Node(Token.NOT, Node.newTrue());
+        Node parent = new Node(Token.EXPR_RESULT, notNode);
+        Node result = peephole.optimizeSubtree(notNode);
+        assertEquals(Token.FALSE, result.getType());
+    }
+
+    @Test
+    public void testFoldNotFalse() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node notNode = new Node(Token.NOT, Node.newFalse());
+        Node parent = new Node(Token.EXPR_RESULT, notNode);
+        Node result = peephole.optimizeSubtree(notNode);
+        assertEquals(Token.TRUE, result.getType());
+    }
+
+    @Test
+    public void testFoldNotZero() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node notNode = new Node(Token.NOT, Node.newNumber(0));
+        Node parent = new Node(Token.EXPR_RESULT, notNode);
+        Node result = peephole.optimizeSubtree(notNode);
+        assertEquals(Token.TRUE, result.getType());
+    }
+
+    @Test
+    public void testFoldNotOne() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node notNode = new Node(Token.NOT, Node.newNumber(1));
+        Node parent = new Node(Token.EXPR_RESULT, notNode);
+        Node result = peephole.optimizeSubtree(notNode);
+        assertEquals(Token.FALSE, result.getType());
+    }
+
+    @Test
+    public void testFoldPosNumeric() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node posNode = new Node(Token.POS, Node.newNumber(5));
+        Node parent = new Node(Token.EXPR_RESULT, posNode);
+        Node result = peephole.optimizeSubtree(posNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(5.0, result.getDouble(), 0);
+    }
+
+    @Test
+    public void testFoldNegNumeric() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node negNode = new Node(Token.NEG, Node.newNumber(5));
+        Node parent = new Node(Token.EXPR_RESULT, negNode);
+        Node result = peephole.optimizeSubtree(negNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(-5.0, result.getDouble(), 0);
+    }
+
+    @Test
+    public void testFoldNegNaN() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node nanString = Node.newString("NaN");
+        nanString.copyInformationFromForTree(Node.newNumber(Double.NaN)); // Simulate NaN from number
+        Node negNode = new Node(Token.NEG, nanString);
+        Node parent = new Node(Token.EXPR_RESULT, negNode);
+        Node result = peephole.optimizeSubtree(negNode);
+        assertEquals(Token.NAME, result.getType());
+        assertEquals("NaN", result.getString());
+    }
+
+    @Test
+    public void testFoldBitwiseNotInteger() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node bitNotNode = new Node(Token.BITNOT, Node.newNumber(5)); // 5 is 0101, ~5 is ...11111010 which is -6
+        Node parent = new Node(Token.EXPR_RESULT, bitNotNode);
+        Node result = peephole.optimizeSubtree(bitNotNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(-6.0, result.getDouble(), 0);
+    }
+
+    @Test
+    public void testFoldBitwiseNotMaxInt() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node bitNotNode = new Node(Token.BITNOT, Node.newNumber(Integer.MAX_VALUE));
+        Node parent = new Node(Token.EXPR_RESULT, bitNotNode);
+        Node result = peephole.optimizeSubtree(bitNotNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals((double)~Integer.MAX_VALUE, result.getDouble(), 0);
+    }
+
+    @Test
+    public void testFoldBitwiseNotMinInt() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node bitNotNode = new Node(Token.BITNOT, Node.newNumber(Integer.MIN_VALUE));
+        Node parent = new Node(Token.EXPR_RESULT, bitNotNode);
+        Node result = peephole.optimizeSubtree(bitNotNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals((double)~Integer.MIN_VALUE, result.getDouble(), 0);
+    }
+
+    @Test
+    public void testFoldBitwiseNotFractional() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node bitNotNode = new Node(Token.BITNOT, Node.newNumber(5.5));
+        Node parent = new Node(Token.EXPR_RESULT, bitNotNode);
+        // Expect an error to be reported, but the node should not be changed.
+        Node result = peephole.optimizeSubtree(bitNotNode);
+        assertEquals(Token.BITNOT, result.getType());
+        assertEquals(5.5, result.getFirstChild().getDouble(), 0);
+    }
+
+    @Test
+    public void testFoldBitwiseNotOutOfRange() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node bitNotNode = new Node(Token.BITNOT, Node.newNumber(Math.pow(2, 31)));
+        Node parent = new Node(Token.EXPR_RESULT, bitNotNode);
+        // Expect an error to be reported, but the node should not be changed.
+        Node result = peephole.optimizeSubtree(bitNotNode);
+        assertEquals(Token.BITNOT, result.getType());
+        assertEquals(Math.pow(2, 31), result.getFirstChild().getDouble(), 0);
+    }
+
+    @Test
+    public void testFoldAddConstants() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node addNode = new Node(Token.ADD, Node.newNumber(5), Node.newNumber(7));
+        Node parent = new Node(Token.EXPR_RESULT, addNode);
+        Node result = peephole.optimizeSubtree(addNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(12.0, result.getDouble(), 0);
+    }
+
+    @Test
+    public void testFoldAddStringAndNumber() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node addNode = new Node(Token.ADD, Node.newString("hello"), Node.newNumber(7));
+        Node parent = new Node(Token.EXPR_RESULT, addNode);
+        Node result = peephole.optimizeSubtree(addNode);
+        assertEquals(Token.STRING, result.getType());
+        assertEquals("hello7", result.getString());
+    }
+
+    @Test
+    public void testFoldAddNumberAndString() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node addNode = new Node(Token.ADD, Node.newNumber(7), Node.newString("hello"));
+        Node parent = new Node(Token.EXPR_RESULT, addNode);
+        Node result = peephole.optimizeSubtree(addNode);
+        assertEquals(Token.STRING, result.getType());
+        assertEquals("7hello", result.getString());
+    }
+
+    @Test
+    public void testFoldAddTwoStrings() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node addNode = new Node(Token.ADD, Node.newString("hello"), Node.newString(" world"));
+        Node parent = new Node(Token.EXPR_RESULT, addNode);
+        Node result = peephole.optimizeSubtree(addNode);
+        assertEquals(Token.STRING, result.getType());
+        assertEquals("hello world", result.getString());
+    }
+
+    @Test
+    public void testFoldSubConstants() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node subNode = new Node(Token.SUB, Node.newNumber(10), Node.newNumber(3));
+        Node parent = new Node(Token.EXPR_RESULT, subNode);
+        Node result = peephole.optimizeSubtree(subNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(7.0, result.getDouble(), 0);
+    }
+
+    @Test
+    public void testFoldMulConstants() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node mulNode = new Node(Token.MUL, Node.newNumber(5), Node.newNumber(7));
+        Node parent = new Node(Token.EXPR_RESULT, mulNode);
+        Node result = peephole.optimizeSubtree(mulNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(35.0, result.getDouble(), 0);
+    }
+
+    @Test
+    public void testFoldDivConstants() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node divNode = new Node(Token.DIV, Node.newNumber(10), Node.newNumber(2));
+        Node parent = new Node(Token.EXPR_RESULT, divNode);
+        Node result = peephole.optimizeSubtree(divNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(5.0, result.getDouble(), 0);
+    }
+
+    @Test
+    public void testFoldModConstants() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node modNode = new Node(Token.MOD, Node.newNumber(10), Node.newNumber(3));
+        Node parent = new Node(Token.EXPR_RESULT, modNode);
+        Node result = peephole.optimizeSubtree(modNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(1.0, result.getDouble(), 0);
+    }
+
+    @Test
+    public void testFoldBitwiseAndConstants() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node bitAndNode = new Node(Token.BITAND, Node.newNumber(5), Node.newNumber(3)); // 5 (0101) & 3 (0011) = 1 (0001)
+        Node parent = new Node(Token.EXPR_RESULT, bitAndNode);
+        Node result = peephole.optimizeSubtree(bitAndNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(1.0, result.getDouble(), 0);
+    }
+
+    @Test
+    public void testFoldBitwiseOrConstants() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node bitOrNode = new Node(Token.BITOR, Node.newNumber(5), Node.newNumber(3)); // 5 (0101) | 3 (0011) = 7 (0111)
+        Node parent = new Node(Token.EXPR_RESULT, bitOrNode);
+        Node result = peephole.optimizeSubtree(bitOrNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(7.0, result.getDouble(), 0);
+    }
+
+    @Test
+    public void testFoldBitwiseXorConstants() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node bitXorNode = new Node(Token.BITXOR, Node.newNumber(5), Node.newNumber(3)); // 5 (0101) ^ 3 (0011) = 6 (0110)
+        Node parent = new Node(Token.EXPR_RESULT, bitXorNode);
+        Node result = peephole.optimizeSubtree(bitXorNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(6.0, result.getDouble(), 0);
+    }
+
+    @Test
+    public void testFoldShiftLeftConstants() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node shiftNode = new Node(Token.LSH, Node.newNumber(5), Node.newNumber(2)); // 5 (0101) << 2 = 20 (10100)
+        Node parent = new Node(Token.EXPR_RESULT, shiftNode);
+        Node result = peephole.optimizeSubtree(shiftNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(20.0, result.getDouble(), 0);
+    }
+
+    @Test
+    public void testFoldShiftRightConstants() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node shiftNode = new Node(Token.RSH, Node.newNumber(20), Node.newNumber(2)); // 20 (10100) >> 2 = 5 (00101)
+        Node parent = new Node(Token.EXPR_RESULT, shiftNode);
+        Node result = peephole.optimizeSubtree(shiftNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(5.0, result.getDouble(), 0);
+    }
+
+    @Test
+    public void testFoldUnsignedShiftRightConstants() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node shiftNode = new Node(Token.URSH, Node.newNumber(-20), Node.newNumber(2)); // -20 >>> 2. In 32-bit unsigned: 11111111111111111111111111101100 >>> 2 = 00111111111111111111111111111101 which is 1073741821
+        Node parent = new Node(Token.EXPR_RESULT, shiftNode);
+        Node result = peephole.optimizeSubtree(shiftNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(1073741821.0, result.getDouble(), 0);
+    }
+
+    @Test
+    public void testFoldShiftAmountOutOfBound() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node shiftNode = new Node(Token.LSH, Node.newNumber(5), Node.newNumber(32));
+        Node parent = new Node(Token.EXPR_RESULT, shiftNode);
+        // Expect an error to be reported, but the node should not be changed.
+        Node result = peephole.optimizeSubtree(shiftNode);
+        assertEquals(Token.LSH, result.getType());
+        assertEquals(5, result.getFirstChild().getDouble(), 0);
+        assertEquals(32, result.getLastChild().getDouble(), 0);
+    }
+
+    @Test
+    public void testFoldComparisonEqTrue() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node eqNode = new Node(Token.EQ, Node.newNumber(5), Node.newNumber(5));
+        Node parent = new Node(Token.EXPR_RESULT, eqNode);
+        Node result = peephole.optimizeSubtree(eqNode);
+        assertEquals(Token.TRUE, result.getType());
+    }
+
+    @Test
+    public void testFoldComparisonEqFalse() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node eqNode = new Node(Token.EQ, Node.newNumber(5), Node.newNumber(7));
+        Node parent = new Node(Token.EXPR_RESULT, eqNode);
+        Node result = peephole.optimizeSubtree(eqNode);
+        assertEquals(Token.FALSE, result.getType());
+    }
+
+    @Test
+    public void testFoldComparisonNeTrue() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node neNode = new Node(Token.NE, Node.newNumber(5), Node.newNumber(7));
+        Node parent = new Node(Token.EXPR_RESULT, neNode);
+        Node result = peephole.optimizeSubtree(neNode);
+        assertEquals(Token.TRUE, result.getType());
+    }
+
+    @Test
+    public void testFoldComparisonNeFalse() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node neNode = new Node(Token.NE, Node.newNumber(5), Node.newNumber(5));
+        Node parent = new Node(Token.EXPR_RESULT, neNode);
+        Node result = peephole.optimizeSubtree(neNode);
+        assertEquals(Token.FALSE, result.getType());
+    }
+
+    @Test
+    public void testFoldComparisonLtTrue() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node ltNode = new Node(Token.LT, Node.newNumber(5), Node.newNumber(7));
+        Node parent = new Node(Token.EXPR_RESULT, ltNode);
+        Node result = peephole.optimizeSubtree(ltNode);
+        assertEquals(Token.TRUE, result.getType());
+    }
+
+    @Test
+    public void testFoldComparisonLtFalse() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node ltNode = new Node(Token.LT, Node.newNumber(7), Node.newNumber(5));
+        Node parent = new Node(Token.EXPR_RESULT, ltNode);
+        Node result = peephole.optimizeSubtree(ltNode);
+        assertEquals(Token.FALSE, result.getType());
+    }
+
+    @Test
+    public void testFoldComparisonLeTrue() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node leNode = new Node(Token.LE, Node.newNumber(5), Node.newNumber(7));
+        Node parent = new Node(Token.EXPR_RESULT, leNode);
+        Node result = peephole.optimizeSubtree(leNode);
+        assertEquals(Token.TRUE, result.getType());
+    }
+
+    @Test
+    public void testFoldComparisonLeFalse() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node leNode = new Node(Token.LE, Node.newNumber(7), Node.newNumber(5));
+        Node parent = new Node(Token.EXPR_RESULT, leNode);
+        Node result = peephole.optimizeSubtree(leNode);
+        assertEquals(Token.FALSE, result.getType());
+    }
+
+    @Test
+    public void testFoldComparisonGeTrue() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node geNode = new Node(Token.GE, Node.newNumber(7), Node.newNumber(5));
+        Node parent = new Node(Token.EXPR_RESULT, geNode);
+        Node result = peephole.optimizeSubtree(geNode);
+        assertEquals(Token.TRUE, result.getType());
+    }
+
+    @Test
+    public void testFoldComparisonGeFalse() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node geNode = new Node(Token.GE, Node.newNumber(5), Node.newNumber(7));
+        Node parent = new Node(Token.EXPR_RESULT, geNode);
+        Node result = peephole.optimizeSubtree(geNode);
+        assertEquals(Token.FALSE, result.getType());
+    }
+
+    @Test
+    public void testFoldComparisonGtTrue() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node gtNode = new Node(Token.GT, Node.newNumber(7), Node.newNumber(5));
+        Node parent = new Node(Token.EXPR_RESULT, gtNode);
+        Node result = peephole.optimizeSubtree(gtNode);
+        assertEquals(Token.TRUE, result.getType());
+    }
+
+    @Test
+    public void testFoldComparisonGtFalse() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node gtNode = new Node(Token.GT, Node.newNumber(5), Node.newNumber(7));
+        Node parent = new Node(Token.EXPR_RESULT, gtNode);
+        Node result = peephole.optimizeSubtree(gtNode);
+        assertEquals(Token.FALSE, result.getType());
+    }
+
+    @Test
+    public void testFoldGetElemArrayLiteral() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node arrayLit = new Node(Token.ARRAYLIT, Node.newNumber(10), Node.newNumber(20));
+        Node getElemNode = new Node(Token.GETELEM, arrayLit, Node.newNumber(1));
+        Node parent = new Node(Token.EXPR_RESULT, getElemNode);
+        Node result = peephole.optimizeSubtree(getElemNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(20.0, result.getDouble(), 0);
+    }
+
+    @Test
+    public void testFoldGetElemArrayLiteralOutOfBounds() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node arrayLit = new Node(Token.ARRAYLIT, Node.newNumber(10), Node.newNumber(20));
+        Node getElemNode = new Node(Token.GETELEM, arrayLit, Node.newNumber(2));
+        Node parent = new Node(Token.EXPR_RESULT, getElemNode);
+        // Expect an error to be reported, but the node should not be changed.
+        Node result = peephole.optimizeSubtree(getElemNode);
+        assertEquals(Token.GETELEM, result.getType());
+        assertEquals(arrayLit, result.getFirstChild());
+        assertEquals(Node.newNumber(2), result.getLastChild());
+    }
+
+    @Test
+    public void testFoldGetElemArrayLiteralNegativeIndex() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node arrayLit = new Node(Token.ARRAYLIT, Node.newNumber(10), Node.newNumber(20));
+        Node getElemNode = new Node(Token.GETELEM, arrayLit, Node.newNumber(-1));
+        Node parent = new Node(Token.EXPR_RESULT, getElemNode);
+        // Expect an error to be reported, but the node should not be changed.
+        Node result = peephole.optimizeSubtree(getElemNode);
+        assertEquals(Token.GETELEM, result.getType());
+        assertEquals(arrayLit, result.getFirstChild());
+        assertEquals(Node.newNumber(-1), result.getLastChild());
+    }
+
+    @Test
+    public void testFoldGetPropLengthArrayLiteral() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node arrayLit = new Node(Token.ARRAYLIT, Node.newNumber(10), Node.newNumber(20), Node.newNumber(30));
+        Node getPropNode = new Node(Token.GETPROP, arrayLit, Node.newString("length"));
+        Node parent = new Node(Token.EXPR_RESULT, getPropNode);
+        Node result = peephole.optimizeSubtree(getPropNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(3.0, result.getDouble(), 0);
+    }
+
+    @Test
+    public void testFoldGetPropLengthStringLiteral() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node stringLit = Node.newString("hello");
+        Node getPropNode = new Node(Token.GETPROP, stringLit, Node.newString("length"));
+        Node parent = new Node(Token.EXPR_RESULT, getPropNode);
+        Node result = peephole.optimizeSubtree(getPropNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(5.0, result.getDouble(), 0);
+    }
+
+    @Test
+    public void testFoldAssignAdd() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node left = Node.newNumber(5);
+        Node right = new Node(Token.ADD, Node.newNumber(2), Node.newNumber(3));
+        Node assignNode = new Node(Token.ASSIGN, left, right);
+        Node parent = new Node(Token.EXPR_RESULT, assignNode);
+        Node result = peephole.optimizeSubtree(assignNode);
+        assertEquals(Token.ASSIGN_ADD, result.getType());
+        assertEquals(left, result.getFirstChild());
+        assertEquals(Node.newNumber(3), result.getLastChild());
+    }
+
+    @Test
+    public void testFoldAndOrTrueShortCircuit() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node left = Node.newTrue();
+        Node right = Node.newNumber(10);
+        Node andNode = new Node(Token.AND, left, right);
+        Node parent = new Node(Token.EXPR_RESULT, andNode);
+        Node result = peephole.optimizeSubtree(andNode);
+        assertEquals(Node.newNumber(10), result); // Should be the right side
+    }
+
+    @Test
+    public void testFoldAndOrFalseShortCircuit() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node left = Node.newFalse();
+        Node right = Node.newNumber(10);
+        Node andNode = new Node(Token.AND, left, right);
+        Node parent = new Node(Token.EXPR_RESULT, andNode);
+        Node result = peephole.optimizeSubtree(andNode);
+        assertEquals(Token.FALSE, result.getType()); // Should be the left side
+    }
+
+    @Test
+    public void testFoldOrTrueShortCircuit() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node left = Node.newTrue();
+        Node right = Node.newNumber(10);
+        Node orNode = new Node(Token.OR, left, right);
+        Node parent = new Node(Token.EXPR_RESULT, orNode);
+        Node result = peephole.optimizeSubtree(orNode);
+        assertEquals(Token.TRUE, result.getType()); // Should be the left side
+    }
+
+    @Test
+    public void testFoldOrFalseShortCircuit() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node left = Node.newFalse();
+        Node right = Node.newNumber(10);
+        Node orNode = new Node(Token.OR, left, right);
+        Node parent = new Node(Token.EXPR_RESULT, orNode);
+        Node result = peephole.optimizeSubtree(orNode);
+        assertEquals(Node.newNumber(10), result); // Should be the right side
+    }
+
+    @Test
+    public void testFoldLeftChildOpMul() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node left = new Node(Token.MUL, Node.newNumber(2), Node.newNumber(3));
+        Node right = Node.newNumber(4);
+        Node mulNode = new Node(Token.MUL, left, right);
+        Node parent = new Node(Token.EXPR_RESULT, mulNode);
+        Node result = peephole.optimizeSubtree(mulNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(24.0, result.getDouble(), 0);
+    }
+
+    @Test
+    public void testFoldLeftChildOpAdd() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node left = new Node(Token.ADD, Node.newNumber(2), Node.newNumber(3));
+        Node right = Node.newNumber(4);
+        Node addNode = new Node(Token.ADD, left, right);
+        Node parent = new Node(Token.EXPRPR_RESULT, addNode);
+        Node result = peephole.optimizeSubtree(addNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(9.0, result.getDouble(), 0);
+    }
+
+    @Test
+    public void testFoldInstanceofFalseLiteral() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node left = Node.newNumber(5);
+        Node right = Node.newName("Object");
+        Node instanceofNode = new Node(Token.INSTANCEOF, left, right);
+        Node parent = new Node(Token.EXPR_RESULT, instanceofNode);
+        Node result = peephole.optimizeSubtree(instanceofNode);
+        assertEquals(Token.FALSE, result.getType());
+    }
+
+    @Test
+    public void testFoldInstanceofTrueObject() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node left = new Node(Token.OBJECTLIT); // Representing an object
+        Node right = Node.newName("Object");
+        Node instanceofNode = new Node(Token.INSTANCEOF, left, right);
+        Node parent = new Node(Token.EXPR_RESULT, instanceofNode);
+        Node result = peephole.optimizeSubtree(instanceofNode);
+        assertEquals(Token.TRUE, result.getType());
+    }
+
+    @Test
+    public void testFoldCtorCallString() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node stringCtor = Node.newName("String");
+        Node value = Node.newString("test");
+        Node newStringNode = new Node(Token.NEW, stringCtor, value);
+        Node getElemNode = new Node(Token.GETELEM, new Node(Token.OBJECTLIT), newStringNode); // Simulate `obj[new String('test')]`
+        Node parent = new Node(Token.EXPR_RESULT, getElemNode);
+        Node result = peephole.optimizeSubtree(getElemNode);
+        assertEquals(Token.GETELEM, result.getType());
+        assertEquals(Node.newString("test"), result.getLastChild());
+    }
+
+    @Test
+    public void testFoldCtorCallStringEmpty() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node stringCtor = Node.newName("String");
+        Node newStringNode = new Node(Token.NEW, stringCtor); // Simulate `obj[new String()]`
+        Node getElemNode = new Node(Token.GETELEM, new Node(Token.OBJECTLIT), newStringNode);
+        Node parent = new Node(Token.EXPR_RESULT, getElemNode);
+        Node result = peephole.optimizeSubtree(getElemNode);
+        assertEquals(Token.GETELEM, result.getType());
+        assertEquals(Node.newString(""), result.getLastChild());
+    }
+
+    @Test
+    public void testTryReduceVoidNonZero() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node voidNode = new Node(Token.VOID, Node.newNumber(1));
+        Node parent = new Node(Token.EXPR_RESULT, voidNode);
+        Node result = peephole.optimizeSubtree(voidNode);
+        assertEquals(Token.VOID, result.getType());
+        assertEquals(Node.newNumber(1), result.getFirstChild());
+    }
+
+    @Test
+    public void testTryReduceVoidZero() throws Exception {
+        PeepholeFoldConstants peephole = new PeepholeFoldConstants();
+        Node voidNode = new Node(Token.VOID, Node.newNumber(0));
+        Node parent = new Node(Token.EXPR_RESULT, voidNode);
+        Node result = peephole.optimizeSubtree(voidNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(0.0, result.getDouble(), 0);
+    }
+}
+```
+
+1. SOURCE CODE ANALYSIS - The tests cover various binary and unary operators, type-of folding, comparison folding, array/property access folding, and constructor call folding. Edge cases for numeric operations and comparisons are targeted.
+2. TEST CASE DESIGN -
+    - testFoldTypeofString: typeof("hello") -> "string"
+    - testFoldTypeofNumber: typeof(123) -> "number"
+    - testFoldTypeofBoolean: typeof(true) -> "boolean"
+    - testFoldTypeofObject: typeof({}) -> "object"
+    - testFoldTypeofUndefined: typeof(void 0) -> "undefined"
+    - testFoldTypeofNameUndefined: typeof(undefined) -> "undefined"
+    - testFoldNotTrue: !true -> false
+    - testFoldNotFalse: !false -> true
+    - testFoldNotZero: !0 -> true
+    - testFoldNotOne: !1 -> false
+    - testFoldPosNumeric: +5 -> 5
+    - testFoldNegNumeric: -5 -> -5
+    - testFoldNegNaN: -NaN -> NaN
+    - testFoldBitwiseNotInteger: ~5 -> -6
+    - testFoldBitwiseNotMaxInt: ~2147483647 -> -2147483648
+    - testFoldBitwiseNotMinInt: ~-2147483648 -> 2147483647
+    - testFoldBitwiseNotFractional: ~5.5 -> ~5.5 (error reported, no change)
+    - testFoldBitwiseNotOutOfRange: ~2147483648 -> ~2147483648 (error reported, no change)
+    - testFoldAddConstants: 5 + 7 -> 12
+    - testFoldAddStringAndNumber: "hello" + 7 -> "hello7"
+    - testFoldAddNumberAndString: 7 + "hello" -> "7hello"
+    - testFoldAddTwoStrings: "hello" + " world" -> "hello world"
+    - testFoldSubConstants: 10 - 3 -> 7
+    - testFoldMulConstants: 5 * 7 -> 35
+    - testFoldDivConstants: 10 / 2 -> 5
+    - testFoldModConstants: 10 % 3 -> 1
+    - testFoldBitwiseAndConstants: 5 & 3 -> 1
+    - testFoldBitwiseOrConstants: 5 | 3 -> 7
+    - testFoldBitwiseXorConstants: 5 ^ 3 -> 6
+    - testFoldShiftLeftConstants: 5 << 2 -> 20
+    - testFoldShiftRightConstants: 20 >> 2 -> 5
+    - testFoldUnsignedShiftRightConstants: -20 >>> 2 -> 1073741821
+    - testFoldShiftAmountOutOfBound: 5 << 32 -> 5 << 32 (error reported, no change)
+    - testFoldComparisonEqTrue: 5 == 5 -> true
+    - testFoldComparisonEqFalse: 5 == 7 -> false
+    - testFoldComparisonNeTrue: 5 != 7 -> true
+    - testFoldComparisonNeFalse: 5 != 5 -> false
+    - testFoldComparisonLtTrue: 5 < 7 -> true
+    - testFoldComparisonLtFalse: 7 < 5 -> false
+    - testFoldComparisonLeTrue: 5 <= 7 -> true
+    - testFoldComparisonLeFalse: 7 <= 5 -> false
+    - testFoldComparisonGeTrue: 7 >= 5 -> true
+    - testFoldComparisonGeFalse: 5 >= 7 -> false
+    - testFoldComparisonGtTrue: 7 > 5 -> true
+    - testFoldComparisonGtFalse: 5 > 7 -> false
+    - testFoldGetElemArrayLiteral: [10, 20][1] -> 20
+    - testFoldGetElemArrayLiteralOutOfBounds: [10, 20][2] -> [10, 20][2] (error reported, no change)
+    - testFoldGetElemArrayLiteralNegativeIndex: [10, 20][-1] -> [10, 20][-1] (error reported, no change)
+    - testFoldGetPropLengthArrayLiteral: [10, 20, 30].length -> 3
+    - testFoldGetPropLengthStringLiteral: "hello".length -> 5
+    - testFoldAssignAdd: x = x + 2 + 3 -> x += 5
+    - testFoldAndOrTrueShortCircuit: true && 10 -> 10
+    - testFoldAndOrFalseShortCircuit: false && 10 -> false
+    - testFoldOrTrueShortCircuit: true || 10 -> true
+    - testFoldOrFalseShortCircuit: false || 10 -> 10
+    - testFoldLeftChildOpMul: (2*3)*4 -> 24
+    - testFoldLeftChildOpAdd: (2+3)+4 -> 9
+    - testFoldInstanceofFalseLiteral: 5 instanceof Object -> false
+    - testFoldInstanceofTrueObject: {} instanceof Object -> true
+    - testFoldCtorCallString: obj[new String('test')] -> obj['test']
+    - testFoldCtorCallStringEmpty: obj[new String()] -> obj['']
+    - testTryReduceVoidNonZero: void 1 -> void 1 (no change)
+    - testTryReduceVoidZero: void 0 -> 0
+4. DEFECT DETECTION STRATEGY - Tests target constant folding for binary and unary operators, short-circuiting logic in AND/OR, and specific cases in comparisons and property/element access, aiming to catch incorrect simplifications or missed opportunities.
+5. SUMMARY - 37 tests.
+6. LIMITATIONS - The tests do not cover all possible numeric ranges or complex type interactions exhaustively. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.
+```

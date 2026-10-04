@@ -1,0 +1,331 @@
+```java
+package com.fasterxml.jackson.core.filter;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.math.BigDecimal;
+import java.math.BigInteger;
+import com.fasterxml.jackson.core.*;
+import com.fasterxml.jackson.core.util.JsonParserDelegate;
+
+public class FilteringParserDelegateTest {
+    @Test
+    public void testInitialState() throws Exception {
+        JsonParser parser = new JsonFactory().createParser("1");
+        TokenFilter filter = new TokenFilter();
+        FilteringParserDelegate filtering =
+                new FilteringParserDelegate(parser, filter, false, false);
+        assertSame(filter, filtering.getFilter());
+        assertEquals(0, filtering.getMatchCount());
+        assertNull(filtering.getCurrentToken());
+        assertEquals(JsonTokenId.ID_NO_TOKEN, filtering.getCurrentTokenId());
+        assertEquals(JsonTokenId.ID_NO_TOKEN, filtering.currentTokenId());
+        assertFalse(filtering.hasCurrentToken());
+        assertTrue(filtering.hasTokenId(JsonTokenId.ID_NO_TOKEN));
+        assertFalse(filtering.hasToken(JsonToken.VALUE_NUMBER_INT));
+        assertNull(filtering.getLastClearedToken());
+    }
+
+    @Test
+    public void testScalarInclusion() throws Exception {
+        JsonParser parser = new JsonFactory().createParser("7");
+        FilteringParserDelegate filtering = new FilteringParserDelegate(
+                parser, TokenFilter.INCLUDE_ALL, false, false);
+        assertEquals(JsonToken.VALUE_NUMBER_INT, filtering.nextToken());
+        assertEquals(7, filtering.getIntValue());
+        assertEquals(1, filtering.getMatchCount());
+        assertNull(filtering.nextToken());
+    }
+
+    @Test
+    public void testMultipleRootScalars() throws Exception {
+        JsonParser parser = new JsonFactory().createParser("1 2");
+        FilteringParserDelegate filtering = new FilteringParserDelegate(
+                parser, TokenFilter.INCLUDE_ALL, false, true);
+        assertEquals(JsonToken.VALUE_NUMBER_INT, filtering.nextToken());
+        assertEquals(1, filtering.getIntValue());
+        assertEquals(JsonToken.VALUE_NUMBER_INT, filtering.nextToken());
+        assertEquals(2, filtering.getIntValue());
+        assertEquals(0, filtering.getMatchCount());
+    }
+
+    @Test
+    public void testIncludedObjectAndFields() throws Exception {
+        JsonParser parser = new JsonFactory().createParser("{\"a\":1}");
+        FilteringParserDelegate filtering = new FilteringParserDelegate(
+                parser, TokenFilter.INCLUDE_ALL, false, false);
+        assertEquals(JsonToken.START_OBJECT, filtering.nextToken());
+        assertTrue(filtering.isExpectedStartObjectToken());
+        assertEquals(JsonToken.FIELD_NAME, filtering.nextToken());
+        assertEquals("a", filtering.getCurrentName());
+        assertEquals(JsonToken.VALUE_NUMBER_INT, filtering.nextToken());
+        assertEquals(1, filtering.getIntValue());
+        assertEquals(JsonToken.END_OBJECT, filtering.nextToken());
+        assertNull(filtering.nextToken());
+    }
+
+    @Test
+    public void testFilterOutRootValue() throws Exception {
+        JsonParser parser = new JsonFactory().createParser("1");
+        FilteringParserDelegate filtering = new FilteringParserDelegate(
+                parser, null, false, false);
+        assertNull(filtering.nextToken());
+        assertEquals(0, filtering.getMatchCount());
+    }
+
+    @Test
+    public void testNextValueSkipsFieldName() throws Exception {
+        JsonParser parser = new JsonFactory().createParser("{\"a\":3}");
+        FilteringParserDelegate filtering = new FilteringParserDelegate(
+                parser, TokenFilter.INCLUDE_ALL, false, false);
+        assertEquals(JsonToken.START_OBJECT, filtering.nextToken());
+        assertEquals(JsonToken.FIELD_NAME, filtering.nextValue());
+        assertEquals("a", filtering.getCurrentName());
+        assertEquals(JsonToken.VALUE_NUMBER_INT, filtering.nextValue());
+        assertEquals(3, filtering.getIntValue());
+    }
+
+    @Test
+    public void testClearCurrentToken() throws Exception {
+        JsonParser parser = new JsonFactory().createParser("4");
+        FilteringParserDelegate filtering = new FilteringParserDelegate(
+                parser, TokenFilter.INCLUDE_ALL, false, false);
+        assertEquals(JsonToken.VALUE_NUMBER_INT, filtering.nextToken());
+        filtering.clearCurrentToken();
+        assertNull(filtering.getCurrentToken());
+        assertFalse(filtering.hasCurrentToken());
+        assertEquals(JsonToken.VALUE_NUMBER_INT, filtering.getLastClearedToken());
+        assertTrue(filtering.hasTokenId(JsonTokenId.ID_NO_TOKEN));
+    }
+
+    @Test
+    public void testTokenIdAndTokenPredicates() throws Exception {
+        JsonParser parser = new JsonFactory().createParser("[0]");
+        FilteringParserDelegate filtering = new FilteringParserDelegate(
+                parser, TokenFilter.INCLUDE_ALL, false, false);
+        assertEquals(JsonToken.START_ARRAY, filtering.nextToken());
+        assertTrue(filtering.hasToken(JsonToken.START_ARRAY));
+        assertTrue(filtering.hasTokenId(JsonTokenId.ID_START_ARRAY));
+        assertTrue(filtering.isExpectedStartArrayToken());
+        assertFalse(filtering.isExpectedStartObjectToken());
+        assertEquals(JsonToken.VALUE_NUMBER_INT, filtering.nextToken());
+        assertFalse(filtering.isExpectedStartArrayToken());
+    }
+
+    @Test
+    public void testOverrideCurrentNameThrows() throws Exception {
+        FilteringParserDelegate filtering = new FilteringParserDelegate(
+                new JsonFactory().createParser("null"), TokenFilter.INCLUDE_ALL,
+                false, false);
+        try {
+            filtering.overrideCurrentName("x");
+            fail("expected UnsupportedOperationException");
+        } catch (UnsupportedOperationException expected) {
+            assertNull(filtering.getCurrentToken());
+        }
+    }
+
+    @Test
+    public void testSkipChildren() throws Exception {
+        JsonParser parser = new JsonFactory().createParser("[1,{\"a\":2},3]");
+        FilteringParserDelegate filtering = new FilteringParserDelegate(
+                parser, TokenFilter.INCLUDE_ALL, false, false);
+        assertEquals(JsonToken.START_ARRAY, filtering.nextToken());
+        assertSame(filtering, filtering.skipChildren());
+        assertEquals(JsonToken.END_ARRAY, filtering.getCurrentToken());
+        assertNull(filtering.nextToken());
+    }
+
+    @Test
+    public void testNumericDelegationForIntEdges() throws Exception {
+        JsonParser parser = new JsonFactory().createParser("[2147483647,-2147483648]");
+        FilteringParserDelegate filtering = new FilteringParserDelegate(
+                parser, TokenFilter.INCLUDE_ALL, false, true);
+        assertEquals(JsonToken.START_ARRAY, filtering.nextToken());
+        assertEquals(JsonToken.VALUE_NUMBER_INT, filtering.nextToken());
+        assertEquals(Integer.MAX_VALUE, filtering.getIntValue());
+        assertEquals(Integer.MAX_VALUE, filtering.getBigIntegerValue().intValue());
+        assertEquals(JsonParser.NumberType.INT, filtering.getNumberType());
+        assertEquals(Integer.MAX_VALUE, filtering.getNumberValue().intValue());
+        assertEquals(JsonToken.VALUE_NUMBER_INT, filtering.nextToken());
+        assertEquals(Integer.MIN_VALUE, filtering.getIntValue());
+        assertEquals(Integer.MIN_VALUE, filtering.getBigIntegerValue().intValue());
+    }
+
+    @Test
+    public void testNumericDelegationForLongEdges() throws Exception {
+        JsonParser parser = new JsonFactory().createParser(
+                "[9223372036854775807,-9223372036854775808]");
+        FilteringParserDelegate filtering = new FilteringParserDelegate(
+                parser, TokenFilter.INCLUDE_ALL, false, true);
+        assertEquals(JsonToken.START_ARRAY, filtering.nextToken());
+        assertEquals(JsonToken.VALUE_NUMBER_INT, filtering.nextToken());
+        assertEquals(Long.MAX_VALUE, filtering.getLongValue());
+        assertEquals(Long.MAX_VALUE, filtering.getBigIntegerValue().longValue());
+        assertEquals(JsonParser.NumberType.LONG, filtering.getNumberType());
+        assertEquals(JsonToken.VALUE_NUMBER_INT, filtering.nextToken());
+        assertEquals(Long.MIN_VALUE, filtering.getLongValue());
+        assertEquals(Long.MIN_VALUE, filtering.getBigIntegerValue().longValue());
+    }
+
+    @Test
+    public void testBigIntegerBeyondLongRange() throws Exception {
+        JsonParser parser = new JsonFactory().createParser("9223372036854775808");
+        FilteringParserDelegate filtering = new FilteringParserDelegate(
+                parser, TokenFilter.INCLUDE_ALL, false, false);
+        assertEquals(JsonToken.VALUE_NUMBER_INT, filtering.nextToken());
+        assertEquals(new BigInteger("9223372036854775808"),
+                filtering.getBigIntegerValue());
+    }
+
+    @Test
+    public void testDecimalAccessors() throws Exception {
+        JsonParser parser = new JsonFactory().createParser("1.25");
+        FilteringParserDelegate filtering = new FilteringParserDelegate(
+                parser, TokenFilter.INCLUDE_ALL, false, false);
+        assertEquals(JsonToken.VALUE_NUMBER_FLOAT, filtering.nextToken());
+        assertEquals(new BigDecimal("1.25"), filtering.getDecimalValue());
+        assertEquals(JsonParser.NumberType.DOUBLE, filtering.getNumberType());
+        assertEquals(1.25, filtering.getDoubleValue(), 1e-9);
+        assertEquals(1.25f, filtering.getFloatValue(), 1e-6);
+    }
+
+    @Test
+    public void testBooleanAccessor() throws Exception {
+        JsonParser parser = new JsonFactory().createParser("true");
+        FilteringParserDelegate filtering = new FilteringParserDelegate(
+                parser, TokenFilter.INCLUDE_ALL, false, false);
+        assertEquals(JsonToken.VALUE_TRUE, filtering.nextToken());
+        assertTrue(filtering.getBooleanValue());
+    }
+
+    @Test
+    public void testByteValueAtMaximum() throws Exception {
+        JsonParser parser = new JsonFactory().createParser("127");
+        FilteringParserDelegate filtering = new FilteringParserDelegate(
+                parser, TokenFilter.INCLUDE_ALL, false, false);
+        assertEquals(JsonToken.VALUE_NUMBER_INT, filtering.nextToken());
+        assertEquals((byte) 127, filtering.getByteValue());
+    }
+
+    @Test
+    public void testShortValueAtMinimum() throws Exception {
+        JsonParser parser = new JsonFactory().createParser("-32768");
+        FilteringParserDelegate filtering = new FilteringParserDelegate(
+                parser, TokenFilter.INCLUDE_ALL, false, false);
+        assertEquals(JsonToken.VALUE_NUMBER_INT, filtering.nextToken());
+        assertEquals((short) -32768, filtering.getShortValue());
+    }
+
+    @Test
+    public void testGetParsingContext() throws Exception {
+        JsonParser parser = new JsonFactory().createParser("[1]");
+        FilteringParserDelegate filtering = new FilteringParserDelegate(
+                parser, TokenFilter.INCLUDE_ALL, false, false);
+        JsonStreamContext initial = filtering.getParsingContext();
+        assertNotNull(initial);
+        assertEquals(JsonToken.START_ARRAY, filtering.nextToken());
+        assertEquals(1, filtering.getParsingContext().getEntryCount());
+        assertEquals(JsonToken.VALUE_NUMBER_INT, filtering.nextToken());
+        assertEquals(1, filtering.getParsingContext().getEntryCount());
+    }
+
+    @Test
+    public void testCurrentNameForObjectValue() throws Exception {
+        JsonParser parser = new JsonFactory().createParser("{\"key\":9}");
+        FilteringParserDelegate filtering = new FilteringParserDelegate(
+                parser, TokenFilter.INCLUDE_ALL, false, false);
+        assertEquals(JsonToken.START_OBJECT, filtering.nextToken());
+        assertEquals(JsonToken.FIELD_NAME, filtering.nextToken());
+        assertEquals("key", filtering.getCurrentName());
+        assertEquals(JsonToken.VALUE_NUMBER_INT, filtering.nextToken());
+        assertEquals("key", filtering.getCurrentName());
+    }
+
+    @Test
+    public void testIncludePathForMatchingNestedValue() throws Exception {
+        JsonParser parser = new JsonFactory().createParser("{\"a\":{\"b\":2}}");
+        FilteringParserDelegate filtering = new FilteringParserDelegate(
+                parser, TokenFilter.INCLUDE_ALL, true, false);
+        assertEquals(JsonToken.START_OBJECT, filtering.nextToken());
+        assertEquals(JsonToken.FIELD_NAME, filtering.nextToken());
+        assertEquals("a", filtering.getCurrentName());
+        assertEquals(JsonToken.START_OBJECT, filtering.nextToken());
+        assertEquals(JsonToken.FIELD_NAME, filtering.nextToken());
+        assertEquals("b", filtering.getCurrentName());
+        assertEquals(JsonToken.VALUE_NUMBER_INT, filtering.nextToken());
+        assertEquals(2, filtering.getIntValue());
+    }
+
+    @Test
+    public void testDecimalNegativeValue() throws Exception {
+        JsonParser parser = new JsonFactory().createParser("-0.5");
+        FilteringParserDelegate filtering = new FilteringParserDelegate(
+                parser, TokenFilter.INCLUDE_ALL, false, false);
+        assertEquals(JsonToken.VALUE_NUMBER_FLOAT, filtering.nextToken());
+        assertEquals(new BigDecimal("-0.5"), filtering.getDecimalValue());
+        assertEquals(-0.5, filtering.getDoubleValue(), 1e-9);
+    }
+
+    @Test
+    public void testNullTokenDoesNotCountAsMatch() throws Exception {
+        JsonParser parser = new JsonFactory().createParser("null");
+        FilteringParserDelegate filtering = new FilteringParserDelegate(
+                parser, null, false, true);
+        assertNull(filtering.nextToken());
+        assertEquals(0, filtering.getMatchCount());
+    }
+
+    @Test
+    public void testLastClearedTokenRemainsAfterAnotherClear() throws Exception {
+        JsonParser parser = new JsonFactory().createParser("[1]");
+        FilteringParserDelegate filtering = new FilteringParserDelegate(
+                parser, TokenFilter.INCLUDE_ALL, false, false);
+        assertEquals(JsonToken.START_ARRAY, filtering.nextToken());
+        filtering.clearCurrentToken();
+        assertEquals(JsonToken.START_ARRAY, filtering.getLastClearedToken());
+        filtering.clearCurrentToken();
+        assertEquals(JsonToken.START_ARRAY, filtering.getLastClearedToken());
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+Selected traversal, token-state, context, and numeric-accessor methods. Tests exercise included/filtered values, path handling, token clearing, nested skipping, and delegated numeric reads.
+
+### 2. TEST CASE DESIGN
+- `testInitialState`: Before traversal; verifies filter identity, zero matches, and no-token state from constructor initialization.
+- `testScalarInclusion`: Included root integer; source returns the scalar and records a single match.
+- `testMultipleRootScalars`: Two included roots with multiple matches enabled; both parser values are returned.
+- `testIncludedObjectAndFields`: Fully included object; checks start, field, value, and end token sequence.
+- `testFilterOutRootValue`: Null root filter; scalar is omitted and match count remains zero.
+- `testNextValueSkipsFieldName`: Object traversal; `nextValue()` returns the field name, then its value.
+- `testClearCurrentToken`: Clears an integer token; current token is cleared and remembered as last-cleared.
+- `testTokenIdAndTokenPredicates`: Array and scalar token predicates match their respective current tokens.
+- `testOverrideCurrentNameThrows`: Source explicitly throws `UnsupportedOperationException`.
+- `testSkipChildren`: Skips a nested array and ends positioned on its matching end token.
+- `testNumericDelegationForIntEdges`: Reads signed 32-bit extrema; delegated integer and number accessors report those values.
+- `testNumericDelegationForLongEdges`: Reads signed 64-bit extrema; delegated long and big-integer accessors report those values.
+- `testBigIntegerBeyondLongRange`: Parses one above `Long.MAX_VALUE`; big-integer accessor preserves the exact value.
+- `testDecimalAccessors`: Decimal `1.25`; decimal, floating, and number-type accessors reflect the parser value.
+- `testBooleanAccessor`: Included true literal; boolean accessor returns true.
+- `testByteValueAtMaximum`: Integer 127 is the signed byte maximum.
+- `testShortValueAtMinimum`: Integer -32768 is the signed short minimum.
+- `testGetParsingContext`: Array traversal; parsing context exists and reports the array entry count.
+- `testCurrentNameForObjectValue`: Object field and value both expose the field name.
+- `testIncludePathForMatchingNestedValue`: Included nested object path is emitted before the matching value.
+- `testDecimalNegativeValue`: Decimal `-0.5`; decimal and double accessors retain the parsed value.
+- `testNullTokenDoesNotCountAsMatch`: Null root filter omits null and leaves match count zero.
+- `testLastClearedTokenRemainsAfterAnotherClear`: Repeated clear with no current token preserves the last-cleared token.
+
+### 4. DEFECT DETECTION STRATEGY
+The tests pin traversal order and filtering state, token/context state transitions, and delegated numeric accessor results. They do not establish whether any unseen defective version fails.
+
+### 5. SUMMARY
+23 independent test methods.
+
+### 6. LIMITATIONS
+No faulty source or execution results are available; runtime behavior and compatibility with the experiment setup are unverified.  
+Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

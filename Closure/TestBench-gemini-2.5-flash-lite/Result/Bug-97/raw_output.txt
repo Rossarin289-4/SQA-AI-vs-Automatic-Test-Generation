@@ -1,0 +1,856 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Preconditions;
+import com.google.common.collect.Lists;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.jstype.TernaryValue;
+import java.util.List;
+
+public class PeepholeFoldConstantsTest {
+
+    private static class TestCompiler extends AbstractCompiler {
+        @Override
+        protected void initCompilerOptionsIfTesting() {
+            // This is a peephole pass, so we don't need a lot of compiler options.
+        }
+
+        @Override
+        protected int getCodePrintingOptions() {
+            return 0;
+        }
+
+        @Override
+        public Node parse(String code) {
+            return null; // Not used by this pass
+        }
+
+        @Override
+        public String toSource(Node root) {
+            return null; // Not used by this pass
+        }
+
+        @Override
+        public boolean parseAndRecordErrors(String code) {
+            return false; // Not used by this pass
+        }
+
+        @Override
+        public boolean shouldRunPass(String name) {
+            return true; // Always run passes for testing
+        }
+
+        @Override
+        public void addPass(CompilerPass pass) {
+            // No-op for testing
+        }
+
+        @Override
+        public void process(Node externs, Node root) {
+            // This is where the peephole pass would be called in a real compilation.
+            // For testing, we instantiate and run the pass directly.
+        }
+
+        @Override
+        public void updateCodeChangeFlag(boolean value) {
+            // No-op
+        }
+
+        @Override
+        public void reportChangeToEnclosingCode(JSSourceFile file) {
+            // No-op
+        }
+
+        @Override
+        public JSSourceFile getSourceFile(String filename) {
+            return null; // Not used by this pass
+        }
+    }
+
+    private static PeepholeFoldConstants createPeepholePass() {
+        return new PeepholeFoldConstants(new TestCompiler());
+    }
+
+    private void assertOptimize(String js, String expected) {
+        PeepholeFoldConstants peephole = createPeepholePass();
+        Node root = Node.newString(js); // Simulating parsing a literal
+        Node result = peephole.optimizeSubtree(root);
+        // In a real scenario, we'd parse the JS, optimize, and then convert back to source.
+        // For this simplified test, we'll just check the resulting node.
+        // A more robust test would involve a proper parsing and code generation step.
+        // For now, we'll focus on checking the types and values of the simplified nodes.
+
+        // This approach is heavily simplified. A true test would parse `js`, optimize,
+        // and then convert the resulting `Node` back to source and compare with `expected`.
+        // Since we don't have a full compiler infrastructure here, we'll assert properties
+        // of the resulting node based on expected transformations.
+        if (expected.equals("true")) {
+            assertTrue(result.getBooleanProp(Node.IS_TRUE_PROP));
+        } else if (expected.equals("false")) {
+            assertTrue(result.getBooleanProp(Node.IS_FALSE_PROP));
+        } else if (expected.equals("null")) {
+            assertEquals(Token.NULL, result.getType());
+        } else if (expected.equals("undefined")) {
+            assertEquals(Token.VOID, result.getType()); // Typically represented as VOID
+        } else if (expected.startsWith("\"") && expected.endsWith("\"")) {
+            assertEquals(Token.STRING, result.getType());
+            assertEquals(expected.substring(1, expected.length() - 1), result.getString());
+        } else {
+            try {
+                double expectedNum = Double.parseDouble(expected);
+                assertEquals(Token.NUMBER, result.getType());
+                assertEquals(expectedNum, result.getDouble(), 1e-9);
+            } catch (NumberFormatException e) {
+                // If it's not a number, string, boolean, null, or undefined,
+                // we assume it's a complex node that shouldn't be folded.
+                // This part needs refinement based on actual expected outputs.
+                // For now, if it's not a simple literal, we can't assert much without
+                // a full compiler.
+            }
+        }
+    }
+
+    // Helper to create a Node for testing
+    private Node createNode(Object value) {
+        if (value instanceof String) {
+            return Node.newString((String) value);
+        } else if (value instanceof Double) {
+            return Node.newNumber(((Double) value).doubleValue());
+        } else if (value instanceof Boolean) {
+            return new Node(((Boolean) value) ? Token.TRUE : Token.FALSE);
+        } else if (value == null) {
+            return new Node(Token.NULL);
+        } else if (value instanceof Integer) {
+            return Node.newNumber(((Integer) value).doubleValue());
+        }
+        throw new IllegalArgumentException("Unsupported type: " + value.getClass());
+    }
+
+    private Node createNodeWithParent(int type, Node left, Node right) {
+        Node parent = new Node(type, left, right);
+        return parent;
+    }
+
+    private Node createNodeWithParent(int type, Node child) {
+        Node parent = new Node(type, child);
+        return parent;
+    }
+
+    private Node createNodeWithParent(int type) {
+        Node parent = new Node(type);
+        return parent;
+    }
+
+
+    // Tests for tryFoldTypeof
+    @Test
+    public void testFoldTypeofString() throws Exception {
+        Node typeofNode = new Node(Token.TYPEOF, Node.newString("hello"));
+        Node parent = new Node(Token.EXPR_RESULT, typeofNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(typeofNode);
+        assertEquals("string", typeofNode.getParent().getString());
+    }
+
+    @Test
+    public void testFoldTypeofNumber() throws Exception {
+        Node typeofNode = new Node(Token.TYPEOF, Node.newNumber(123));
+        Node parent = new Node(Token.EXPR_RESULT, typeofNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(typeofNode);
+        assertEquals("number", typeofNode.getParent().getString());
+    }
+
+    @Test
+    public void testFoldTypeofBoolean() throws Exception {
+        Node typeofNode = new Node(Token.TYPEOF, new Node(Token.TRUE));
+        Node parent = new Node(Token.EXPR_RESULT, typeofNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(typeofNode);
+        assertEquals("boolean", typeofNode.getParent().getString());
+    }
+
+    @Test
+    public void testFoldTypeofNull() throws Exception {
+        Node typeofNode = new Node(Token.TYPEOF, new Node(Token.NULL));
+        Node parent = new Node(Token.EXPR_RESULT, typeofNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(typeofNode);
+        assertEquals("object", typeofNode.getParent().getString());
+    }
+
+    @Test
+    public void testFoldTypeofObject() throws Exception {
+        Node typeofNode = new Node(Token.TYPEOF, new Node(Token.OBJECTLIT));
+        Node parent = new Node(Token.EXPR_RESULT, typeofNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(typeofNode);
+        assertEquals("object", typeofNode.getParent().getString());
+    }
+
+    @Test
+    public void testFoldTypeofArray() throws Exception {
+        Node typeofNode = new Node(Token.TYPEOF, new Node(Token.ARRAYLIT));
+        Node parent = new Node(Token.EXPR_RESULT, typeofNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(typeofNode);
+        assertEquals("object", typeofNode.getParent().getString());
+    }
+
+    @Test
+    public void testFoldTypeofUndefinedName() throws Exception {
+        Node typeofNode = new Node(Token.TYPEOF, new Node(Token.NAME, "undefined"));
+        Node parent = new Node(Token.EXPR_RESULT, typeofNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(typeofNode);
+        assertEquals("undefined", typeofNode.getParent().getString());
+    }
+
+    @Test
+    public void testFoldTypeofUndefinedVoid() throws Exception {
+        Node typeofNode = new Node(Token.TYPEOF, new Node(Token.VOID, new Node(Token.NUMBER, 1))); // void 1 is undefined
+        Node parent = new Node(Token.EXPR_RESULT, typeofNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(typeofNode);
+        assertEquals("undefined", typeofNode.getParent().getString());
+    }
+
+    // Tests for tryFoldUnaryOperator
+    @Test
+    public void testFoldNotTrue() throws Exception {
+        Node notNode = new Node(Token.NOT, new Node(Token.TRUE));
+        Node parent = new Node(Token.EXPR_RESULT, notNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(notNode);
+        assertEquals(Token.FALSE, notNode.getParent().getType());
+    }
+
+    @Test
+    public void testFoldNotFalse() throws Exception {
+        Node notNode = new Node(Token.NOT, new Node(Token.FALSE));
+        Node parent = new Node(Token.EXPR_RESULT, notNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(notNode);
+        assertEquals(Token.TRUE, notNode.getParent().getType());
+    }
+
+    @Test
+    public void testFoldNegNumber() throws Exception {
+        Node negNode = new Node(Token.NEG, Node.newNumber(5.0));
+        Node parent = new Node(Token.EXPR_RESULT, negNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(negNode);
+        assertEquals(Token.NUMBER, negNode.getParent().getType());
+        assertEquals(-5.0, negNode.getParent().getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldNegNaN() throws Exception {
+        Node nanNode = Node.newNumber(Double.NaN);
+        Node negNode = new Node(Token.NEG, nanNode);
+        Node parent = new Node(Token.EXPR_RESULT, negNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(negNode);
+        assertEquals(Token.NUMBER, negNode.getParent().getType());
+        assertTrue(Double.isNaN(negNode.getParent().getDouble()));
+    }
+
+    @Test
+    public void testFoldBitNot() throws Exception {
+        Node bitNotNode = new Node(Token.BITNOT, Node.newNumber(5)); // 0101 -> 1010
+        Node parent = new Node(Token.EXPR_RESULT, bitNotNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(bitNotNode);
+        assertEquals(Token.NUMBER, bitNotNode.getParent().getType());
+        assertEquals(-6.0, bitNotNode.getParent().getDouble(), 1e-9); // In Java, ~5 is -6
+    }
+
+    @Test
+    public void testFoldBitNotMaxInt() throws Exception {
+        Node bitNotNode = new Node(Token.BITNOT, Node.newNumber(Integer.MAX_VALUE));
+        Node parent = new Node(Token.EXPR_RESULT, bitNotNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(bitNotNode);
+        assertEquals(Token.NUMBER, bitNotNode.getParent().getType());
+        assertEquals((double) ~Integer.MAX_VALUE, bitNotNode.getParent().getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldBitNotMinInt() throws Exception {
+        Node bitNotNode = new Node(Token.BITNOT, Node.newNumber(Integer.MIN_VALUE));
+        Node parent = new Node(Token.EXPR_RESULT, bitNotNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(bitNotNode);
+        assertEquals(Token.NUMBER, bitNotNode.getParent().getType());
+        assertEquals((double) ~Integer.MIN_VALUE, bitNotNode.getParent().getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldBitNotFractional() throws Exception {
+        Node bitNotNode = new Node(Token.BITNOT, Node.newNumber(5.5));
+        Node parent = new Node(Token.EXPR_RESULT, bitNotNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        // This should not fold and ideally report an error.
+        // For testing, we check if it doesn't fold.
+        Node result = peephole.optimizeSubtree(bitNotNode);
+        assertSame(bitNotNode, result);
+    }
+
+    // Tests for tryFoldBinaryOperator
+    @Test
+    public void testFoldAdd() throws Exception {
+        Node addNode = new Node(Token.ADD, Node.newNumber(2), Node.newNumber(3));
+        Node parent = new Node(Token.EXPR_RESULT, addNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(addNode);
+        assertEquals(Token.NUMBER, addNode.getParent().getType());
+        assertEquals(5.0, addNode.getParent().getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldSubtract() throws Exception {
+        Node subNode = new Node(Token.SUB, Node.newNumber(5), Node.newNumber(2));
+        Node parent = new Node(Token.EXPR_RESULT, subNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(subNode);
+        assertEquals(Token.NUMBER, subNode.getParent().getType());
+        assertEquals(3.0, subNode.getParent().getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldMultiply() throws Exception {
+        Node mulNode = new Node(Token.MUL, Node.newNumber(4), Node.newNumber(2));
+        Node parent = new Node(Token.EXPR_RESULT, mulNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(mulNode);
+        assertEquals(Token.NUMBER, mulNode.getParent().getType());
+        assertEquals(8.0, mulNode.getParent().getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldDivide() throws Exception {
+        Node divNode = new Node(Token.DIV, Node.newNumber(10), Node.newNumber(2));
+        Node parent = new Node(Token.EXPR_RESULT, divNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(divNode);
+        assertEquals(Token.NUMBER, divNode.getParent().getType());
+        assertEquals(5.0, divNode.getParent().getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldDivideByZero() throws Exception {
+        Node divNode = new Node(Token.DIV, Node.newNumber(10), Node.newNumber(0));
+        Node parent = new Node(Token.EXPR_RESULT, divNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        // This should not fold and ideally report an error.
+        // For testing, we check if it doesn't fold.
+        Node result = peephole.optimizeSubtree(divNode);
+        assertSame(divNode, result);
+    }
+
+    @Test
+    public void testFoldAnd() throws Exception {
+        Node andNode = new Node(Token.AND, new Node(Token.TRUE), new Node(Token.FALSE));
+        Node parent = new Node(Token.EXPR_RESULT, andNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(andNode);
+        assertEquals(Token.FALSE, andNode.getParent().getType());
+    }
+
+    @Test
+    public void testFoldOr() throws Exception {
+        Node orNode = new Node(Token.OR, new Node(Token.TRUE), new Node(Token.FALSE));
+        Node parent = new Node(Token.EXPR_RESULT, orNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(orNode);
+        assertEquals(Token.TRUE, orNode.getParent().getType());
+    }
+
+    @Test
+    public void testFoldAndWithNonLiteralLeft() throws Exception {
+        Node n = new Node(Token.NAME, "a");
+        Node andNode = new Node(Token.AND, n, new Node(Token.FALSE));
+        Node parent = new Node(Token.EXPR_RESULT, andNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        Node result = peephole.optimizeSubtree(andNode);
+        // Should not fold if left is not literal.
+        assertSame(andNode, result);
+    }
+
+    @Test
+    public void testFoldOrWithNonLiteralLeft() throws Exception {
+        Node n = new Node(Token.NAME, "a");
+        Node orNode = new Node(Token.OR, n, new Node(Token.TRUE));
+        Node parent = new Node(Token.EXPR_RESULT, orNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        Node result = peephole.optimizeSubtree(orNode);
+        // Should not fold if left is not literal.
+        assertSame(orNode, result);
+    }
+
+    // Tests for tryFoldBitAndOr
+    @Test
+    public void testFoldBitAnd() throws Exception {
+        Node bitAndNode = new Node(Token.BITAND, Node.newNumber(5), Node.newNumber(3)); // 101 & 011 = 001
+        Node parent = new Node(Token.EXPR_RESULT, bitAndNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(bitAndNode);
+        assertEquals(Token.NUMBER, bitAndNode.getParent().getType());
+        assertEquals(1.0, bitAndNode.getParent().getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldBitOr() throws Exception {
+        Node bitOrNode = new Node(Token.BITOR, Node.newNumber(5), Node.newNumber(3)); // 101 | 011 = 111
+        Node parent = new Node(Token.EXPR_RESULT, bitOrNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(bitOrNode);
+        assertEquals(Token.NUMBER, bitOrNode.getParent().getType());
+        assertEquals(7.0, bitOrNode.getParent().getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldBitAndOutOfBounds() throws Exception {
+        Node bitAndNode = new Node(Token.BITAND, Node.newNumber(Integer.MAX_VALUE + 1.0), Node.newNumber(3));
+        Node parent = new Node(Token.EXPR_RESULT, bitAndNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        Node result = peephole.optimizeSubtree(bitAndNode);
+        // Should not fold due to out of bounds.
+        assertSame(bitAndNode, result);
+    }
+
+    // Tests for tryFoldShift
+    @Test
+    public void testFoldLeftShift() throws Exception {
+        Node lshNode = new Node(Token.LSH, Node.newNumber(5), Node.newNumber(2)); // 5 << 2 = 20
+        Node parent = new Node(Token.EXPR_RESULT, lshNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(lshNode);
+        assertEquals(Token.NUMBER, lshNode.getParent().getType());
+        assertEquals(20.0, lshNode.getParent().getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldRightShift() throws Exception {
+        Node rshNode = new Node(Token.RSH, Node.newNumber(20), Node.newNumber(2)); // 20 >> 2 = 5
+        Node parent = new Node(Token.EXPR_RESULT, rshNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(rshNode);
+        assertEquals(Token.NUMBER, rshNode.getParent().getType());
+        assertEquals(5.0, rshNode.getParent().getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldUnsignedRightShift() throws Exception {
+        Node urshNode = new Node(Token.URSH, Node.newNumber(-5), Node.newNumber(2)); // -5 >>> 2 (depends on 32-bit representation)
+        Node parent = new Node(Token.EXPR_RESULT, urshNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(urshNode);
+        assertEquals(Token.NUMBER, urshNode.getParent().getType());
+        // Java's behavior for unsigned right shift on negative numbers:
+        // -5 in 32-bit two's complement is 1111...1011.
+        // Shifting right by 2 zeros fills from left: 0011...1110.
+        // This is (2^32 - 5) / 4, approximately.
+        // A simpler way is to cast to unsigned int, then shift.
+        long unsignedInt = -5L & 0xffffffffL;
+        assertEquals(Double.valueOf(unsignedInt >>> 2), urshNode.getParent().getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldShiftAmountOutOfBounds() throws Exception {
+        Node lshNode = new Node(Token.LSH, Node.newNumber(5), Node.newNumber(32)); // Shift by 32 is out of bounds
+        Node parent = new Node(Token.EXPR_RESULT, lshNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        Node result = peephole.optimizeSubtree(lshNode);
+        // Should not fold.
+        assertSame(lshNode, result);
+    }
+
+    @Test
+    public void testFoldShiftFractionalOperand() throws Exception {
+        Node lshNode = new Node(Token.LSH, Node.newNumber(5.5), Node.newNumber(2));
+        Node parent = new Node(Token.EXPR_RESULT, lshNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        Node result = peephole.optimizeSubtree(lshNode);
+        // Should not fold.
+        assertSame(lshNode, result);
+    }
+
+    // Tests for tryFoldComparison
+    @Test
+    public void testFoldEqual() throws Exception {
+        Node eqNode = new Node(Token.EQ, Node.newNumber(5), Node.newNumber(5));
+        Node parent = new Node(Token.EXPR_RESULT, eqNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(eqNode);
+        assertEquals(Token.TRUE, eqNode.getParent().getType());
+    }
+
+    @Test
+    public void testFoldNotEqual() throws Exception {
+        Node neNode = new Node(Token.NE, Node.newNumber(5), Node.newNumber(3));
+        Node parent = new Node(Token.EXPR_RESULT, neNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(neNode);
+        assertEquals(Token.TRUE, neNode.getParent().getType());
+    }
+
+    @Test
+    public void testFoldLessThan() throws Exception {
+        Node ltNode = new Node(Token.LT, Node.newNumber(5), Node.newNumber(10));
+        Node parent = new Node(Token.EXPR_RESULT, ltNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(ltNode);
+        assertEquals(Token.TRUE, ltNode.getParent().getType());
+    }
+
+    @Test
+    public void testFoldGreaterThan() throws Exception {
+        Node gtNode = new Node(Token.GT, Node.newNumber(10), Node.newNumber(5));
+        Node parent = new Node(Token.EXPR_RESULT, gtNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(gtNode);
+        assertEquals(Token.TRUE, gtNode.getParent().getType());
+    }
+
+    @Test
+    public void testFoldStrictEqual() throws Exception {
+        Node sheqNode = new Node(Token.SHEQ, Node.newNumber(5), Node.newNumber(5));
+        Node parent = new Node(Token.EXPR_RESULT, sheqNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(sheqNode);
+        assertEquals(Token.TRUE, sheqNode.getParent().getType());
+    }
+
+    @Test
+    public void testFoldStrictNotEqual() throws Exception {
+        Node shneNode = new Node(Token.SHNE, Node.newNumber(5), Node.newNumber(3));
+        Node parent = new Node(Token.EXPR_RESULT, shneNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(shneNode);
+        assertEquals(Token.TRUE, shneNode.getParent().getType());
+    }
+
+    @Test
+    public void testFoldComparisonWithUndefined() throws Exception {
+        Node eqNode = new Node(Token.EQ, new Node(Token.VOID, new Node(Token.NUMBER, 1)), new Node(Token.NULL));
+        Node parent = new Node(Token.EXPR_RESULT, eqNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(eqNode);
+        assertEquals(Token.TRUE, eqNode.getParent().getType());
+    }
+
+    @Test
+    public void testFoldComparisonWithUndefinedStrict() throws Exception {
+        Node sheqNode = new Node(Token.SHEQ, new Node(Token.VOID, new Node(Token.NUMBER, 1)), new Node(Token.NULL));
+        Node parent = new Node(Token.EXPR_RESULT, sheqNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(sheqNode);
+        assertEquals(Token.FALSE, sheqNode.getParent().getType());
+    }
+
+    // Tests for tryFoldAssign (e.g., x = x + y -> x += y)
+    @Test
+    public void testFoldAssignAdd() throws Exception {
+        Node left = new Node(Token.NAME, "x");
+        Node right = new Node(Token.ADD, left.cloneNode(), new Node(Token.NAME, "y"));
+        Node assignNode = new Node(Token.ASSIGN, left, right);
+        Node parent = new Node(Token.EXPR_RESULT, assignNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(assignNode);
+        assertEquals(Token.ASSIGN_ADD, assignNode.getParent().getType());
+    }
+
+    // Tests for tryFoldAdd (string concatenation)
+    @Test
+    public void testFoldAddStringLiterals() throws Exception {
+        Node addNode = new Node(Token.ADD, Node.newString("hello"), Node.newString(" world"));
+        Node parent = new Node(Token.EXPR_RESULT, addNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(addNode);
+        assertEquals(Token.STRING, addNode.getParent().getType());
+        assertEquals("hello world", addNode.getParent().getString());
+    }
+
+    @Test
+    public void testFoldAddLeftChildString() throws Exception {
+        Node ll = Node.newNumber(1);
+        Node lr = Node.newString("a");
+        Node left = new Node(Token.ADD, ll, lr);
+        Node right = Node.newString("b");
+        Node addNode = new Node(Token.ADD, left, right);
+        Node parent = new Node(Token.EXPR_RESULT, addNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(addNode);
+        assertEquals(Token.STRING, addNode.getParent().getType());
+        assertEquals("ab", addNode.getParent().getString());
+    }
+
+    // Tests for tryFoldGetElem
+    @Test
+    public void testFoldGetElemArrayIndex() throws Exception {
+        Node arrayLit = new Node(Token.ARRAYLIT, Node.newNumber(10), Node.newNumber(20), Node.newNumber(30));
+        Node index = Node.newNumber(1);
+        Node getElemNode = new Node(Token.GETELEM, arrayLit, index);
+        Node parent = new Node(Token.EXPR_RESULT, getElemNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(getElemNode);
+        assertEquals(Token.NUMBER, getElemNode.getParent().getType());
+        assertEquals(20.0, getElemNode.getParent().getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldGetElemArrayIndexOutOfBounds() throws Exception {
+        Node arrayLit = new Node(Token.ARRAYLIT, Node.newNumber(10), Node.newNumber(20));
+        Node index = Node.newNumber(2);
+        Node getElemNode = new Node(Token.GETELEM, arrayLit, index);
+        Node parent = new Node(Token.EXPR_RESULT, getElemNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        Node result = peephole.optimizeSubtree(getElemNode);
+        // Should not fold.
+        assertSame(getElemNode, result);
+    }
+
+    @Test
+    public void testFoldGetElemArrayIndexFractionalIndex() throws Exception {
+        Node arrayLit = new Node(Token.ARRAYLIT, Node.newNumber(10), Node.newNumber(20));
+        Node index = Node.newNumber(1.5);
+        Node getElemNode = new Node(Token.GETELEM, arrayLit, index);
+        Node parent = new Node(Token.EXPR_RESULT, getElemNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        Node result = peephole.optimizeSubtree(getElemNode);
+        // Should not fold.
+        assertSame(getElemNode, result);
+    }
+
+    // Tests for tryFoldGetProp
+    @Test
+    public void testFoldGetPropArrayLength() throws Exception {
+        Node arrayLit = new Node(Token.ARRAYLIT, Node.newNumber(10), Node.newNumber(20), Node.newNumber(30));
+        Node lengthProp = Node.newString("length");
+        Node getPropNode = new Node(Token.GETPROP, arrayLit, lengthProp);
+        Node parent = new Node(Token.EXPR_RESULT, getPropNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(getPropNode);
+        assertEquals(Token.NUMBER, getPropNode.getParent().getType());
+        assertEquals(3.0, getPropNode.getParent().getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldGetPropStringLength() throws Exception {
+        Node stringLit = Node.newString("hello");
+        Node lengthProp = Node.newString("length");
+        Node getPropNode = new Node(Token.GETPROP, stringLit, lengthProp);
+        Node parent = new Node(Token.EXPR_RESULT, getPropNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(getPropNode);
+        assertEquals(Token.NUMBER, getPropNode.getParent().getType());
+        assertEquals(5.0, getPropNode.getParent().getDouble(), 1e-9);
+    }
+
+    // Tests for tryFoldStringJoin
+    @Test
+    public void testFoldStringJoinEmptyArray() throws Exception {
+        Node arrayLit = new Node(Token.ARRAYLIT);
+        Node joinName = Node.newString("join");
+        Node getPropNode = new Node(Token.GETPROP, arrayLit, joinName);
+        Node separator = Node.newString("");
+        Node callNode = new Node(Token.CALL, getPropNode, separator);
+        Node parent = new Node(Token.EXPR_RESULT, callNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(callNode);
+        assertEquals(Token.STRING, callNode.getParent().getType());
+        assertEquals("", callNode.getParent().getString());
+    }
+
+    @Test
+    public void testFoldStringJoinSingleElement() throws Exception {
+        Node arrayLit = new Node(Token.ARRAYLIT, Node.newString("a"));
+        Node joinName = Node.newString("join");
+        Node getPropNode = new Node(Token.GETPROP, arrayLit, joinName);
+        Node separator = Node.newString(",");
+        Node callNode = new Node(Token.CALL, getPropNode, separator);
+        Node parent = new Node(Token.EXPR_RESULT, callNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(callNode);
+        assertEquals(Token.STRING, callNode.getParent().getType());
+        assertEquals("a", callNode.getParent().getString());
+    }
+
+    @Test
+    public void testFoldStringJoinMultipleElements() throws Exception {
+        Node arrayLit = new Node(Token.ARRAYLIT, Node.newString("a"), Node.newString("b"), Node.newString("c"));
+        Node joinName = Node.newString("join");
+        Node getPropNode = new Node(Token.GETPROP, arrayLit, joinName);
+        Node separator = Node.newString("-");
+        Node callNode = new Node(Token.CALL, getPropNode, separator);
+        Node parent = new Node(Token.EXPR_RESULT, callNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(callNode);
+        assertEquals(Token.STRING, callNode.getParent().getType());
+        assertEquals("a-b-c", callNode.getParent().getString());
+    }
+
+    @Test
+    public void testFoldStringJoinWithNonStringElements() throws Exception {
+        Node arrayLit = new Node(Token.ARRAYLIT, Node.newNumber(1), Node.newString("b"), Node.TRUE);
+        Node joinName = Node.newString("join");
+        Node getPropNode = new Node(Token.GETPROP, arrayLit, joinName);
+        Node separator = Node.newString("");
+        Node callNode = new Node(Token.CALL, getPropNode, separator);
+        Node parent = new Node(Token.EXPR_RESULT, callNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(callNode);
+        assertEquals(Token.STRING, callNode.getParent().getType());
+        assertEquals("1btrue", callNode.getParent().getString());
+    }
+
+    // Tests for tryFoldStringIndexOf
+    @Test
+    public void testFoldStringIndexOfFound() throws Exception {
+        Node lstring = Node.newString("abcdef");
+        Node indexOfName = Node.newString("indexOf");
+        Node getPropNode = new Node(Token.GETPROP, lstring, indexOfName);
+        Node searchValue = Node.newString("cd");
+        Node callNode = new Node(Token.CALL, getPropNode, searchValue);
+        Node parent = new Node(Token.EXPR_RESULT, callNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(callNode);
+        assertEquals(Token.NUMBER, callNode.getParent().getType());
+        assertEquals(2.0, callNode.getParent().getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldStringIndexOfNotFound() throws Exception {
+        Node lstring = Node.newString("abcdef");
+        Node indexOfName = Node.newString("indexOf");
+        Node getPropNode = new Node(Token.GETPROP, lstring, indexOfName);
+        Node searchValue = Node.newString("xyz");
+        Node callNode = new Node(Token.CALL, getPropNode, searchValue);
+        Node parent = new Node(Token.EXPR_RESULT, callNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(callNode);
+        assertEquals(Token.NUMBER, callNode.getParent().getType());
+        assertEquals(-1.0, callNode.getParent().getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldStringIndexOfWithFromIndex() throws Exception {
+        Node lstring = Node.newString("abcabcabc");
+        Node indexOfName = Node.newString("indexOf");
+        Node getPropNode = new Node(Token.GETPROP, lstring, indexOfName);
+        Node searchValue = Node.newString("abc");
+        Node fromIndex = Node.newNumber(4);
+        Node callNode = new Node(Token.CALL, getPropNode, searchValue, fromIndex);
+        Node parent = new Node(Token.EXPR_RESULT, callNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(callNode);
+        assertEquals(Token.NUMBER, callNode.getParent().getType());
+        assertEquals(6.0, callNode.getParent().getDouble(), 1e-9);
+    }
+
+    // Test foldInstanceof
+    @Test
+    public void testFoldInstanceofImmutable() throws Exception {
+        Node left = Node.newNumber(5);
+        Node right = new Node(Token.NAME, "Object");
+        Node instanceofNode = new Node(Token.INSTANCEOF, left, right);
+        Node parent = new Node(Token.EXPR_RESULT, instanceofNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(instanceofNode);
+        assertEquals(Token.FALSE, instanceofNode.getParent().getType());
+    }
+
+    @Test
+    public void testFoldInstanceofObject() throws Exception {
+        Node left = Node.newString("hello"); // Non-literal but not immutable
+        Node right = new Node(Token.NAME, "Object");
+        Node instanceofNode = new Node(Token.INSTANCEOF, left, right);
+        Node parent = new Node(Token.EXPR_RESULT, instanceofNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(instanceofNode);
+        assertEquals(Token.TRUE, instanceofNode.getParent().getType());
+    }
+
+    // Test fold arithmetic for large numbers
+    @Test
+    public void testFoldAddLargeNumbers() throws Exception {
+        Node l = Node.newNumber(MAX_FOLD_NUMBER);
+        Node r = Node.newNumber(1);
+        Node addNode = new Node(Token.ADD, l, r);
+        Node parent = new Node(Token.EXPR_RESULT, addNode);
+        PeepholeFoldConstants peephole = createPeepholePass();
+        peephole.optimizeSubtree(addNode);
+        // Should not fold because it exceeds MAX_FOLD_NUMBER
+        assertTrue(addNode.getParent().getType() == Token.ADD);
+    }
+}
+```
+
+1. SOURCE CODE ANALYSIS - The tests cover `tryFoldTypeof`, `tryFoldUnaryOperator` (for `!`, `neg`, `bitnot`), `tryFoldBinaryOperator` (for `+`, `-`, `*`, `/`, `&`, `|`, `==`, `!=`, `<`, `>`, `===`, `!==`), `tryFoldAssign` (for `+=`, etc.), `tryFoldAdd` (string concatenation), `tryFoldGetElem`, `tryFoldGetProp` (length), `tryFoldStringJoin`, `tryFoldStringIndexOf`, and `tryFoldInstanceof`. Boundary cases for numeric operations and shift amounts are tested.
+2. TEST CASE DESIGN -
+    * `testFoldTypeofString`: Input: `"hello"`, Expected: `"string"`, Derived from `typeof("hello")`.
+    * `testFoldTypeofNumber`: Input: `123`, Expected: `"number"`, Derived from `typeof(123)`.
+    * `testFoldTypeofBoolean`: Input: `true`, Expected: `"boolean"`, Derived from `typeof(true)`.
+    * `testFoldTypeofNull`: Input: `null`, Expected: `"object"`, Derived from `typeof(null)`.
+    * `testFoldTypeofObject`: Input: `{}`, Expected: `"object"`, Derived from `typeof({})`.
+    * `testFoldTypeofArray`: Input: `[]`, Expected: `"object"`, Derived from `typeof([])`.
+    * `testFoldTypeofUndefinedName`: Input: `undefined`, Expected: `"undefined"`, Derived from `typeof(undefined)`.
+    * `testFoldTypeofUndefinedVoid`: Input: `void 1`, Expected: `"undefined"`, Derived from `typeof(void 1)`.
+    * `testFoldNotTrue`: Input: `!true`, Expected: `false`, Derived from `!true`.
+    * `testFoldNotFalse`: Input: `!false`, Expected: `true`, Derived from `!false`.
+    * `testFoldNegNumber`: Input: `-5.0`, Expected: `-5.0`, Derived from `-5.0`.
+    * `testFoldNegNaN`: Input: `-NaN`, Expected: `NaN`, Derived from `-NaN`.
+    * `testFoldBitNot`: Input: `~5`, Expected: `-6`, Derived from `~5`.
+    * `testFoldBitNotMaxInt`: Input: `~Integer.MAX_VALUE`, Expected: `(double) ~Integer.MAX_VALUE`, Derived from `~Integer.MAX_VALUE`.
+    * `testFoldBitNotMinInt`: Input: `~Integer.MIN_VALUE`, Expected: `(double) ~Integer.MIN_VALUE`, Derived from `~Integer.MIN_VALUE`.
+    * `testFoldBitNotFractional`: Input: `~5.5`, Expected: `~5.5` (no fold), Derived from `~5.5`.
+    * `testFoldAdd`: Input: `2 + 3`, Expected: `5.0`, Derived from `2 + 3`.
+    * `testFoldSubtract`: Input: `5 - 2`, Expected: `3.0`, Derived from `5 - 2`.
+    * `testFoldMultiply`: Input: `4 * 2`, Expected: `8.0`, Derived from `4 * 2`.
+    * `testFoldDivide`: Input: `10 / 2`, Expected: `5.0`, Derived from `10 / 2`.
+    * `testFoldDivideByZero`: Input: `10 / 0`, Expected: `10 / 0` (no fold), Derived from `10 / 0`.
+    * `testFoldAnd`: Input: `true && false`, Expected: `false`, Derived from `true && false`.
+    * `testFoldOr`: Input: `true || false`, Expected: `true`, Derived from `true || false`.
+    * `testFoldAndWithNonLiteralLeft`: Input: `a && false`, Expected: `a && false` (no fold), Derived from `a && false`.
+    * `testFoldOrWithNonLiteralLeft`: Input: `a || true`, Expected: `a || true` (no fold), Derived from `a || true`.
+    * `testFoldBitAnd`: Input: `5 & 3`, Expected: `1.0`, Derived from `5 & 3`.
+    * `testFoldBitOr`: Input: `5 | 3`, Expected: `7.0`, Derived from `5 | 3`.
+    * `testFoldBitAndOutOfBounds`: Input: `(MAX_INT+1) & 3`, Expected: `(MAX_INT+1) & 3` (no fold), Derived from out-of-bounds operand.
+    * `testFoldLeftShift`: Input: `5 << 2`, Expected: `20.0`, Derived from `5 << 2`.
+    * `testFoldRightShift`: Input: `20 >> 2`, Expected: `5.0`, Derived from `20 >> 2`.
+    * `testFoldUnsignedRightShift`: Input: `-5 >>> 2`, Expected: `unsigned(-5) >>> 2`, Derived from `-5 >>> 2`.
+    * `testFoldShiftAmountOutOfBounds`: Input: `5 << 32`, Expected: `5 << 32` (no fold), Derived from shift amount out of bounds.
+    * `testFoldShiftFractionalOperand`: Input: `5.5 << 2`, Expected: `5.5 << 2` (no fold), Derived from fractional operand.
+    * `testFoldEqual`: Input: `5 == 5`, Expected: `true`, Derived from `5 == 5`.
+    * `testFoldNotEqual`: Input: `5 != 3`, Expected: `true`, Derived from `5 != 3`.
+    * `testFoldLessThan`: Input: `5 < 10`, Expected: `true`, Derived from `5 < 10`.
+    * `testFoldGreaterThan`: Input: `10 > 5`, Expected: `true`, Derived from `10 > 5`.
+    * `testFoldStrictEqual`: Input: `5 === 5`, Expected: `true`, Derived from `5 === 5`.
+    * `testFoldStrictNotEqual`: Input: `5 !== 3`, Expected: `true`, Derived from `5 !== 3`.
+    * `testFoldComparisonWithUndefined`: Input: `undefined == null`, Expected: `true`, Derived from `undefined == null`.
+    * `testFoldComparisonWithUndefinedStrict`: Input: `undefined === null`, Expected: `false`, Derived from `undefined === null`.
+    * `testFoldAssignAdd`: Input: `x = x + y`, Expected: `x += y`, Derived from assignment transformation.
+    * `testFoldAddStringLiterals`: Input: `"hello" + " world"`, Expected: `"hello world"`, Derived from string concatenation.
+    * `testFoldAddLeftChildString`: Input: `(1 + "a") + "b"`, Expected: `"ab"`, Derived from nested string concatenation.
+    * `testFoldGetElemArrayIndex`: Input: `[10, 20, 30][1]`, Expected: `20.0`, Derived from array literal access.
+    * `testFoldGetElemArrayIndexOutOfBounds`: Input: `[10, 20][2]`, Expected: `[10, 20][2]` (no fold), Derived from out-of-bounds access.
+    * `testFoldGetElemArrayIndexFractionalIndex`: Input: `[10, 20][1.5]`, Expected: `[10, 20][1.5]` (no fold), Derived from fractional index.
+    * `testFoldGetPropArrayLength`: Input: `[10, 20, 30].length`, Expected: `3.0`, Derived from array literal length.
+    * `testFoldGetPropStringLength`: Input: `"hello".length`, Expected: `5.0`, Derived from string literal length.
+    * `testFoldStringJoinEmptyArray`: Input: `[].join("")`, Expected: `""`, Derived from empty array join.
+    * `testFoldStringJoinSingleElement`: Input: `["a"].join(",")`, Expected: `"a"`, Derived from single-element array join.
+    * `testFoldStringJoinMultipleElements`: Input: `["a", "b", "c"].join("-")`, Expected: `"a-b-c"`, Derived from multi-element array join.
+    * `testFoldStringJoinWithNonStringElements`: Input: `[1, "b", true].join("")`, Expected: `"1btrue"`, Derived from array join with mixed types.
+    * `testFoldStringIndexOfFound`: Input: `"abcdef".indexOf("cd")`, Expected: `2.0`, Derived from string index finding.
+    * `testFoldStringIndexOfNotFound`: Input: `"abcdef".indexOf("xyz")`, Expected: `-1.0`, Derived from string index not finding.
+    * `testFoldStringIndexOfWithFromIndex`: Input: `"abcabcabc".indexOf("abc", 4)`, Expected: `6.0`, Derived from string index finding with offset.
+    * `testFoldInstanceofImmutable`: Input: `5 instanceof Object`, Expected: `false`, Derived from `instanceof` on immutable.
+    * `testFoldInstanceofObject`: Input: `"hello" instanceof Object`, Expected: `true`, Derived from `instanceof` on string.
+    * `testFoldAddLargeNumbers`: Input: `MAX_FOLD_NUMBER + 1`, Expected: `MAX_FOLD_NUMBER + 1` (no fold), Derived from exceeding `MAX_FOLD_NUMBER`.
+4. DEFECT DETECTION STRATEGY - Tests cover constant folding for various operators, including arithmetic, bitwise, logical, comparisons, and string operations. Boundary conditions like division by zero, out-of-bounds shifts, and large number limits are also targeted.
+5. SUMMARY - 43 tests.
+6. LIMITATIONS - The tests use a simplified setup for the compiler and AST manipulation, as a full compilation environment is not available. Assertions primarily check the resulting Node type and value, assuming successful transformation. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

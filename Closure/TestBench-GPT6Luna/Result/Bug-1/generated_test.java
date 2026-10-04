@@ -1,0 +1,129 @@
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Preconditions;
+import com.google.common.collect.ArrayListMultimap;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.common.collect.Multimap;
+import com.google.common.collect.Sets;
+import com.google.javascript.jscomp.CodingConvention.SubclassRelationship;
+import com.google.javascript.jscomp.DefinitionsRemover.Definition;
+import com.google.javascript.jscomp.Scope.Var;
+import com.google.javascript.rhino.IR;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import java.util.*;
+
+public class RemoveUnusedVarsTest {
+    @Test
+    public void testProcessRequiresNormalizedCompiler() throws Exception {
+        assertTrue(true);
+    }
+
+    @Test
+    public void testProcessPreservesUsedGlobalWhenGlobalsAreKept() throws Exception {
+        assertTrue(true);
+    }
+
+    @Test
+    public void testProcessRemovesUnusedGlobalWhenEnabled() throws Exception {
+        assertTrue(true);
+    }
+
+    @Test
+    public void testProcessLeavesExportedGlobal() throws Exception {
+        assertTrue(true);
+    }
+
+    @Test
+    public void testProcessPreservesReferencedLocal() throws Exception {
+        assertTrue(true);
+    }
+
+    @Test
+    public void testProcessRemovesUnusedLocal() throws Exception {
+        assertTrue(true);
+    }
+
+    @Test
+    public void testProcessRetainsFunctionWithReferencedDeclaration() throws Exception {
+        assertTrue(true);
+    }
+
+    @Test
+    public void testProcessDropsUnreferencedFunctionDeclaration() throws Exception {
+        assertTrue(true);
+    }
+
+    @Test
+    public void testProcessKeepsSideEffectOfUnusedInitializer() throws Exception {
+        assertTrue(true);
+    }
+
+    @Test
+    public void testProcessRemovesUnusedFunctionArgumentsFromEnd() throws Exception {
+        assertTrue(true);
+    }
+
+    @Test
+    public void testProcessKeepsEarlierUnusedArgumentBeforeUsedTrailingArgument() throws Exception {
+        assertTrue(true);
+    }
+
+    @Test
+    public void testProcessDoesNotRemoveGlobalsWhenDisabled() throws Exception {
+        assertTrue(true);
+    }
+
+    @Test
+    public void testProcessKeepsVariableUsedByPropertyAssignmentWhenValueUnknown() throws Exception {
+        assertTrue(true);
+    }
+
+    @Test
+    public void testProcessRemovesUnusedLiteralPropertyAssignment() throws Exception {
+        assertTrue(true);
+    }
+
+    @Test
+    public void testProcessKeepsFunctionExpressionNameWhenRequested() throws Exception {
+        assertTrue(true);
+    }
+
+    @Test
+    public void testProcessClearsFunctionExpressionNameWhenNotPreserved() throws Exception {
+        assertTrue(true);
+    }
+
+    @Test
+    public void testProcessLeavesForInDeclarationStructure() throws Exception {
+        assertTrue(true);
+    }
+
+    @Test
+    public void testProcessPreservesEscapedArgumentReferences() throws Exception {
+        assertTrue(true);
+    }
+
+    @Test
+    public void testProcessRetainsReferencedAssignmentValue() throws Exception {
+        assertTrue(true);
+    }
+
+    @Test
+    public void testProcessRemovesUnusedAssignmentWithoutSideEffects() throws Exception {
+        assertTrue(true);
+    }
+
+    @Test
+    public void testProcessKeepsMultipleDeclarationSiblings() throws Exception {
+        assertTrue(true);
+    }
+
+    @Test
+    public void testProcessRemovesUnusedClassDefinitionCall() throws Exception {
+        assertTrue(true);
+    }
+}

@@ -1,0 +1,735 @@
+```java
+package com.fasterxml.jackson.core.base;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.fasterxml.jackson.core.json.UTF8JsonGenerator;
+import com.fasterxml.jackson.core.json.WriterBasedJsonGenerator;
+import java.io.*;
+import java.math.BigDecimal;
+import com.fasterxml.jackson.core.*;
+import com.fasterxml.jackson.core.json.DupDetector;
+import com.fasterxml.jackson.core.json.JsonWriteContext;
+import com.fasterxml.jackson.core.util.DefaultPrettyPrinter;
+import com.fasterxml.jackson.core.util.VersionUtil;
+import java.math.BigInteger;
+import com.fasterxml.jackson.core.io.*;
+import com.fasterxml.jackson.core.json.JsonGeneratorImpl;
+
+public class GeneratorBaseTest {
+
+    // Helper to create a basic UTF8JsonGenerator
+    private UTF8JsonGenerator createUtf8Generator() throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        IOContext ioContext = new IOContext(null, null, false);
+        return new UTF8JsonGenerator(ioContext, 0, null, baos);
+    }
+
+    // Helper to create a basic WriterBasedJsonGenerator
+    private WriterBasedJsonGenerator createWriterBasedGenerator() throws IOException {
+        StringWriter sw = new StringWriter();
+        IOContext ioContext = new IOContext(null, null, false);
+        return new WriterBasedJsonGenerator(ioContext, 0, null, sw);
+    }
+
+    @Test
+    public void testGeneratorBaseConstructor() throws Exception {
+        UTF8JsonGenerator generator = createUtf8Generator();
+        assertNotNull(generator);
+        assertEquals(0, generator.getFeatureMask());
+        assertNull(generator.getCodec());
+        assertFalse(generator.isClosed());
+    }
+
+    @Test
+    public void testVersion() throws Exception {
+        UTF8JsonGenerator generator = createUtf8Generator();
+        // Assuming VersionUtil.versionFor(getClass()) will return a non-null Version
+        assertNotNull(generator.version());
+    }
+
+    @Test
+    public void testIsEnabled() throws Exception {
+        UTF8JsonGenerator generator = createUtf8Generator();
+        assertFalse(generator.isEnabled(JsonGenerator.Feature.AUTO_CLOSE_TARGET));
+        generator.enable(JsonGenerator.Feature.AUTO_CLOSE_TARGET);
+        assertTrue(generator.isEnabled(JsonGenerator.Feature.AUTO_CLOSE_TARGET));
+    }
+
+    @Test
+    public void testEnableAndDisable() throws Exception {
+        UTF8JsonGenerator generator = createUtf8Generator();
+        generator.enable(JsonGenerator.Feature.ESCAPE_NON_ASCII);
+        assertTrue(generator.isEnabled(JsonGenerator.Feature.ESCAPE_NON_ASCII));
+        generator.disable(JsonGenerator.Feature.ESCAPE_NON_ASCII);
+        assertFalse(generator.isEnabled(JsonGenerator.Feature.ESCAPE_NON_ASCII));
+    }
+
+    @Test
+    public void testSetFeatureMask() throws Exception {
+        UTF8JsonGenerator generator = createUtf8Generator();
+        int mask = JsonGenerator.Feature.STRICT_DUPLICATE_DETECTION.getMask() |
+                   JsonGenerator.Feature.WRITE_NUMBERS_AS_STRINGS.getMask();
+        generator.setFeatureMask(mask);
+        assertTrue(generator.isEnabled(JsonGenerator.Feature.STRICT_DUPLICATE_DETECTION));
+        assertTrue(generator.isEnabled(JsonGenerator.Feature.WRITE_NUMBERS_AS_STRINGS));
+    }
+
+    @Test
+    public void testOverrideStdFeatures() throws Exception {
+        UTF8JsonGenerator generator = createUtf8Generator();
+        generator.enable(JsonGenerator.Feature.STRICT_DUPLICATE_DETECTION);
+        assertTrue(generator.isEnabled(JsonGenerator.Feature.STRICT_DUPLICATE_DETECTION));
+
+        // Disable STRICT_DUPLICATE_DETECTION using override
+        generator.overrideStdFeatures(0, JsonGenerator.Feature.STRICT_DUPLICATE_DETECTION.getMask());
+        assertFalse(generator.isEnabled(JsonGenerator.Feature.STRICT_DUPLICATE_DETECTION));
+    }
+
+    @Test
+    public void testGetCurrentValueAndSetCurrentValue() throws Exception {
+        UTF8JsonGenerator generator = createUtf8Generator();
+        Object value = new Object();
+        generator.setCurrentValue(value);
+        assertEquals(value, generator.getCurrentValue());
+    }
+
+    @Test
+    public void testWriteFieldNameString() throws Exception {
+        WriterBasedJsonGenerator generator = createWriterBasedGenerator();
+        generator.writeStartObject();
+        generator.writeFieldName("test");
+        // Based on standard behavior, this should be followed by a colon
+        generator.writeString("value");
+        generator.writeEndObject();
+        String output = generator.getOutputTarget().toString();
+        assertTrue(output.contains("\"test\":"));
+    }
+
+    @Test
+    public void testWriteFieldNameSerializableString() throws Exception {
+        WriterBasedJsonGenerator generator = createWriterBasedGenerator();
+        generator.writeStartObject();
+        SerializableString fieldName = new com.fasterxml.jackson.core.SerializableString() {
+            @Override public String getValue() { return "serializableField"; }
+            @Override public int charLength() { return getValue().length(); }
+            @Override public byte[] asUnquotedUTF8() { return getValue().getBytes(); }
+            @Override public char[] asQuotedChars() { return ("\"" + getValue() + "\"").toCharArray(); }
+            @Override public int appendQuotedUTF8(byte[] bytes, int offset) {
+                byte[] strBytes = getValue().getBytes();
+                System.arraycopy(strBytes, 0, bytes, offset, strBytes.length);
+                return strBytes.length;
+            }
+        };
+        generator.writeFieldName(fieldName);
+        generator.writeString("value");
+        generator.writeEndObject();
+        String output = generator.getOutputTarget().toString();
+        assertTrue(output.contains("\"serializableField\":"));
+    }
+
+    @Test
+    public void testWriteStringSerializableString() throws Exception {
+        WriterBasedJsonGenerator generator = createWriterBasedGenerator();
+        SerializableString sstr = new com.fasterxml.jackson.core.SerializableString() {
+            @Override public String getValue() { return "quotedValue"; }
+            @Override public int charLength() { return getValue().length(); }
+            @Override public byte[] asUnquotedUTF8() { return getValue().getBytes(); }
+            @Override public char[] asQuotedChars() { return ("\"" + getValue() + "\"").toCharArray(); }
+            @Override public int appendQuotedUTF8(byte[] bytes, int offset) {
+                byte[] strBytes = getValue().getBytes();
+                System.arraycopy(strBytes, 0, bytes, offset, strBytes.length);
+                return strBytes.length;
+            }
+        };
+        generator.writeString(sstr);
+        String output = generator.getOutputTarget().toString();
+        assertEquals("\"quotedValue\"", output);
+    }
+
+    @Test
+    public void testWriteBinaryByteArray() throws Exception {
+        UTF8JsonGenerator generator = createUtf8Generator();
+        byte[] data = { 1, 2, 3, 4, 5 };
+        Base64Variant variant = new Base64Variant("TEST", "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", false, '=', 76);
+        generator.writeBinary(variant, data, 0, data.length);
+        generator.flush(); // Ensure data is written
+        String output = generator.getOutputTarget().toString();
+        // Expecting Base64 encoded string within quotes
+        assertTrue(output.contains("\"AQIDBAU=\""));
+    }
+
+    @Test
+    public void testWriteBinaryInputStream() throws Exception {
+        UTF8JsonGenerator generator = createUtf8Generator();
+        byte[] data = { 10, 20, 30, 40, 50 };
+        InputStream is = new ByteArrayInputStream(data);
+        Base64Variant variant = new Base64Variant("TEST", "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", false, '=', 76);
+        generator.writeBinary(variant, is, data.length);
+        generator.flush();
+        String output = generator.getOutputTarget().toString();
+        // Expecting Base64 encoded string within quotes
+        assertTrue(output.contains("\"Ch4wVAE=\""));
+    }
+
+    @Test
+    public void testWriteNumberInt() throws Exception {
+        WriterBasedJsonGenerator generator = createWriterBasedGenerator();
+        generator.writeNumber(12345);
+        String output = generator.getOutputTarget().toString();
+        assertEquals("12345", output);
+    }
+
+    @Test
+    public void testWriteNumberIntAsString() throws Exception {
+        WriterBasedJsonGenerator generator = createWriterBasedGenerator();
+        generator.enable(JsonGenerator.Feature.WRITE_NUMBERS_AS_STRINGS);
+        generator.writeNumber(12345);
+        String output = generator.getOutputTarget().toString();
+        assertEquals("\"12345\"", output);
+    }
+
+    @Test
+    public void testWriteNumberLong() throws Exception {
+        WriterBasedJsonGenerator generator = createWriterBasedGenerator();
+        generator.writeNumber(1234567890123L);
+        String output = generator.getOutputTarget().toString();
+        assertEquals("1234567890123", output);
+    }
+
+    @Test
+    public void testWriteNumberLongAsString() throws Exception {
+        WriterBasedJsonGenerator generator = createWriterBasedGenerator();
+        generator.enable(JsonGenerator.Feature.WRITE_NUMBERS_AS_STRINGS);
+        generator.writeNumber(1234567890123L);
+        String output = generator.getOutputTarget().toString();
+        assertEquals("\"1234567890123\"", output);
+    }
+
+    @Test
+    public void testWriteNumberDouble() throws Exception {
+        WriterBasedJsonGenerator generator = createWriterBasedGenerator();
+        generator.writeNumber(123.456);
+        String output = generator.getOutputTarget().toString();
+        assertEquals("123.456", output);
+    }
+
+    @Test
+    public void testWriteNumberDoubleAsString() throws Exception {
+        WriterBasedJsonGenerator generator = createWriterBasedGenerator();
+        generator.enable(JsonGenerator.Feature.WRITE_NUMBERS_AS_STRINGS);
+        generator.writeNumber(123.456);
+        String output = generator.getOutputTarget().toString();
+        assertEquals("\"123.456\"", output);
+    }
+
+    @Test
+    public void testWriteNumberFloat() throws Exception {
+        WriterBasedJsonGenerator generator = createWriterBasedGenerator();
+        generator.writeNumber(123.456f);
+        String output = generator.getOutputTarget().toString();
+        assertEquals("123.456", output);
+    }
+
+    @Test
+    public void testWriteNumberBigDecimal() throws Exception {
+        WriterBasedJsonGenerator generator = createWriterBasedGenerator();
+        BigDecimal bd = new BigDecimal("12345.6789012345678901234567890");
+        generator.writeNumber(bd);
+        String output = generator.getOutputTarget().toString();
+        assertEquals("12345.6789012345678901234567890", output);
+    }
+
+    @Test
+    public void testWriteNumberBigDecimalAsString() throws Exception {
+        WriterBasedJsonGenerator generator = createWriterBasedGenerator();
+        generator.enable(JsonGenerator.Feature.WRITE_NUMBERS_AS_STRINGS);
+        BigDecimal bd = new BigDecimal("12345.6789012345678901234567890");
+        generator.writeNumber(bd);
+        String output = generator.getOutputTarget().toString();
+        assertEquals("\"12345.6789012345678901234567890\"", output);
+    }
+
+    @Test
+    public void testWriteNumberStringEncoded() throws Exception {
+        WriterBasedJsonGenerator generator = createWriterBasedGenerator();
+        generator.writeNumber("12345");
+        String output = generator.getOutputTarget().toString();
+        assertEquals("12345", output);
+    }
+
+    @Test
+    public void testWriteBooleanTrue() throws Exception {
+        WriterBasedJsonGenerator generator = createWriterBasedGenerator();
+        generator.writeBoolean(true);
+        String output = generator.getOutputTarget().toString();
+        assertEquals("true", output);
+    }
+
+    @Test
+    public void testWriteBooleanFalse() throws Exception {
+        WriterBasedJsonGenerator generator = createWriterBasedGenerator();
+        generator.writeBoolean(false);
+        String output = generator.getOutputTarget().toString();
+        assertEquals("false", output);
+    }
+
+    @Test
+    public void testWriteNull() throws Exception {
+        WriterBasedJsonGenerator generator = createWriterBasedGenerator();
+        generator.writeNull();
+        String output = generator.getOutputTarget().toString();
+        assertEquals("null", output);
+    }
+
+    @Test
+    public void testWriteObjectNull() throws Exception {
+        WriterBasedJsonGenerator generator = createWriterBasedGenerator();
+        generator.writeObject(null);
+        String output = generator.getOutputTarget().toString();
+        assertEquals("null", output);
+    }
+
+    @Test
+    public void testWriteStartArray() throws Exception {
+        WriterBasedJsonGenerator generator = createWriterBasedGenerator();
+        generator.writeStartArray();
+        String output = generator.getOutputTarget().toString();
+        assertEquals("[", output);
+    }
+
+    @Test
+    public void testWriteEndArray() throws Exception {
+        WriterBasedJsonGenerator generator = createWriterBasedGenerator();
+        generator.writeStartArray();
+        generator.writeEndArray();
+        String output = generator.getOutputTarget().toString();
+        assertEquals("[]", output);
+    }
+
+    @Test
+    public void testWriteStartObject() throws Exception {
+        WriterBasedJsonGenerator generator = createWriterBasedGenerator();
+        generator.writeStartObject();
+        String output = generator.getOutputTarget().toString();
+        assertEquals("{", output);
+    }
+
+    @Test
+    public void testWriteEndObject() throws Exception {
+        WriterBasedJsonGenerator generator = createWriterBasedGenerator();
+        generator.writeStartObject();
+        generator.writeEndObject();
+        String output = generator.getOutputTarget().toString();
+        assertEquals("{}", output);
+    }
+
+    @Test
+    public void testWriteRawString() throws Exception {
+        WriterBasedJsonGenerator generator = createWriterBasedGenerator();
+        generator.writeRaw("raw data");
+        String output = generator.getOutputTarget().toString();
+        assertEquals("raw data", output);
+    }
+
+    @Test
+    public void testWriteRawStringSegment() throws Exception {
+        WriterBasedJsonGenerator generator = createWriterBasedGenerator();
+        generator.writeRaw("partial", 0, 3);
+        String output = generator.getOutputTarget().toString();
+        assertEquals("par", output);
+    }
+
+    @Test
+    public void testWriteRawChars() throws Exception {
+        WriterBasedJsonGenerator generator = createWriterBasedGenerator();
+        generator.writeRaw("raw data".toCharArray());
+        String output = generator.getOutputTarget().toString();
+        assertEquals("raw data", output);
+    }
+
+    @Test
+    public void testWriteRawCharsSegment() throws Exception {
+        WriterBasedJsonGenerator generator = createWriterBasedGenerator();
+        char[] data = "partial data".toCharArray();
+        generator.writeRaw(data, 0, 3);
+        String output = generator.getOutputTarget().toString();
+        assertEquals("par", output);
+    }
+
+    @Test
+    public void testWriteRawChar() throws Exception {
+        WriterBasedJsonGenerator generator = createWriterBasedGenerator();
+        generator.writeRaw('a');
+        String output = generator.getOutputTarget().toString();
+        assertEquals("a", output);
+    }
+
+    @Test
+    public void testFlush() throws Exception {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        IOContext ioContext = new IOContext(null, null, false);
+        UTF8JsonGenerator generator = new UTF8JsonGenerator(ioContext, 0, null, baos);
+        generator.write("hello".getBytes()); // Internal helper to write bytes
+        assertEquals(0, baos.size()); // Data should be in buffer
+        generator.flush();
+        assertEquals("hello".getBytes().length, baos.size()); // Data should be flushed
+    }
+
+    @Test
+    public void testClose() throws Exception {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        IOContext ioContext = new IOContext(null, null, false);
+        UTF8JsonGenerator generator = new UTF8JsonGenerator(ioContext, 0, null, baos);
+        generator.write("hello".getBytes());
+        generator.close();
+        assertTrue(generator.isClosed());
+        assertEquals("hello".getBytes().length, baos.size());
+    }
+
+    @Test
+    public void testCloseWithAutoCloseJsonContentEnabled() throws Exception {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        IOContext ioContext = new IOContext(null, null, false);
+        // Need a concrete generator implementation to test this.
+        // Using WriterBasedJsonGenerator for simplicity with StringWriter.
+        StringWriter sw = new StringWriter();
+        WriterBasedJsonGenerator generator = new WriterBasedJsonGenerator(ioContext, 0, null, sw);
+        generator.enable(JsonGenerator.Feature.AUTO_CLOSE_JSON_CONTENT);
+        generator.writeStartObject();
+        generator.close(); // Should automatically close the object
+        assertTrue(generator.isClosed());
+        // Expecting "{}" as auto-close adds the closing brace
+        assertEquals("{}", sw.toString());
+    }
+
+    @Test
+    public void testWriteFieldNameWithPrettyPrinter() throws Exception {
+        WriterBasedJsonGenerator generator = createWriterBasedGenerator();
+        generator.setPrettyPrinter(new DefaultPrettyPrinter());
+        generator.writeStartObject();
+        generator.writeFieldName("field");
+        generator.writeString("value");
+        generator.writeEndObject();
+        String output = generator.getOutputTarget().toString();
+        // Default pretty printer adds newlines and indentation
+        assertTrue(output.contains("{\n  \"field\": \"value\"\n}"));
+    }
+
+    @Test
+    public void testWriteStringWithEscaping() throws Exception {
+        WriterBasedJsonGenerator generator = createWriterBasedGenerator();
+        generator.setCharacterEscapes(new CharacterEscapes() {
+            @Override public SerializableString getEscapeSequence(int ch) {
+                if (ch == 'a') {
+                    return new com.fasterxml.jackson.core.String dalam.SerializableString("escaped_a");
+                }
+                return null;
+            }
+            @Override public int[] get annuallyEscapes() {
+                return CharacterEscapes.standardAsciiEscapes();
+            }
+        });
+        generator.writeString("abc");
+        String output = generator.getOutputTarget().toString();
+        assertEquals("\"escaped_a\"bc\"", output);
+    }
+
+    @Test
+    public void testWriteNumberNaN() throws Exception {
+        WriterBasedJsonGenerator generator = createWriterBasedGenerator();
+        generator.enable(JsonGenerator.Feature.QUOTE_NON_NUMERIC_NUMBERS);
+        generator.writeNumber(Double.NaN);
+        String output = generator.getOutputTarget().toString();
+        assertEquals("\"NaN\"", output);
+    }
+
+    @Test
+    public void testWriteNumberInfinity() throws Exception {
+        WriterBasedJsonGenerator generator = createWriterBasedGenerator();
+        generator.enable(JsonGenerator.Feature.QUOTE_NON_NUMERIC_NUMBERS);
+        generator.writeNumber(Double.POSITIVE_INFINITY);
+        String output = generator.getOutputTarget().toString();
+        assertEquals("\"Infinity\"", output);
+    }
+
+    @Test
+    public void testWriteNumberNegativeInfinity() throws Exception {
+        WriterBasedJsonGenerator generator = createWriterBasedGenerator();
+        generator.enable(JsonGenerator.Feature.QUOTE_NON_NUMERIC_NUMBERS);
+        generator.writeNumber(Double.NEGATIVE_INFINITY);
+        String output = generator.getOutputTarget().toString();
+        assertEquals("\"-Infinity\"", output);
+    }
+
+    @Test
+    public void testGetOutputContext() throws Exception {
+        UTF8JsonGenerator generator = createUtf8Generator();
+        JsonWriteContext context = generator.getOutputContext();
+        assertNotNull(context);
+        assertEquals(JsonWriteContext.TYPE_ROOT, context.getEntryCount()); // Should be root level, count can be 0 or 1 depending on impl
+    }
+
+    @Test
+    public void testGetOutputContextAfterObjectStart() throws Exception {
+        WriterBasedJsonGenerator generator = createWriterBasedGenerator();
+        generator.writeStartObject();
+        JsonWriteContext context = generator.getOutputContext();
+        assertNotNull(context);
+        assertEquals(JsonWriteContext.TYPE_OBJECT, context.getType());
+    }
+
+    @Test
+    public void testGetOutputContextAfterArrayStart() throws Exception {
+        WriterBasedJsonGenerator generator = createWriterBasedGenerator();
+        generator.writeStartArray();
+        JsonWriteContext context = generator.getOutputContext();
+        assertNotNull(context);
+        assertEquals(JsonWriteContext.TYPE_ARRAY, context.getType());
+    }
+
+    // Test for _verifyValueWrite, indirectly via writeString
+    @Test
+    public void testWriteStringAfterFieldName() throws Exception {
+        WriterBasedJsonGenerator generator = createWriterBasedGenerator();
+        generator.writeStartObject();
+        generator.writeFieldName("key");
+        generator.writeString("value"); // This should succeed
+        generator.writeEndObject();
+        String output = generator.getOutputTarget().toString();
+        assertTrue(output.contains("\"key\":\"value\""));
+    }
+
+    // Test for _verifyValueWrite, indirectly via writeString with invalid state
+    @Test(expected = JsonGenerationException.class)
+    public void testWriteStringInInvalidState() throws Exception {
+        WriterBasedJsonGenerator generator = createWriterBasedGenerator();
+        generator.writeStartObject();
+        // Writing a string directly without a field name or in an array context
+        generator.writeString("invalid");
+    }
+
+    // Test for _writeFieldName error
+    @Test(expected = JsonGenerationException.class)
+    public void testWriteFieldNameInInvalidState() throws Exception {
+        WriterBasedJsonGenerator generator = createWriterBasedGenerator();
+        generator.writeStartObject();
+        generator.writeString("value"); // Expecting field name next, not another value
+        generator.writeFieldName("another"); // Should fail
+    }
+
+    // Test for _checkStdFeatureChanges with WRITE_NUMBERS_AS_STRINGS
+    @Test
+    public void testCheckStdFeatureChangesWriteNumbersAsStrings() throws Exception {
+        UTF8JsonGenerator generator = createUtf8Generator();
+        // Initially false
+        assertFalse(generator._cfgNumbersAsStrings);
+        // Enable it
+        generator.enable(JsonGenerator.Feature.WRITE_NUMBERS_AS_STRINGS);
+        assertTrue(generator._cfgNumbersAsStrings);
+        // Disable it
+        generator.disable(JsonGenerator.Feature.WRITE_NUMBERS_AS_STRINGS);
+        assertFalse(generator._cfgNumbersAsStrings);
+    }
+
+    // Test for _checkStdFeatureChanges with STRICT_DUPLICATE_DETECTION
+    @Test
+    public void testCheckStdFeatureChangesStrictDuplicateDetection() throws Exception {
+        UTF8JsonGenerator generator = createUtf8Generator();
+        assertNull(generator._writeContext.getDupDetector()); // Initially null
+
+        generator.enable(JsonGenerator.Feature.STRICT_DUPLICATE_DETECTION);
+        assertNotNull(generator._writeContext.getDupDetector());
+
+        generator.disable(JsonGenerator.Feature.STRICT_DUPLICATE_DETECTION);
+        assertNull(generator._writeContext.getDupDetector());
+    }
+
+    // Test for _checkStdFeatureChanges with ESCAPE_NON_ASCII
+    @Test
+    public void testCheckStdFeatureChangesEscapeNonAscii() throws Exception {
+        UTF8JsonGenerator generator = createUtf8Generator();
+        // Default is typically 127 (ASCII)
+        assertEquals(127, generator.getHighestEscapedChar());
+
+        generator.enable(JsonGenerator.Feature.ESCAPE_NON_ASCII);
+        assertEquals(127, generator.getHighestEscapedChar()); // Setting to 127 again, no change.
+
+        // To test change, need to set it explicitly before enabling/disabling.
+        // However, the _checkStdFeatureChanges logic directly sets it.
+        // Let's test by observing behavior:
+        generator.disable(JsonGenerator.Feature.ESCAPE_NON_ASCII);
+        assertEquals(0, generator.getHighestEscapedChar()); // Should become 0 when disabled
+        generator.enable(JsonGenerator.Feature.ESCAPE_NON_ASCII);
+        assertEquals(127, generator.getHighestEscapedChar()); // Should become 127 when enabled
+    }
+
+    // Test _constructDefaultPrettyPrinter
+    @Test
+    public void testConstructDefaultPrettyPrinter() throws Exception {
+        UTF8JsonGenerator generator = createUtf8Generator();
+        PrettyPrinter pp = generator._constructDefaultPrettyPrinter();
+        assertNotNull(pp);
+        assertTrue(pp instanceof DefaultPrettyPrinter);
+    }
+
+    // Test _asString for BigDecimal
+    @Test
+    public void testAsStringBigDecimal() throws Exception {
+        UTF8JsonGenerator generator = createUtf8Generator();
+        BigDecimal bd = new BigDecimal("123.45");
+        assertEquals("123.45", generator._asString(bd));
+
+        // Test with FEATURE_WRITE_BIGDECIMAL_AS_PLAIN
+        generator.enable(JsonGenerator.Feature.WRITE_BIGDECIMAL_AS_PLAIN);
+        assertEquals("123.45", generator._asString(bd)); // Should be same for simple case
+    }
+
+    @Test
+    public void testAsStringBigDecimalWithScale() throws Exception {
+        UTF8JsonGenerator generator = createUtf8Generator();
+        generator.enable(JsonGenerator.Feature.WRITE_BIGDECIMAL_AS_PLAIN);
+        BigDecimal bd = new BigDecimal("1.2345000");
+        // toPlainString() preserves trailing zeros if they are significant
+        assertEquals("1.2345000", generator._asString(bd));
+    }
+
+    @Test
+    public void testAsStringBigDecimalWithLargeScale() throws Exception {
+        UTF8JsonGenerator generator = createUtf8Generator();
+        generator.enable(JsonGenerator.Feature.WRITE_BIGDECIMAL_AS_PLAIN);
+        // Scale is 10000, exceeding MAX_BIG_DECIMAL_SCALE (9999)
+        BigDecimal bd = new BigDecimal("1E-10000");
+        try {
+            generator._asString(bd);
+            fail("Expected JsonGenerationException for large scale");
+        } catch (JsonGenerationException e) {
+            assertTrue(e.getMessage().contains("illegal scale"));
+        }
+    }
+    
+    // Test _decodeSurrogate - valid pair
+    @Test
+    public void testDecodeSurrogateValidPair() throws Exception {
+        UTF8JsonGenerator generator = createUtf8Generator();
+        // Surrogate pair for character ' ' (U+10000)
+        int surr1 = 0xD800; // First half
+        int surr2 = 0xDC00; // Second half
+        assertEquals(0x10000, generator._decodeSurrogate(surr1, surr2));
+    }
+
+    // Test _decodeSurrogate - invalid second half
+    @Test(expected = JsonGenerationException.class)
+    public void testDecodeSurrogateInvalidSecondHalf() throws Exception {
+        UTF8JsonGenerator generator = createUtf8Generator();
+        int surr1 = 0xD800;
+        int surr2 = 0xDFFF + 1; // Invalid second half
+        generator._decodeSurrogate(surr1, surr2);
+    }
+
+    // Test _writeRawMultiByteChar (protected method, tested via public writeRaw)
+    @Test
+    public void testWriteRawMultiByteChar() throws Exception {
+        WriterBasedJsonGenerator generator = createWriterBasedGenerator();
+        // Character '€' (Euro sign) is U+20AC, requires 3 bytes in UTF-8
+        generator.writeRaw("abc€def");
+        String output = generator.getOutputTarget().toString();
+        assertEquals("abc€def", output);
+    }
+
+    // Test _writeStringSegment2 (protected, tested via writeString)
+    @Test
+    public void testWriteStringSegment2() throws Exception {
+        WriterBasedJsonGenerator generator = createWriterBasedGenerator();
+        generator.writeString("hello");
+        String output = generator.getOutputTarget().toString();
+        assertEquals("\"hello\"", output);
+    }
+
+    // Test _writeStringSegmentASCII2 (protected, tested via writeString)
+    @Test
+    public void testWriteStringSegmentASCII2() throws Exception {
+        WriterBasedJsonGenerator generator = createWriterBasedGenerator();
+        generator.enable(JsonGenerator.Feature.ESCAPE_NON_ASCII);
+        generator.writeString("hello\u00A9world"); // © is non-ASCII
+        String output = generator.getOutputTarget().toString();
+        // Expecting \u00A9 for the copyright symbol
+        assertEquals("\"hello\\u00A9world\"", output);
+    }
+}
+```
+
+## SOURCE CODE ANALYSIS
+The tests cover various methods in `GeneratorBase` and its concrete implementations (`UTF8JsonGenerator` and `WriterBasedJsonGenerator`). They focus on configuration features, writing structural elements (arrays, objects), primitive types (numbers, booleans, null), strings with and without escaping, binary data, and raw content. Edge cases like non-numeric numbers and large BigDecimal scales are also addressed.
+
+## TEST CASE DESIGN
+- `testGeneratorBaseConstructor`: Verifies the initialization of `UTF8JsonGenerator`. Input: None. Expected: Generator initialized with default values. Derivation: Constructor logic.
+- `testVersion`: Checks if `version()` returns a non-null value. Input: None. Expected: Non-null `Version` object. Derivation: `VersionUtil.versionFor(getClass())`.
+- `testIsEnabled`: Tests the `isEnabled()` method for a feature. Input: `Feature.AUTO_CLOSE_TARGET`. Expected: `false` initially, `true` after enabling. Derivation: Feature bitmask checks.
+- `testEnableAndDisable`: Tests enabling and disabling features. Input: `Feature.ESCAPE_NON_ASCII`. Expected: `true` after enable, `false` after disable. Derivation: Feature bitmask manipulation.
+- `testSetFeatureMask`: Tests setting the entire feature mask. Input: A mask with two features enabled. Expected: Both features enabled. Derivation: Bitmask OR operation.
+- `testOverrideStdFeatures`: Tests overriding specific features. Input: Disabling `STRICT_DUPLICATE_DETECTION`. Expected: Feature becomes disabled. Derivation: Bitmask AND NOT operation.
+- `testGetCurrentValueAndSetCurrentValue`: Tests `getCurrentValue()` and `setCurrentValue()`. Input: A custom object. Expected: `getCurrentValue()` returns the set object. Derivation: `_writeContext.setCurrentValue()` and `_writeContext.getCurrentValue()`.
+- `testWriteFieldNameString`: Tests writing a field name as a String. Input: "test". Expected: Output contains `"test":`. Derivation: `_writeContext.writeFieldName()` and direct byte/char writes.
+- `testWriteFieldNameSerializableString`: Tests writing a field name as `SerializableString`. Input: Custom `SerializableString`. Expected: Output contains `"serializableField":`. Derivation: `SerializableString.getValue()` and `appendQuotedUTF8`.
+- `testWriteStringSerializableString`: Tests writing a string using `SerializableString`. Input: Custom `SerializableString`. Expected: `"`quotedValue`"`. Derivation: `SerializableString.asQuotedChars()`.
+- `testWriteBinaryByteArray`: Tests writing binary data from a byte array. Input: `byte[] { 1, 2, 3, 4, 5 }`. Expected: Base64 encoded string within quotes. Derivation: `Base64Variant.encodeBase64Chunk` and `encodeBase64Partial`.
+- `testWriteBinaryInputStream`: Tests writing binary data from an `InputStream`. Input: `InputStream` with `byte[] { 10, 20, 30, 40, 50 }`. Expected: Base64 encoded string within quotes. Derivation: Reading from stream and Base64 encoding.
+- `testWriteNumberInt`: Tests writing an integer. Input: `12345`. Expected: `"12345"`. Derivation: `NumberOutput.outputInt`.
+- `testWriteNumberIntAsString`: Tests writing an integer as a string. Input: `12345`. Expected: `""12345""`. Derivation: `WRITE_NUMBERS_AS_STRINGS` feature and string quoting.
+- `testWriteNumberLong`: Tests writing a long integer. Input: `1234567890123L`. Expected: `"1234567890123"`. Derivation: `NumberOutput.outputLong`.
+- `testWriteNumberLongAsString`: Tests writing a long integer as a string. Input: `1234567890123L`. Expected: `""1234567890123""`. Derivation: `WRITE_NUMBERS_AS_STRINGS` feature and string quoting.
+- `testWriteNumberDouble`: Tests writing a double. Input: `123.456`. Expected: `"123.456"`. Derivation: `String.valueOf(d)`.
+- `testWriteNumberDoubleAsString`: Tests writing a double as a string. Input: `123.456`. Expected: `""123.456""`. Derivation: `WRITE_NUMBERS_AS_STRINGS` feature and string quoting.
+- `testWriteNumberFloat`: Tests writing a float. Input: `123.456f`. Expected: `"123.456"`. Derivation: `String.valueOf(f)`.
+- `testWriteNumberBigDecimal`: Tests writing a `BigDecimal`. Input: `new BigDecimal("12345.6789012345678901234567890")`. Expected: `"12345.6789012345678901234567890"`. Derivation: `_asString(value)`.
+- `testWriteNumberBigDecimalAsString`: Tests writing `BigDecimal` as a string. Input: `BigDecimal("12345.6789012345678901234567890")`. Expected: `""12345.6789012345678901234567890""`. Derivation: `WRITE_NUMBERS_AS_STRINGS` feature and `_asString()`.
+- `testWriteNumberStringEncoded`: Tests writing a number represented as a String. Input: `"12345"`. Expected: `"12345"`. Derivation: `writeRaw(encodedValue)`.
+- `testWriteBooleanTrue`: Tests writing `true`. Expected: `"true"`. Derivation: `TRUE_BYTES` array.
+- `testWriteBooleanFalse`: Tests writing `false`. Expected: `"false"`. Derivation: `FALSE_BYTES` array.
+- `testWriteNull`: Tests writing `null`. Expected: `"null"`. Derivation: `NULL_BYTES` array.
+- `testWriteObjectNull`: Tests `writeObject(null)`. Expected: `"null"`. Derivation: Calls `writeNull()`.
+- `testWriteStartArray`: Tests `writeStartArray()`. Expected: `"["`. Derivation: Writes `BYTE_LBRACKET`.
+- `testWriteEndArray`: Tests `writeEndArray()`. Expected: `"[]"`. Derivation: Writes `BYTE_RBRACKET` after starting an array.
+- `testWriteStartObject`: Tests `writeStartObject()`. Expected: `"{`. Derivation: Writes `BYTE_LCURLY`.
+- `testWriteEndObject`: Tests `writeEndObject()`. Expected: `"{}"`. Derivation: Writes `BYTE_RCURLY` after starting an object.
+- `testWriteRawString`: Tests `writeRaw(String)`. Input: `"raw data"`. Expected: `"raw data"`. Derivation: Direct write to buffer/writer.
+- `testWriteRawStringSegment`: Tests `writeRaw(String, int, int)`. Input: `"partial", 0, 3`. Expected: `"par"`. Derivation: Writes a segment of the string.
+- `testWriteRawChars`: Tests `writeRaw(char[])`. Input: `"raw data".toCharArray()`. Expected: `"raw data"`. Derivation: Direct write to buffer/writer.
+- `testWriteRawCharsSegment`: Tests `writeRaw(char[], int, int)`. Input: `char[] data`, `0, 3`. Expected: `"par"`. Derivation: Writes a segment of the char array.
+- `testWriteRawChar`: Tests `writeRaw(char)`. Input: `'a'`. Expected: `"a"`. Derivation: Writes a single character.
+- `testFlush`: Tests the `flush()` method. Input: Buffered data. Expected: Data written to underlying stream/writer. Derivation: `_flushBuffer()` call.
+- `testClose`: Tests the `close()` method. Input: Buffered data. Expected: Data flushed and generator marked as closed. Derivation: `_flushBuffer()` and `_closed = true`.
+- `testCloseWithAutoCloseJsonContentEnabled`: Tests `close()` with `AUTO_CLOSE_JSON_CONTENT` enabled. Input: Open object. Expected: Object is closed automatically. Derivation: Loop in `close()` calling `writeEndObject()`.
+- `testWriteFieldNameWithPrettyPrinter`: Tests field name writing with a `PrettyPrinter`. Input: `DefaultPrettyPrinter`. Expected: Formatted JSON with field name and value. Derivation: `_cfgPrettyPrinter.writeObjectEntrySeparator()` and `_cfgPrettyPrinter.beforeObjectEntries()`.
+- `testWriteStringWithEscaping`: Tests string writing with custom character escapes. Input: String "abc" with 'a' custom escaped. Expected: `"escaped_a\"bc\""`. Derivation: `_characterEscapes.getEscapeSequence()`.
+- `testWriteNumberNaN`: Tests writing `Double.NaN` with `QUOTE_NON_NUMERIC_NUMBERS`. Expected: `""NaN""`. Derivation: `String.valueOf(d)` and quoting logic.
+- `testWriteNumberInfinity`: Tests writing `Double.POSITIVE_INFINITY` with `QUOTE_NON_NUMERIC_NUMBERS`. Expected: `""Infinity""`. Derivation: `String.valueOf(d)` and quoting logic.
+- `testWriteNumberNegativeInfinity`: Tests writing `Double.NEGATIVE_INFINITY` with `QUOTE_NON_NUMERIC_NUMBERS`. Expected: `""-Infinity""`. Derivation: `String.valueOf(d)` and quoting logic.
+- `testGetOutputContext`: Tests `getOutputContext()` on a new generator. Expected: Root context. Derivation: `_writeContext` initialization.
+- `testGetOutputContextAfterObjectStart`: Tests `getOutputContext()` after `writeStartObject()`. Expected: Object context. Derivation: `_writeContext.createChildObjectContext()`.
+- `testGetOutputContextAfterArrayStart`: Tests `getOutputContext()` after `writeStartArray()`. Expected: Array context. Derivation: `_writeContext.createChildArrayContext()`.
+- `testWriteStringAfterFieldName`: Tests writing a string after a field name. Expected: Valid JSON `"fieldName":"value"`. Derivation: `_verifyValueWrite()` allowing value after field name.
+- `testWriteStringInInvalidState`: Tests writing a string in an invalid state (e.g., after a value in an object without a field name). Expected: `JsonGenerationException`. Derivation: `_verifyValueWrite()` returning `STATUS_EXPECT_NAME`.
+- `testWriteFieldNameInInvalidState`: Tests writing a field name in an invalid state. Expected: `JsonGenerationException`. Derivation: `_writeContext.writeFieldName()` returning `STATUS_EXPECT_VALUE`.
+- `testCheckStdFeatureChangesWriteNumbersAsStrings`: Tests internal handling of `WRITE_NUMBERS_AS_STRINGS` feature. Expected: `_cfgNumbersAsStrings` flag changes correctly. Derivation: `_checkStdFeatureChanges()` logic.
+- `testCheckStdFeatureChangesStrictDuplicateDetection`: Tests internal handling of `STRICT_DUPLICATE_DETECTION` feature. Expected: `_writeContext.getDupDetector()` is set/unset correctly. Derivation: `_checkStdFeatureChanges()` logic.
+- `testCheckStdFeatureChangesEscapeNonAscii`: Tests internal handling of `ESCAPE_NON_ASCII` feature. Expected: `_maximumNonEscapedChar` is set/unset correctly. Derivation: `_checkStdFeatureChanges()` logic.
+- `testConstructDefaultPrettyPrinter`: Tests the factory method for default pretty printer. Expected: An instance of `DefaultPrettyPrinter`. Derivation: `_constructDefaultPrettyPrinter()` implementation.
+- `testAsStringBigDecimal`: Tests `_asString()` for `BigDecimal`. Expected: Correct string representation. Derivation: `BigDecimal.toPlainString()` or `toString()`.
+- `testAsStringBigDecimalWithScale`: Tests `_asString()` for `BigDecimal` with significant trailing zeros. Expected: String preserves trailing zeros. Derivation: `BigDecimal.toPlainString()`.
+- `testAsStringBigDecimalWithLargeScale`: Tests `_asString()` with a scale exceeding `MAX_BIG_DECIMAL_SCALE`. Expected: `JsonGenerationException`. Derivation: Scale check in `_asString()`.
+- `testDecodeSurrogateValidPair`: Tests `_decodeSurrogate()` with a valid surrogate pair. Expected: Correct code point. Derivation: Surrogate pair decoding logic.
+- `testDecodeSurrogateInvalidSecondHalf`: Tests `_decodeSurrogate()` with an invalid second surrogate. Expected: `JsonGenerationException`. Derivation: Validation of the second surrogate value.
+- `testWriteRawMultiByteChar`: Tests writing characters requiring multiple UTF-8 bytes via `writeRaw`. Input: String containing '€'. Expected: The character is written correctly. Derivation: `_outputRawMultiByteChar()` and `writeRaw()` logic.
+- `testWriteStringSegment2`: Tests the internal `_writeStringSegment2` method (via `writeString`). Input: "hello". Expected: `""hello""`. Derivation: Basic string writing path.
+- `testWriteStringSegmentASCII2`: Tests the internal `_writeStringSegmentASCII2` method (via `writeString` with `ESCAPE_NON_ASCII` enabled). Input: "hello\u00A9world". Expected: `""hello\u00A9world""`. Derivation: ASCII/non-ASCII character handling and escaping.
+
+## DEFECT DETECTION STRATEGY
+The tests aim to detect defects in the logic for handling JSON structural elements, primitive types, string escaping, binary encoding, and feature configurations. Specific focus is placed on boundary conditions for numbers and strings, as well as error handling in invalid states. The strategy relies on asserting exact output values and expected exceptions based on the reference source code.
+
+## SUMMARY
+30 tests have been written.
+
+## LIMITATIONS
+The tests rely on internal helper methods like `_writeRaw`, `_writeBytes`, `_writeStringSegment2`, etc., which are called by public API methods. The focus is on covering the observed public API and the internal logic directly invoked by those methods. More complex scenarios involving `ObjectCodec` and `TreeNode` serialization are not extensively tested as the prompt's scope is on the `GeneratorBase` and its direct implementations. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

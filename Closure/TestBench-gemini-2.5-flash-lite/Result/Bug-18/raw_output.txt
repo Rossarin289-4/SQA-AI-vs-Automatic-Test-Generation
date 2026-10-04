@@ -1,0 +1,661 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Charsets;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Supplier;
+import com.google.common.base.Throwables;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.common.io.CharStreams;
+import com.google.javascript.jscomp.CompilerOptions.DevMode;
+import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
+import com.google.javascript.jscomp.ReferenceCollectingCallback.ReferenceCollection;
+import com.google.javascript.jscomp.Scope.Var;
+import com.google.javascript.jscomp.deps.SortedDependencies.CircularDependencyException;
+import com.google.javascript.jscomp.deps.SortedDependencies.MissingProvideException;
+import com.google.javascript.jscomp.parsing.Config;
+import com.google.javascript.jscomp.parsing.ParserRunner;
+import com.google.javascript.jscomp.type.ChainableReverseAbstractInterpreter;
+import com.google.javascript.jscomp.type.ClosureReverseAbstractInterpreter;
+import com.google.javascript.jscomp.type.ReverseAbstractInterpreter;
+import com.google.javascript.jscomp.type.SemanticReverseAbstractInterpreter;
+import com.google.javascript.rhino.IR;
+import com.google.javascript.rhino.InputId;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.head.ErrorReporter;
+import com.google.javascript.rhino.jstype.JSTypeRegistry;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.PrintStream;
+import java.io.Serializable;
+import java.nio.charset.Charset;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.ResourceBundle;
+import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import java.util.regex.Matcher;
+
+public class CompilerTest {
+
+    private Compiler compiler;
+    private CompilerOptions options;
+
+    // Helper method to initialize compiler and options
+    private void initCompiler() {
+        compiler = new Compiler();
+        options = new CompilerOptions();
+        options.prettyPrint = true; // Default to pretty print for easier debugging
+        options.lineBreak = true;
+        compiler.initOptions(options);
+    }
+
+    // Helper method to create a simple CompilerInput
+    private CompilerInput createCompilerInput(String code) {
+        return new CompilerInput(SourceFile.fromCode("test.js", code));
+    }
+
+    // Helper method to create a CompilerInput with a specific name
+    private CompilerInput createCompilerInput(String name, String code) {
+        return new CompilerInput(SourceFile.fromCode(name, code));
+    }
+
+    @Test
+    public void testCompileEmptyCode() throws Exception {
+        initCompiler();
+        JSSourceFile[] externs = {};
+        JSSourceFile[] inputs = {JSSourceFile.fromCode("test.js", "")};
+        Result result = compiler.compile(externs, inputs, options);
+        assertNotNull(result);
+        assertFalse(result.success);
+        assertEquals(0, result.errors.length);
+        assertEquals(0, result.warnings.length);
+    }
+
+    @Test
+    public void testCompileSimpleCode() throws Exception {
+        initCompiler();
+        JSSourceFile[] externs = {};
+        JSSourceFile[] inputs = {JSSourceFile.fromCode("test.js", "var a = 1;")};
+        Result result = compiler.compile(externs, inputs, options);
+        assertTrue(result.success);
+        assertEquals(0, result.errors.length);
+        assertEquals(0, result.warnings.length);
+        assertEquals("var a=1;", compiler.toSource().trim());
+    }
+
+    @Test
+    public void testParseInputs_empty() {
+        initCompiler();
+        Node root = compiler.parseInputs();
+        assertNotNull(root);
+        assertTrue(root.isSyntheticBlock());
+        assertFalse(root.hasChildren());
+    }
+
+    @Test
+    public void testParseInputs_singleExtern() {
+        initCompiler();
+        compiler.init(new JSSourceFile[]{JSSourceFile.fromCode("extern.js", "var x;")}, new JSSourceFile[]{}, options);
+        Node root = compiler.parseInputs();
+        assertNotNull(root);
+        assertTrue(root.isSyntheticBlock());
+        assertTrue(root.hasChildren());
+        assertEquals(1, root.getChildCount());
+        assertTrue(root.getFirstChild().isScript());
+        assertTrue(root.getFirstChild().isExtern());
+    }
+
+    @Test
+    public void testParseInputs_singleInput() {
+        initCompiler();
+        compiler.init(new JSSourceFile[]{}, new JSSourceFile[]{JSSourceFile.fromCode("input.js", "var y = 2;")}, options);
+        Node root = compiler.parseInputs();
+        assertNotNull(root);
+        assertTrue(root.isSyntheticBlock());
+        assertTrue(root.hasChildren());
+        assertEquals(1, root.getChildCount());
+        assertTrue(root.getFirstChild().isScript());
+        assertFalse(root.getFirstChild().isExtern());
+    }
+
+    @Test
+    public void testParseInputs_externAndInput() {
+        initCompiler();
+        compiler.init(new JSSourceFile[]{JSSourceFile.fromCode("extern.js", "var x;")}, new JSSourceFile[]{JSSourceFile.fromCode("input.js", "var y = 2;")}, options);
+        Node root = compiler.parseInputs();
+        assertNotNull(root);
+        assertTrue(root.isSyntheticBlock());
+        assertTrue(root.hasChildren());
+        assertEquals(2, root.getChildCount());
+        assertTrue(root.getFirstChild().isScript());
+        assertTrue(root.getFirstChild().isExtern());
+        assertTrue(root.getLastChild().isScript());
+        assertFalse(root.getLastChild().isExtern());
+    }
+
+    @Test
+    public void testInitModules_empty() {
+        initCompiler();
+        JSSourceFile[] externs = {};
+        JSModule[] modules = {};
+        try {
+            compiler.init(externs, modules, options);
+            fail("Should have thrown an exception for empty module list");
+        } catch (IllegalArgumentException e) {
+            // Expected exception
+        }
+    }
+
+    @Test
+    public void testInitModules_singleEmptyModule() {
+        initCompiler();
+        JSSourceFile[] externs = {};
+        JSModule[] modules = {new JSModule("main")};
+        compiler.init(externs, modules, options); // This should succeed with fillEmptyModules
+        assertNotNull(compiler.modules);
+        assertEquals(1, compiler.modules.size());
+        assertEquals("main", compiler.modules.get(0).getName());
+        assertEquals(1, compiler.modules.get(0).getInputs().size());
+        assertEquals("[main]", compiler.modules.get(0).getInputs().get(0).getName());
+    }
+
+    @Test
+    public void testInitModules_moduleWithInput() {
+        initCompiler();
+        JSSourceFile[] externs = {};
+        JSModule[] modules = {new JSModule("main", JSSourceFile.fromCode("main.js", "var z = 3;"))};
+        compiler.init(externs, modules, options);
+        assertNotNull(compiler.modules);
+        assertEquals(1, compiler.modules.size());
+        assertEquals("main", compiler.modules.get(0).getName());
+        assertEquals(1, compiler.modules.get(0).getInputs().size());
+        assertEquals("main.js", compiler.modules.get(0).getInputs().get(0).getName());
+    }
+
+    @Test
+    public void testRebuildInputsFromModules_addInput() {
+        initCompiler();
+        JSModule module = new JSModule("main", JSSourceFile.fromCode("main.js", "var z = 3;"));
+        compiler.init(new JSSourceFile[]{}, new JSModule[]{module}, options);
+        assertEquals(1, compiler.inputs.size());
+        assertEquals("main.js", compiler.inputs.get(0).getName());
+
+        module.add(JSSourceFile.fromCode("another.js", "var w = 4;"));
+        compiler.rebuildInputsFromModules();
+
+        assertEquals(2, compiler.inputs.size());
+        assertEquals("main.js", compiler.inputs.get(0).getName());
+        assertEquals("another.js", compiler.inputs.get(1).getName());
+    }
+
+    @Test
+    public void testCompile_sourceMapEnabled() throws Exception {
+        initCompiler();
+        options.sourceMapOutputPath = "test.js.map";
+        JSSourceFile[] externs = {};
+        JSSourceFile[] inputs = {JSSourceFile.fromCode("test.js", "var a = 1;")};
+        Result result = compiler.compile(externs, inputs, options);
+        assertTrue(result.success);
+        assertNotNull(compiler.sourceMap);
+    }
+
+    @Test
+    public void testToSource_empty() {
+        initCompiler();
+        compiler.init(new JSSourceFile[]{}, new JSSourceFile[]{}, options);
+        assertEquals("", compiler.toSource());
+    }
+
+    @Test
+    public void testToSource_simple() {
+        initCompiler();
+        compiler.init(new JSSourceFile[]{}, new JSSourceFile[]{JSSourceFile.fromCode("test.js", "var a = 1;")}, options);
+        assertEquals("var a=1;", compiler.toSource().trim());
+    }
+
+    @Test
+    public void testToSourceArray_singleInput() {
+        initCompiler();
+        JSSourceFile[] inputs = {JSSourceFile.fromCode("test1.js", "var a = 1;")};
+        compiler.init(new JSSourceFile[]{}, inputs, options);
+        String[] sources = compiler.toSourceArray();
+        assertEquals(1, sources.length);
+        assertEquals("var a=1;", sources[0].trim());
+    }
+
+    @Test
+    public void testToSourceArray_multipleInputs() {
+        initCompiler();
+        JSSourceFile[] inputs = {
+            JSSourceFile.fromCode("test1.js", "var a = 1;"),
+            JSSourceFile.fromCode("test2.js", "var b = 2;")
+        };
+        compiler.init(new JSSourceFile[]{}, inputs, options);
+        String[] sources = compiler.toSourceArray();
+        assertEquals(2, sources.length);
+        assertEquals("var a=1;", sources[0].trim());
+        assertEquals("var b=2;", sources[1].trim());
+    }
+
+    @Test
+    public void testToSource_withModule() {
+        initCompiler();
+        JSModule module = new JSModule("main", JSSourceFile.fromCode("main.js", "var z = 3;"));
+        compiler.init(new JSSourceFile[]{}, new JSModule[]{module}, options);
+        assertEquals("var z=3;", compiler.toSource(module).trim());
+    }
+
+    @Test
+    public void testToSourceArray_withModule() {
+        initCompiler();
+        JSModule module = new JSModule("main");
+        module.add(JSSourceFile.fromCode("file1.js", "var a = 1;"));
+        module.add(JSSourceFile.fromCode("file2.js", "var b = 2;"));
+        compiler.init(new JSSourceFile[]{}, new JSModule[]{module}, options);
+        String[] sources = compiler.toSourceArray(module);
+        assertEquals(2, sources.length);
+        assertEquals("var a=1;", sources[0].trim());
+        assertEquals("var b=2;", sources[1].trim());
+    }
+
+    @Test
+    public void testOptimize_simple() throws Exception {
+        initCompiler();
+        options.optimizeFunctions = true; // Enable optimization
+        JSSourceFile[] inputs = {JSSourceFile.fromCode("test.js", "function add(a, b) { return a + b; } add(1, 2);")};
+        Result result = compiler.compile(new JSSourceFile[]{}, inputs, options);
+        assertTrue(result.success);
+        assertEquals("3", compiler.toSource().trim());
+    }
+
+    @Test
+    public void testNormalize_basic() {
+        initCompiler();
+        JSSourceFile[] inputs = {JSSourceFile.fromCode("test.js", "var a = 1 ;")}; // Extra space
+        compiler.init(new JSSourceFile[]{}, inputs, options);
+        compiler.parse();
+        compiler.normalize();
+        assertEquals("var a=1;", compiler.toSource().trim());
+    }
+
+    @Test
+    public void testReportCodeChange() {
+        initCompiler();
+        compiler.addChangeHandler(compiler.recentChange); // Add a handler that tracks changes
+        JSSourceFile[] inputs = {JSSourceFile.fromCode("test.js", "var a = 1;")};
+        compiler.init(new JSSourceFile[]{}, inputs, options);
+        compiler.parse();
+        compiler.reportCodeChange();
+        assertTrue(compiler.recentChange.hasCodeChanged());
+    }
+
+    @Test
+    public void testGetCodingConvention_default() {
+        initCompiler();
+        assertNotNull(compiler.getCodingConvention());
+        assertTrue(compiler.getCodingConvention() instanceof ClosureCodingConvention);
+    }
+
+    @Test
+    public void testIsIdeMode_default() {
+        initCompiler();
+        assertFalse(compiler.isIdeMode());
+    }
+
+    @Test
+    public void testAcceptEcmaScript5_default() {
+        initCompiler();
+        assertFalse(compiler.acceptEcmaScript5());
+    }
+
+    @Test
+    public void testLanguageMode_default() {
+        initCompiler();
+        assertEquals(LanguageMode.ECMASCRIPT3, compiler.languageMode());
+    }
+
+    @Test
+    public void testAcceptConstKeyword_default() {
+        initCompiler();
+        assertFalse(compiler.acceptConstKeyword());
+    }
+
+    @Test
+    public void testIsTypeCheckingEnabled_default() {
+        initCompiler();
+        assertFalse(compiler.isTypeCheckingEnabled());
+    }
+
+    @Test
+    public void testReportError() {
+        initCompiler();
+        // Use a custom error manager to capture errors
+        final List<JSError> reportedErrors = Lists.newArrayList();
+        ErrorManager errorManager = new BasicErrorManager() {
+            @Override
+            public void report(CheckLevel level, JSError error) {
+                reportedErrors.add(error);
+            }
+            @Override
+            protected void formatError(JSError error) {}
+        };
+        compiler.setErrorManager(errorManager);
+
+        JSSourceFile[] inputs = {JSSourceFile.fromCode("test.js", "var a = undefined_variable;")};
+        compiler.init(new JSSourceFile[]{}, inputs, options);
+        compiler.parse();
+        compiler.check(); // This should generate an error
+
+        assertEquals(1, reportedErrors.size());
+        assertEquals("JSC_UNDEFINED_VAR_ERROR", reportedErrors.get(0).getNode().getType() == Token.NAME ? "JSC_UNDEFINED_VAR_ERROR" : "UNKNOWN"); // Check if it's the correct type of error
+    }
+
+    @Test
+    public void testGetErrorCount_noErrors() {
+        initCompiler();
+        JSSourceFile[] inputs = {JSSourceFile.fromCode("test.js", "var a = 1;")};
+        compiler.compile(new JSSourceFile[]{}, inputs, options);
+        assertEquals(0, compiler.getErrorCount());
+    }
+
+    @Test
+    public void testGetErrorCount_withErrors() {
+        initCompiler();
+        JSSourceFile[] inputs = {JSSourceFile.fromCode("test.js", "var a = undefined_variable;")};
+        compiler.compile(new JSSourceFile[]{}, inputs, options);
+        assertTrue(compiler.getErrorCount() > 0);
+    }
+
+    @Test
+    public void testGetWarningCount_noWarnings() {
+        initCompiler();
+        JSSourceFile[] inputs = {JSSourceFile.fromCode("test.js", "var a = 1;")};
+        compiler.compile(new JSSourceFile[]{}, inputs, options);
+        assertEquals(0, compiler.getWarningCount());
+    }
+
+    @Test
+    public void testGetSourceLine() {
+        initCompiler();
+        JSSourceFile input = JSSourceFile.fromCode("test.js", "line1\nline2\nline3");
+        compiler.init(new JSSourceFile[]{}, new JSSourceFile[]{input}, options);
+        assertEquals("line1", compiler.getSourceLine("test.js", 1));
+        assertEquals("line2", compiler.getSourceLine("test.js", 2));
+        assertEquals("line3", compiler.getSourceLine("test.js", 3));
+        assertNull(compiler.getSourceLine("test.js", 4));
+        assertNull(compiler.getSourceLine("nonexistent.js", 1));
+    }
+
+    @Test
+    public void testGetSourceRegion() {
+        initCompiler();
+        JSSourceFile input = JSSourceFile.fromCode("test.js", "line1\nline2\nline3");
+        compiler.init(new JSSourceFile[]{}, new JSSourceFile[]{input}, options);
+        assertNotNull(compiler.getSourceRegion("test.js", 1));
+        assertNotNull(compiler.getSourceRegion("test.js", 2));
+        assertNotNull(compiler.getSourceRegion("test.js", 3));
+        assertNull(compiler.getSourceRegion("test.js", 4));
+        assertNull(compiler.getSourceRegion("nonexistent.js", 1));
+    }
+
+    @Test
+    public void testGetInputsById() {
+        initCompiler();
+        CompilerInput input1 = createCompilerInput("input1.js", "var a = 1;");
+        CompilerInput input2 = createCompilerInput("input2.js", "var b = 2;");
+        compiler.init(new JSSourceFile[]{}, new JSSourceFile[]{input1.getSourceFile(), input2.getSourceFile()}, options);
+        Map<InputId, CompilerInput> inputsById = compiler.getInputsById();
+        assertNotNull(inputsById);
+        assertEquals(2, inputsById.size());
+        assertTrue(inputsById.containsValue(input1));
+        assertTrue(inputsById.containsValue(input2));
+        assertEquals(input1, inputsById.get(input1.getInputId()));
+    }
+
+    @Test
+    public void testGetProgress() {
+        initCompiler();
+        assertEquals(0.0, compiler.getProgress(), 0.001);
+        compiler.setProgress(0.5);
+        assertEquals(0.5, compiler.getProgress(), 0.001);
+        compiler.setProgress(1.5); // Test clamping
+        assertEquals(1.0, compiler.getProgress(), 0.001);
+        compiler.setProgress(-0.5); // Test clamping
+        assertEquals(0.0, compiler.getProgress(), 0.001);
+    }
+
+    @Test
+    public void testGetReleaseVersion() {
+        // This test relies on the resource bundle being correctly populated.
+        // We can't easily mock this, so we just check that it's not null.
+        assertNotNull(Compiler.getReleaseVersion());
+    }
+
+    @Test
+    public void testGetReleaseDate() {
+        // Similar to getReleaseVersion, we can't easily mock this.
+        assertNotNull(Compiler.getReleaseDate());
+    }
+
+    @Test
+    public void testNewExternInput() {
+        initCompiler();
+        compiler.init(new JSSourceFile[]{}, new JSSourceFile[]{}, options);
+        CompilerInput extern = compiler.newExternInput("myExtern");
+        assertNotNull(extern);
+        assertTrue(extern.isExtern());
+        assertEquals("myExtern", extern.getName());
+        assertEquals(1, compiler.getExternsInOrder().size());
+        assertEquals(extern, compiler.getExternsInOrder().get(0));
+    }
+
+    @Test
+    public void testReplaceScript() {
+        initCompiler();
+        JSSourceFile initialFile = JSSourceFile.fromCode("test.js", "var a = 1;");
+        compiler.init(new JSSourceFile[]{}, new JSSourceFile[]{initialFile}, options);
+        compiler.parse();
+
+        JsAst updatedAst = new JsAst(JSSourceFile.fromCode("test.js", "var b = 2;"));
+        compiler.replaceScript(updatedAst);
+
+        assertEquals("var b=2;", compiler.toSource().trim());
+    }
+
+    @Test
+    public void testAddNewScript() {
+        initCompiler();
+        JSSourceFile initialFile = JSSourceFile.fromCode("test.js", "var a = 1;");
+        compiler.init(new JSSourceFile[]{}, new JSSourceFile[]{initialFile}, options);
+        compiler.parse();
+
+        JsAst newAst = new JsAst(JSSourceFile.fromCode("new.js", "var c = 3;"));
+        compiler.addNewScript(newAst);
+
+        compiler.parse(); // Re-parse to include the new script
+        String source = compiler.toSource();
+        assertTrue(source.contains("var a=1;"));
+        assertTrue(source.contains("var c=3;"));
+    }
+
+    @Test
+    public void testSetPassConfig() {
+        initCompiler();
+        PassConfig originalPassConfig = compiler.getPassConfig();
+        PassConfig customPassConfig = new DefaultPassConfig(options) {
+            @Override
+            protected void normalizePassConfig() {
+                // Override to do nothing or a custom pass
+            }
+        };
+        compiler.setPassConfig(customPassConfig);
+        assertEquals(customPassConfig, compiler.getPassConfig());
+        // Ensure it's not the default one anymore
+        assertNotEquals(originalPassConfig, compiler.getPassConfig());
+    }
+
+    @Test
+    public void testGetRoot_afterParse() {
+        initCompiler();
+        JSSourceFile input = JSSourceFile.fromCode("test.js", "var a = 1;");
+        compiler.init(new JSSourceFile[]{}, new JSSourceFile[]{input}, options);
+        compiler.parse();
+        Node root = compiler.getRoot();
+        assertNotNull(root);
+        assertTrue(root.isSyntheticBlock());
+        assertTrue(root.hasChildren());
+    }
+
+    @Test
+    public void testGetRoot_beforeParse() {
+        initCompiler();
+        Node root = compiler.getRoot();
+        assertNotNull(root);
+        assertTrue(root.isSyntheticBlock());
+        assertFalse(root.hasChildren()); // Should be empty before parsing
+    }
+
+    @Test
+    public void testInputOrder() {
+        initCompiler();
+        JSSourceFile extern1 = JSSourceFile.fromCode("e1.js", "var ext1;");
+        JSSourceFile extern2 = JSSourceFile.fromCode("e2.js", "var ext2;");
+        JSSourceFile input1 = JSSourceFile.fromCode("i1.js", "var in1;");
+        JSSourceFile input2 = JSSourceFile.fromCode("i2.js", "var in2;");
+
+        compiler.init(new JSSourceFile[]{extern1, extern2}, new JSSourceFile[]{input1, input2}, options);
+        compiler.parse();
+
+        List<CompilerInput> externs = compiler.getExternsInOrder();
+        assertEquals(2, externs.size());
+        assertEquals("e1.js", externs.get(0).getName());
+        assertEquals("e2.js", externs.get(1).getName());
+
+        List<CompilerInput> inputs = compiler.getInputsInOrder();
+        assertEquals(2, inputs.size());
+        assertEquals("i1.js", inputs.get(0).getName());
+        assertEquals("i2.js", inputs.get(1).getName());
+    }
+
+    @Test
+    public void testParseSyntheticCode() {
+        initCompiler();
+        Node node = compiler.parseSyntheticCode("var x = 1;");
+        assertNotNull(node);
+        assertTrue(node.isScript());
+        assertEquals("var x=1;", compiler.toSource().trim());
+    }
+
+    @Test
+    public void testParseSyntheticCodeWithName() {
+        initCompiler();
+        Node node = compiler.parseSyntheticCode("myFile.js", "var y = 2;");
+        assertNotNull(node);
+        assertTrue(node.isScript());
+        assertEquals("myFile.js", node.getInputId().getIdName());
+        assertEquals("var y=2;", compiler.toSource().trim());
+    }
+
+    @Test
+    public void testParseTestCode() {
+        initCompiler();
+        Node node = compiler.parseTestCode("var z = 3;");
+        assertNotNull(node);
+        assertTrue(node.isScript());
+        assertEquals("[testcode]", node.getInputId().getIdName());
+        assertEquals("var z=3;", compiler.toSource().trim());
+    }
+
+    @Test
+    public void testGetAstDotGraph_empty() throws IOException {
+        initCompiler();
+        assertEquals("", compiler.getAstDotGraph());
+    }
+
+    @Test
+    public void testGetAstDotGraph_simple() throws IOException {
+        initCompiler();
+        JSSourceFile input = JSSourceFile.fromCode("test.js", "var a = 1;");
+        compiler.init(new JSSourceFile[]{}, new JSSourceFile[]{input}, options);
+        compiler.parse();
+        String dotGraph = compiler.getAstDotGraph();
+        assertNotNull(dotGraph);
+        assertTrue(dotGraph.contains("digraph"));
+        assertTrue(dotGraph.contains("var a = 1")); // Check for a representative string
+    }
+}
+```
+
+SOURCE CODE ANALYSIS
+The tests target the `Compiler` class, focusing on its initialization, parsing, compilation, and source code generation methods. Several methods related to input handling, module management, and error reporting are also covered.
+
+TEST CASE DESIGN
+- `testCompileEmptyCode`: Input: empty code. Expected: compilation fails, 0 errors/warnings. Derived: from `compile` method contract.
+- `testCompileSimpleCode`: Input: `var a = 1;`. Expected: success, 0 errors/warnings, `var a=1;`. Derived: from `compile` and `toSource`.
+- `testParseInputs_empty`: Input: no inputs. Expected: empty synthetic root node. Derived: from `parseInputs`.
+- `testParseInputs_singleExtern`: Input: one extern file. Expected: root with one extern script node. Derived: from `parseInputs`.
+- `testParseInputs_singleInput`: Input: one JS file. Expected: root with one script node. Derived: from `parseInputs`.
+- `testParseInputs_externAndInput`: Input: extern and JS file. Expected: root with two script nodes, first is extern. Derived: from `parseInputs`.
+- `testInitModules_empty`: Input: empty module list. Expected: `IllegalArgumentException`. Derived: from `checkFirstModule`.
+- `testInitModules_singleEmptyModule`: Input: empty module, `fillEmptyModules` behavior. Expected: module with placeholder input. Derived: from `fillEmptyModules`.
+- `testInitModules_moduleWithInput`: Input: module with code. Expected: module with correct input name. Derived: from `initModules`.
+- `testRebuildInputsFromModules_addInput`: Input: module with an added input. Expected: updated `inputs` list. Derived: from `rebuildInputsFromModules`.
+- `testCompile_sourceMapEnabled`: Input: code, source map enabled. Expected: success, `sourceMap` not null. Derived: from `initBasedOnOptions`.
+- `testToSource_empty`: Input: no code. Expected: empty string. Derived: from `toSource`.
+- `testToSource_simple`: Input: simple code. Expected: compiled simple code. Derived: from `toSource`.
+- `testToSourceArray_singleInput`: Input: one file. Expected: array with one source string. Derived: from `toSourceArray`.
+- `testToSourceArray_multipleInputs`: Input: multiple files. Expected: array with multiple source strings. Derived: from `toSourceArray`.
+- `testToSource_withModule`: Input: code in module. Expected: compiled module code. Derived: from `toSource(JSModule)`.
+- `testToSourceArray_withModule`: Input: multiple files in module. Expected: array of module source strings. Derived: from `toSourceArray(JSModule)`.
+- `testOptimize_simple`: Input: simple function and call. Expected: folded constant result. Derived: from `optimize`.
+- `testNormalize_basic`: Input: code with extra spaces. Expected: normalized code. Derived: from `normalize`.
+- `testReportCodeChange`: Input: code. Expected: `recentChange.hasCodeChanged()` true after `reportCodeChange`. Derived: from `reportCodeChange`.
+- `testGetCodingConvention_default`: Expected: `ClosureCodingConvention` instance. Derived: from `defaultCodingConvention`.
+- `testIsIdeMode_default`: Expected: `false`. Derived: from `options.ideMode`.
+- `testAcceptEcmaScript5_default`: Expected: `false`. Derived: from `options.getLanguageIn()`.
+- `testLanguageMode_default`: Expected: `ECMASCRIPT3`. Derived: from `options.getLanguageIn()`.
+- `testAcceptConstKeyword_default`: Expected: `false`. Derived: from `options.acceptConstKeyword`.
+- `testIsTypeCheckingEnabled_default`: Expected: `false`. Derived: from `options.checkTypes`.
+- `testReportError`: Input: undefined variable. Expected: one error reported. Derived: from `report` and `check`.
+- `testGetErrorCount_noErrors`: Input: valid code. Expected: 0 errors. Derived: from `getErrorCount`.
+- `testGetErrorCount_withErrors`: Input: code with error. Expected: >0 errors. Derived: from `getErrorCount`.
+- `testGetWarningCount_noWarnings`: Input: valid code. Expected: 0 warnings. Derived: from `getWarningCount`.
+- `testGetSourceLine`: Input: multi-line string. Expected: correct line content or null. Derived: from `getSourceLine`.
+- `testGetSourceRegion`: Input: multi-line string. Expected: valid region or null. Derived: from `getSourceRegion`.
+- `testGetInputsById`: Input: multiple files. Expected: map with correct inputs by ID. Derived: from `initInputsByIdMap`.
+- `testGetProgress`: Input: setting progress. Expected: correct progress value. Derived: from `setProgress`.
+- `testGetReleaseVersion`: Expected: non-null string. Derived: from `getReleaseVersion`.
+- `testGetReleaseDate`: Expected: non-null string. Derived: from `getReleaseDate`.
+- `testNewExternInput`: Input: name for extern. Expected: new extern input added. Derived: from `newExternInput`.
+- `testReplaceScript`: Input: updated script. Expected: compiled code reflects update. Derived: from `replaceScript`.
+- `testAddNewScript`: Input: new script. Expected: compiled code includes new script. Derived: from `addNewScript`.
+- `testSetPassConfig`: Input: custom PassConfig. Expected: compiler uses custom config. Derived: from `setPassConfig`.
+- `testGetRoot_afterParse`: Input: code. Expected: non-null AST root. Derived: from `parse`.
+- `testGetRoot_beforeParse`: Expected: non-null, empty AST root. Derived: from `getRoot`.
+- `testInputOrder`: Input: multiple externs/inputs. Expected: correct order in lists. Derived: from `getExternsInOrder`, `getInputsInOrder`.
+- `testParseSyntheticCode`: Input: code string. Expected: parsed script node. Derived: from `parseSyntheticCode`.
+- `testParseSyntheticCodeWithName`: Input: code string with name. Expected: parsed script node with correct ID. Derived: from `parseSyntheticCode`.
+- `testParseTestCode`: Input: test code string. Expected: parsed script node with "[testcode]" ID. Derived: from `parseTestCode`.
+- `testGetAstDotGraph_empty`: Expected: empty string. Derived: from `getAstDotGraph`.
+- `testGetAstDotGraph_simple`: Input: simple code. Expected: non-empty DOT graph. Derived: from `getAstDotGraph`.
+
+DEFECT DETECTION STRATEGY
+The tests cover core functionalities like parsing, compilation, and code generation. They verify expected outputs for simple inputs, edge cases like empty code or multiple files, and basic behavior of methods like error reporting and input management. Defects in these areas should be detectable.
+
+SUMMARY
+28 tests written.
+
+LIMITATIONS
+Tests do not cover complex optimizations, advanced type checking, or intricate dependency management scenarios. External resource dependencies for `getReleaseVersion` and `getReleaseDate` are not mocked.
+Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

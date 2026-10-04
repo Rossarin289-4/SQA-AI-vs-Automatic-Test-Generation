@@ -1,0 +1,209 @@
+```java
+package org.apache.commons.csv;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.io.Reader;
+import java.io.Serializable;
+import java.io.StringWriter;
+import java.nio.charset.Charset;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.sql.ResultSet;
+import java.sql.ResultSetMetaData;
+import java.sql.SQLException;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Set;
+
+public class CSVFormatTest {
+    @Test
+    public void testNewFormatAndDelimiterEdges() throws Exception {
+        assertEquals(';', CSVFormat.newFormat(';').getDelimiter());
+        try {
+            CSVFormat.newFormat('\n');
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) { }
+        try {
+            CSVFormat.newFormat('\r');
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) { }
+    }
+
+    @Test
+    public void testValueOfPredefinedNames() throws Exception {
+        assertSame(CSVFormat.DEFAULT, CSVFormat.valueOf("Default"));
+        assertSame(CSVFormat.EXCEL, CSVFormat.valueOf("Excel"));
+    }
+
+    @Test
+    public void testEqualityAndHashCodeTrackFields() throws Exception {
+        CSVFormat first = CSVFormat.DEFAULT.withDelimiter(';').withHeader("a", "b");
+        CSVFormat equivalent = CSVFormat.DEFAULT.withDelimiter(';').withHeader("a", "b");
+        CSVFormat changed = CSVFormat.DEFAULT.withDelimiter('|').withHeader("a", "b");
+        assertEquals(first, equivalent);
+        assertEquals(first.hashCode(), equivalent.hashCode());
+        assertFalse(first.equals(changed));
+        assertFalse(first.equals(null));
+    }
+
+    @Test
+    public void testFormatQuotesDelimiterAndDoublesQuote() throws Exception {
+        assertEquals("\"a,b\",\"say \"\"hi\"\"\"", CSVFormat.DEFAULT.format("a,b", "say \"hi\""));
+    }
+
+    @Test
+    public void testFormatNullStringAndTrim() throws Exception {
+        assertEquals("N/A,x", CSVFormat.DEFAULT.withNullString("N/A").format(null, "x"));
+        assertEquals("x", CSVFormat.DEFAULT.withTrim().format("  x  "));
+    }
+
+    @Test
+    public void testFormatQuotesEmptyFirstValue() throws Exception {
+        assertEquals("\"\",x", CSVFormat.DEFAULT.format("", "x"));
+    }
+
+    @Test
+    public void testDefaultConfigurationGetters() throws Exception {
+        assertEquals(',', CSVFormat.DEFAULT.getDelimiter());
+        assertEquals('"', CSVFormat.DEFAULT.getQuoteCharacter().charValue());
+        assertEquals("\r\n", CSVFormat.DEFAULT.getRecordSeparator());
+        assertTrue(CSVFormat.DEFAULT.getIgnoreEmptyLines());
+    }
+
+    @Test
+    public void testWithMethodsCopyAndSetOptions() throws Exception {
+        CSVFormat configured = CSVFormat.DEFAULT.withAllowMissingColumnNames()
+                .withCommentMarker('#').withEscape('\\').withIgnoreHeaderCase()
+                .withSkipHeaderRecord().withTrailingDelimiter().withTrim().withAutoFlush(true);
+        assertTrue(configured.getAllowMissingColumnNames());
+        assertEquals(Character.valueOf('#'), configured.getCommentMarker());
+        assertEquals(Character.valueOf('\\'), configured.getEscapeCharacter());
+        assertTrue(configured.getIgnoreHeaderCase());
+        assertTrue(configured.getSkipHeaderRecord());
+        assertTrue(configured.getTrailingDelimiter());
+        assertTrue(configured.getTrim());
+        assertTrue(configured.getAutoFlush());
+        assertFalse(CSVFormat.DEFAULT.getAutoFlush());
+    }
+
+    @Test
+    public void testHeaderAndHeaderCommentsAreDefensivelyCopied() throws Exception {
+        String[] names = new String[] {"left", "right"};
+        CSVFormat format = CSVFormat.DEFAULT.withHeader(names).withHeaderComments("generated", 7);
+        names[0] = "changed";
+        assertArrayEquals(new String[] {"left", "right"}, format.getHeader());
+        String[] retrieved = format.getHeader();
+        retrieved[1] = "changed";
+        assertArrayEquals(new String[] {"left", "right"}, format.getHeader());
+        assertArrayEquals(new String[] {"generated", "7"}, format.getHeaderComments());
+    }
+
+    @Test
+    public void testHeaderDuplicateValidation() throws Exception {
+        try {
+            CSVFormat.DEFAULT.withHeader("same", "same");
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) { }
+        assertArrayEquals(new String[] {"same", "other"}, CSVFormat.DEFAULT.withHeader("same", "other").getHeader());
+    }
+
+    @Test
+    public void testWithFirstRecordAsHeader() throws Exception {
+        CSVFormat format = CSVFormat.DEFAULT.withFirstRecordAsHeader();
+        assertArrayEquals(new String[0], format.getHeader());
+        assertTrue(format.getSkipHeaderRecord());
+    }
+
+    @Test
+    public void testQuoteAndEscapeSettersRejectLineBreaks() throws Exception {
+        try {
+            CSVFormat.DEFAULT.withQuote('\n');
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) { }
+        try {
+            CSVFormat.DEFAULT.withEscape('\r');
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) { }
+        try {
+            CSVFormat.DEFAULT.withCommentMarker('\n');
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) { }
+    }
+
+    @Test
+    public void testWithTrailingDelimiterAndRecordSeparator() throws Exception {
+        StringBuilder out = new StringBuilder();
+        CSVFormat.DEFAULT.withTrailingDelimiter().withRecordSeparator("|").printRecord(out, "a", "b");
+        assertEquals("a,b,|", out.toString());
+        StringBuilder line = new StringBuilder();
+        CSVFormat.DEFAULT.withTrailingDelimiter().println(line);
+        assertEquals(",\r\n", line.toString());
+    }
+
+    @Test
+    public void testPrintRecordEscapesSpecialCharacters() throws Exception {
+        StringBuilder out = new StringBuilder();
+        CSVFormat.newFormat(',').withEscape('\\').printRecord(out, "a,b", "x\ny");
+        assertEquals("a\\,b,x\\ny", out.toString());
+    }
+
+    @Test
+    public void testPrintUsesConfiguredQuoteMode() throws Exception {
+        StringBuilder out = new StringBuilder();
+        CSVFormat.DEFAULT.withQuoteMode(QuoteMode.ALL).printRecord(out, "a", "b");
+        assertEquals("\"a\",\"b\"\r\n", out.toString());
+    }
+
+    @Test
+    public void testToStringIncludesConfiguredOptions() throws Exception {
+        String text = CSVFormat.DEFAULT.withCommentMarker('#').withHeader("name").toString();
+        assertTrue(text.contains("CommentStart=<#>"));
+        assertTrue(text.contains("Header:[name]"));
+        assertTrue(text.contains("Delimiter=<,>"));
+    }
+
+    @Test
+    public void testFormatNoValuesIsEmpty() throws Exception {
+        assertEquals("", CSVFormat.DEFAULT.format());
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+Method selection is exploratory because no target method was specified.  
+Tests focus on format creation/validation, immutable option builders, equality, formatting and printing branches.
+
+### 2. TEST CASE DESIGN
+- `testNewFormatAndDelimiterEdges`: semicolon accepted; LF and CR rejected by delimiter validation.
+- `testValueOfPredefinedNames`: predefined enum names resolve to their declared format constants.
+- `testEqualityAndHashCodeTrackFields`: equivalent fields compare equal with matching hash; changed delimiter and null differ.
+- `testFormatQuotesDelimiterAndDoublesQuote`: comma-containing and embedded-quote strings are quoted and quote characters doubled.
+- `testFormatNullStringAndTrim`: null uses configured substitution; trim removes surrounding blanks.
+- `testFormatQuotesEmptyFirstValue`: minimal quote mode encloses an empty first token.
+- `testDefaultConfigurationGetters`: values follow the DEFAULT constant declaration.
+- `testWithMethodsCopyAndSetOptions`: configured builder results expose each requested option; DEFAULT remains unchanged.
+- `testHeaderAndHeaderCommentsAreDefensivelyCopied`: header array copies and object comments are converted to strings.
+- `testHeaderDuplicateValidation`: repeated names are rejected; distinct names remain present.
+- `testWithFirstRecordAsHeader`: empty header represents automatic reading and header skipping is enabled.
+- `testQuoteAndEscapeSettersRejectLineBreaks`: line breaks rejected by quote, escape, and comment-marker setters.
+- `testWithTrailingDelimiterAndRecordSeparator`: output includes configured trailing delimiter and separators.
+- `testPrintRecordEscapesSpecialCharacters`: escape-enabled printing prefixes delimiters and encodes LF.
+- `testPrintUsesConfiguredQuoteMode`: ALL mode quotes each output value and appends DEFAULT record separator.
+- `testToStringIncludesConfiguredOptions`: textual representation includes configured delimiter, comment and header.
+- `testFormatNoValuesIsEmpty`: a zero-value record leaves `format()` output empty after trimming.
+
+### 4. DEFECT DETECTION STRATEGY
+The assertions pin observable outputs, option state, validation behavior, equality, and escaping/quoting boundaries.  
+No defect-detection result is claimed without running the suite against both versions.
+
+### 5. SUMMARY
+17 tests.
+
+### 6. LIMITATIONS
+Method selection is exploratory; the supplied outline does not reveal implementations of related parser/printer classes.  
+Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

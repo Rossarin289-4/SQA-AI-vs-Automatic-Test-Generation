@@ -1,0 +1,229 @@
+```java
+package com.fasterxml.jackson.core.json;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.io.*;
+import java.util.Arrays;
+import com.fasterxml.jackson.core.*;
+import com.fasterxml.jackson.core.base.ParserBase;
+import com.fasterxml.jackson.core.io.CharTypes;
+import com.fasterxml.jackson.core.io.IOContext;
+import com.fasterxml.jackson.core.sym.*;
+import com.fasterxml.jackson.core.util.*;
+
+public class UTF8StreamJsonParserTest {
+    @Test
+    public void testGrowArrayByExtendsArray() throws Exception {
+        int[] original = { 1, 2 };
+        assertArrayEquals(new int[] { 1, 2, 0, 0 },
+                UTF8StreamJsonParser.growArrayBy(original, 2));
+    }
+
+    @Test
+    public void testGrowArrayByNullArray() throws Exception {
+        assertArrayEquals(new int[3],
+                UTF8StreamJsonParser.growArrayBy(null, 3));
+    }
+
+    @Test
+    public void testCodecRoundTrip() throws Exception {
+        UTF8StreamJsonParser parser = parser("null");
+        assertNull(parser.getCodec());
+        parser.setCodec(null);
+        assertNull(parser.getCodec());
+    }
+
+    @Test
+    public void testInputSourceIsSuppliedStream() throws Exception {
+        InputStream input = new ByteArrayInputStream("null".getBytes("UTF-8"));
+        UTF8StreamJsonParser parser = parser(input, "null");
+        assertSame(input, parser.getInputSource());
+    }
+
+    @Test
+    public void testReleaseBufferedReturnsRemainingBytes() throws Exception {
+        UTF8StreamJsonParser parser = parser("true");
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        assertEquals(4, parser.releaseBuffered(out));
+        assertArrayEquals("true".getBytes("UTF-8"), out.toByteArray());
+    }
+
+    @Test
+    public void testReleaseBufferedEmptyAfterReading() throws Exception {
+        UTF8StreamJsonParser parser = parser("null");
+        parser.nextToken();
+        assertEquals(0, parser.releaseBuffered(new ByteArrayOutputStream()));
+    }
+
+    @Test
+    public void testTokenAndTextAccessorsForString() throws Exception {
+        UTF8StreamJsonParser parser = parser("\"abc\"");
+        assertNull(parser.getText());
+        assertEquals(JsonToken.VALUE_STRING, parser.nextToken());
+        assertEquals("abc", parser.getText());
+        assertEquals("abc", parser.getValueAsString());
+        assertEquals(3, parser.getTextLength());
+        assertEquals(0, parser.getTextOffset());
+        assertArrayEquals(new char[] { 'a', 'b', 'c' },
+                Arrays.copyOf(parser.getTextCharacters(), 3));
+    }
+
+    @Test
+    public void testTextAccessorsForInteger() throws Exception {
+        UTF8StreamJsonParser parser = parser("2147483647");
+        assertEquals(JsonToken.VALUE_NUMBER_INT, parser.nextToken());
+        assertEquals("2147483647", parser.getText());
+        assertEquals(10, parser.getTextLength());
+        assertEquals(0, parser.getTextOffset());
+    }
+
+    @Test
+    public void testTextAccessorsForBooleanToken() throws Exception {
+        UTF8StreamJsonParser parser = parser("true");
+        assertEquals(JsonToken.VALUE_TRUE, parser.nextToken());
+        assertEquals("true", parser.getText());
+        assertEquals(4, parser.getTextLength());
+        assertArrayEquals(new char[] { 't', 'r', 'u', 'e' },
+                parser.getTextCharacters());
+    }
+
+    @Test
+    public void testNextTokenTraversesArray() throws Exception {
+        UTF8StreamJsonParser parser = parser("[1]");
+        assertEquals(JsonToken.START_ARRAY, parser.nextToken());
+        assertEquals(JsonToken.VALUE_NUMBER_INT, parser.nextToken());
+        assertEquals("1", parser.getText());
+        assertEquals(JsonToken.END_ARRAY, parser.nextToken());
+        assertNull(parser.nextToken());
+    }
+
+    @Test
+    public void testNextFieldNameMatchesAndReadsValue() throws Exception {
+        UTF8StreamJsonParser parser = parser("{\"a\":1}");
+        assertEquals(JsonToken.START_OBJECT, parser.nextToken());
+        assertTrue(parser.nextFieldName(new SerializedString("a")));
+        assertEquals("a", parser.getCurrentName());
+        assertEquals(JsonToken.VALUE_NUMBER_INT, parser.nextToken());
+        assertEquals("1", parser.getText());
+    }
+
+    @Test
+    public void testNextFieldNameNonmatchStillReadsField() throws Exception {
+        UTF8StreamJsonParser parser = parser("{\"a\":1}");
+        parser.nextToken();
+        assertFalse(parser.nextFieldName(new SerializedString("b")));
+        assertEquals("a", parser.getCurrentName());
+        assertEquals(JsonToken.VALUE_NUMBER_INT, parser.nextToken());
+    }
+
+    @Test
+    public void testNextTextValueAfterFieldName() throws Exception {
+        UTF8StreamJsonParser parser = parser("{\"a\":\"x\"}");
+        parser.nextToken();
+        assertTrue(parser.nextFieldName(new SerializedString("a")));
+        assertEquals("x", parser.nextTextValue());
+        assertEquals(JsonToken.END_OBJECT, parser.nextToken());
+    }
+
+    @Test
+    public void testNextIntValueAndDefault() throws Exception {
+        UTF8StreamJsonParser parser = parser("{\"n\":2147483647,\"s\":\"x\"}");
+        parser.nextToken();
+        parser.nextToken();
+        assertEquals(Integer.MAX_VALUE, parser.nextIntValue(-1));
+        parser.nextToken();
+        parser.nextToken();
+        assertEquals(-1, parser.nextIntValue(-1));
+    }
+
+    @Test
+    public void testNextLongValueAtLongMaximum() throws Exception {
+        UTF8StreamJsonParser parser = parser("{\"n\":9223372036854775807}");
+        parser.nextToken();
+        parser.nextToken();
+        assertEquals(Long.MAX_VALUE, parser.nextLongValue(-1L));
+    }
+
+    @Test
+    public void testNextBooleanValueTrueAndFalse() throws Exception {
+        UTF8StreamJsonParser parser = parser("[true,false]");
+        parser.nextToken();
+        assertEquals(Boolean.TRUE, parser.nextBooleanValue());
+        assertEquals(Boolean.FALSE, parser.nextBooleanValue());
+    }
+
+    @Test
+    public void testTokenAndCurrentLocations() throws Exception {
+        UTF8StreamJsonParser parser = parser("1");
+        assertEquals(JsonToken.VALUE_NUMBER_INT, parser.nextToken());
+        JsonLocation tokenLocation = parser.getTokenLocation();
+        assertEquals(0L, tokenLocation.getByteOffset());
+        JsonLocation currentLocation = parser.getCurrentLocation();
+        assertEquals(1L, currentLocation.getByteOffset());
+    }
+
+    @Test
+    public void testBase64ValueDecoding() throws Exception {
+        UTF8StreamJsonParser parser = parser("\"AQI=\"");
+        parser.nextToken();
+        assertArrayEquals(new byte[] { 1, 2 },
+                parser.getBinaryValue(Base64Variants.getDefaultVariant()));
+    }
+
+    @Test
+    public void testReadBinaryValueWritesDecodedBytes() throws Exception {
+        UTF8StreamJsonParser parser = parser("\"AQI=\"");
+        parser.nextToken();
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        assertEquals(2, parser.readBinaryValue(
+                Base64Variants.getDefaultVariant(), out));
+        assertArrayEquals(new byte[] { 1, 2 }, out.toByteArray());
+    }
+
+    private UTF8StreamJsonParser parser(String json) throws Exception {
+        return parser(new ByteArrayInputStream(json.getBytes("UTF-8")), json);
+    }
+
+    private UTF8StreamJsonParser parser(InputStream input, String json) {
+        byte[] bytes = json.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        IOContext context = new IOContext(null, input, false);
+        BytesToNameCanonicalizer symbols = BytesToNameCanonicalizer.createRoot();
+        return new UTF8StreamJsonParser(context, 0, input, null, symbols,
+                bytes, 0, bytes.length, false);
+    }
+}
+```
+
+1. SOURCE CODE ANALYSIS  
+The target was unspecified, so method selection is exploratory. Tests exercise traversal, token/text access, optimized field and value access, binary decoding, locations, buffer release, codec/source access, and array growth.
+
+2. TEST CASE DESIGN  
+`testGrowArrayByExtendsArray`: length 2 plus 2; verifies copied values and zero-filled extension.  
+`testGrowArrayByNullArray`: null plus length 3; verifies a zero-filled array.  
+`testCodecRoundTrip`: null codec; setter and getter preserve null.  
+`testInputSourceIsSuppliedStream`: parser built with an input stream; source getter returns that reference.  
+`testReleaseBufferedReturnsRemainingBytes`: four buffered bytes; returns and writes all four.  
+`testReleaseBufferedEmptyAfterReading`: token consumes the input; release count is zero.  
+`testTokenAndTextAccessorsForString`: `"abc"`; string content, length, offset, and characters follow the token text buffer.  
+`testTextAccessorsForInteger`: `2147483647`; integer text is preserved with length 10 and offset zero.  
+`testTextAccessorsForBooleanToken`: `true`; token text and four character values match the token spelling.  
+`testNextTokenTraversesArray`: `[1]`; asserts start, integer, end, then end-of-input tokens.  
+`testNextFieldNameMatchesAndReadsValue`: field `"a"`; matching returns true and the value is integer `1`.  
+`testNextFieldNameNonmatchStillReadsField`: field `"a"` compared with `"b"`; returns false but records the actual name and value token.  
+`testNextTextValueAfterFieldName`: field `"a"` with string `"x"`; optimized call returns the string and advances the token.  
+`testNextIntValueAndDefault`: maximum int then a string field; returns `Integer.MAX_VALUE`, then the supplied default.  
+`testNextLongValueAtLongMaximum`: maximum long text; value accessor returns `Long.MAX_VALUE`.  
+`testNextBooleanValueTrueAndFalse`: array `[true,false]`; successive calls return the corresponding Boolean values.  
+`testTokenAndCurrentLocations`: single-byte `1`; token starts at byte offset 0 and current position is byte offset 1.  
+`testBase64ValueDecoding`: `"AQI="`; default Base64 decoding yields bytes 1 and 2.  
+`testReadBinaryValueWritesDecodedBytes`: `"AQI="`; returns 2 and writes the same decoded bytes.
+
+4. DEFECT DETECTION STRATEGY  
+The tests pin representative results across parser traversal, accessors, byte handling, and utility behavior. Fault detection is not inferred from these tests alone.
+
+5. SUMMARY  
+18 independent test methods.
+
+6. LIMITATIONS  
+The target method and defect description were not supplied, so method selection is exploratory; no faulty implementation was available for comparison. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

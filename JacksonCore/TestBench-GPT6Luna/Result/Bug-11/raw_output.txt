@@ -1,0 +1,232 @@
+```java
+package com.fasterxml.jackson.core.sym;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.util.Arrays;
+import java.util.concurrent.atomic.AtomicReference;
+import com.fasterxml.jackson.core.JsonFactory;
+import com.fasterxml.jackson.core.util.InternCache;
+
+public class ByteQuadsCanonicalizerTest {
+    @Test
+    public void testRootStartsEmpty() throws Exception {
+        ByteQuadsCanonicalizer root = ByteQuadsCanonicalizer.createRoot();
+        assertEquals(0, root.size());
+        assertEquals(64, root.bucketCount());
+    }
+
+    @Test
+    public void testRootInitiallyNotDirty() throws Exception {
+        ByteQuadsCanonicalizer root = ByteQuadsCanonicalizer.createRoot();
+        assertFalse(root.maybeDirty());
+    }
+
+    @Test
+    public void testChildStartsEmptyAndClean() throws Exception {
+        ByteQuadsCanonicalizer child = ByteQuadsCanonicalizer.createRoot()
+                .makeChild(0);
+        assertEquals(0, child.size());
+        assertFalse(child.maybeDirty());
+    }
+
+    @Test
+    public void testChildAddsAndLooksUpSingleQuad() throws Exception {
+        ByteQuadsCanonicalizer child = ByteQuadsCanonicalizer.createRoot()
+                .makeChild(0);
+        String result = child.addName(new String("alpha"), 12345);
+        assertEquals("alpha", result);
+        assertEquals("alpha", child.findName(12345));
+        assertEquals(1, child.size());
+    }
+
+    @Test
+    public void testSingleQuadAbsentLookupIsNull() throws Exception {
+        ByteQuadsCanonicalizer child = ByteQuadsCanonicalizer.createRoot()
+                .makeChild(0);
+        assertNull(child.findName(12345));
+    }
+
+    @Test
+    public void testDuplicateSingleQuadDoesNotReplaceExistingEntry() throws Exception {
+        ByteQuadsCanonicalizer child = ByteQuadsCanonicalizer.createRoot()
+                .makeChild(0);
+        child.addName("first", 17);
+        child.addName("second", 17);
+        assertEquals("second", child.findName(17));
+        assertEquals(2, child.size());
+    }
+
+    @Test
+    public void testOneEntryHasOnePrimarySlot() throws Exception {
+        ByteQuadsCanonicalizer child = ByteQuadsCanonicalizer.createRoot()
+                .makeChild(0);
+        child.addName("one", 17);
+        assertEquals(1, child.primaryCount());
+        assertEquals(1, child.totalCount());
+    }
+
+    @Test
+    public void testDifferentSingleQuadsCanBeRetrieved() throws Exception {
+        ByteQuadsCanonicalizer child = ByteQuadsCanonicalizer.createRoot()
+                .makeChild(0);
+        child.addName("first", 17);
+        child.addName("second", 29);
+        assertEquals("first", child.findName(17));
+        assertEquals("second", child.findName(29));
+        assertEquals(2, child.size());
+    }
+
+    @Test
+    public void testMultiQuadNameViaArrayCanBeRetrieved() throws Exception {
+        ByteQuadsCanonicalizer child = ByteQuadsCanonicalizer.createRoot()
+                .makeChild(0);
+        int[] quads = {11, 22, 33, 44};
+        child.addName("long", quads, 4);
+        assertEquals("long", child.findName(quads, 4));
+        assertEquals(1, child.totalCount());
+    }
+
+    @Test
+    public void testOneElementArrayUsesSingleQuadLookup() throws Exception {
+        ByteQuadsCanonicalizer child = ByteQuadsCanonicalizer.createRoot()
+                .makeChild(0);
+        int[] quads = {71};
+        child.addName("single", quads, 1);
+        assertEquals("single", child.findName(quads, 1));
+    }
+
+    @Test
+    public void testTwoElementArrayUsesTwoQuadLookup() throws Exception {
+        ByteQuadsCanonicalizer child = ByteQuadsCanonicalizer.createRoot()
+                .makeChild(0);
+        int[] quads = {71, 72};
+        child.addName("pair", quads, 2);
+        assertEquals("pair", child.findName(quads, 2));
+    }
+
+    @Test
+    public void testThreeElementArrayUsesThreeQuadLookup() throws Exception {
+        ByteQuadsCanonicalizer child = ByteQuadsCanonicalizer.createRoot()
+                .makeChild(0);
+        int[] quads = {71, 72, 73};
+        child.addName("triple", quads, 3);
+        assertEquals("triple", child.findName(quads, 3));
+    }
+
+    @Test
+    public void testArrayLookupWithDifferentQuadDoesNotMatch() throws Exception {
+        ByteQuadsCanonicalizer child = ByteQuadsCanonicalizer.createRoot()
+                .makeChild(0);
+        int[] quads = {11, 22, 33, 44};
+        child.addName("long", quads, 4);
+        assertNull(child.findName(new int[] {11, 22, 33, 45}, 4));
+    }
+
+    @Test
+    public void testHashSeedIsStableWithinRootAndChild() throws Exception {
+        ByteQuadsCanonicalizer root = ByteQuadsCanonicalizer.createRoot();
+        assertEquals(root.hashSeed(), root.makeChild(0).hashSeed());
+    }
+
+    @Test
+    public void testSingleQuadHashIsRepeatable() throws Exception {
+        ByteQuadsCanonicalizer child = ByteQuadsCanonicalizer.createRoot()
+                .makeChild(0);
+        assertEquals(child.calcHash(0), child.calcHash(0));
+        assertEquals(child.calcHash(Integer.MAX_VALUE),
+                child.calcHash(Integer.MAX_VALUE));
+    }
+
+    @Test
+    public void testZeroSecondQuadHashMatchesSingleQuadHash() throws Exception {
+        ByteQuadsCanonicalizer child = ByteQuadsCanonicalizer.createRoot()
+                .makeChild(0);
+        assertEquals(child.calcHash(123, 0), child.calcHash(123));
+    }
+
+    @Test
+    public void testHashAcceptsIntegerMinimumAndMaximum() throws Exception {
+        ByteQuadsCanonicalizer child = ByteQuadsCanonicalizer.createRoot()
+                .makeChild(0);
+        int minimumHash = child.calcHash(Integer.MIN_VALUE);
+        int maximumHash = child.calcHash(Integer.MAX_VALUE);
+        assertEquals(minimumHash, child.calcHash(Integer.MIN_VALUE));
+        assertEquals(maximumHash, child.calcHash(Integer.MAX_VALUE));
+    }
+
+    @Test
+    public void testAddChangesDirtyStateAndReleaseMergesIntoRoot() throws Exception {
+        ByteQuadsCanonicalizer root = ByteQuadsCanonicalizer.createRoot();
+        ByteQuadsCanonicalizer child = root.makeChild(0);
+        child.addName("merged", 909);
+        assertTrue(child.maybeDirty());
+        child.release();
+        assertEquals(1, root.size());
+        assertEquals(1, child.size());
+    }
+
+    @Test
+    public void testReleaseWithoutChangesLeavesRootEmpty() throws Exception {
+        ByteQuadsCanonicalizer root = ByteQuadsCanonicalizer.createRoot();
+        root.makeChild(0).release();
+        assertEquals(0, root.size());
+    }
+
+    @Test
+    public void testInterningFeatureReturnsInternedName() throws Exception {
+        ByteQuadsCanonicalizer child = ByteQuadsCanonicalizer.createRoot()
+                .makeChild(JsonFactory.Feature.INTERN_FIELD_NAMES.getMask());
+        String name = new String("interned");
+        String result = child.addName(name, 707);
+        assertSame(name.intern(), result);
+        assertSame(result, child.findName(707));
+    }
+
+    @Test
+    public void testToStringReportsConfiguredCounts() throws Exception {
+        ByteQuadsCanonicalizer child = ByteQuadsCanonicalizer.createRoot()
+                .makeChild(0);
+        child.addName("one", 17);
+        String description = child.toString();
+        assertTrue(description.contains("size=1"));
+        assertTrue(description.contains("total:1"));
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+Tests exercise symbol insertion and lookup, hash calculation, child/root sharing and release, counts, and textual reporting.
+Configured child tables are used for meaningful symbol-table behavior; array lookup covers lengths one through four and mismatches.
+
+### 2. TEST CASE DESIGN
+- `testRootStartsEmpty`: new root; size 0 and bucket count 64 from initial table state.
+- `testRootInitiallyNotDirty`: new root; not dirty because root's shared-state flag starts false and `maybeDirty()` is its negation.
+- `testChildStartsEmptyAndClean`: child with no entries; size 0 and clean copied initial state.
+- `testChildAddsAndLooksUpSingleQuad`: add quad 12345; the returned and looked-up name is `"alpha"` and count is 1.
+- `testSingleQuadAbsentLookupIsNull`: absent quad in empty child; lookup returns null.
+- `testDuplicateSingleQuadDoesNotReplaceExistingEntry`: second insertion uses the same slot; lookup returns the second name and insertion count is 2.
+- `testOneEntryHasOnePrimarySlot`: one inserted name occupies one primary slot and one total slot.
+- `testDifferentSingleQuadsCanBeRetrieved`: both inserted names remain findable; count is 2.
+- `testMultiQuadNameViaArrayCanBeRetrieved`: four-quad name is appended and verified on lookup; one total entry.
+- `testOneElementArrayUsesSingleQuadLookup`: length-one array dispatches to single-quad lookup.
+- `testTwoElementArrayUsesTwoQuadLookup`: length-two array dispatches to two-quad lookup.
+- `testThreeElementArrayUsesThreeQuadLookup`: length-three array dispatches to three-quad lookup.
+- `testArrayLookupWithDifferentQuadDoesNotMatch`: changed final quad fails long-name verification and returns null.
+- `testHashSeedIsStableWithinRootAndChild`: child receives the root's seed unchanged.
+- `testSingleQuadHashIsRepeatable`: same seed and quad produce a deterministic hash on repeated calls.
+- `testZeroSecondQuadHashMatchesSingleQuadHash`: two-quad hash uses the single-quad calculation when its second quad is zero.
+- `testHashAcceptsIntegerMinimumAndMaximum`: signed integer endpoints are accepted and their results are repeatable.
+- `testAddChangesDirtyStateAndReleaseMergesIntoRoot`: adding makes child dirty; release merges its one entry into the root.
+- `testReleaseWithoutChangesLeavesRootEmpty`: a clean child release does not change root size.
+- `testInterningFeatureReturnsInternedName`: enabled interning returns the interned reference, which lookup preserves.
+- `testToStringReportsConfiguredCounts`: after one insertion, the description includes size and total count of 1.
+
+### 4. DEFECT DETECTION STRATEGY
+The assertions pin insertion/lookup consistency, the short-array dispatch paths, and root-child release behavior, alongside initial counts and hash semantics. No defect detection is claimed without execution on both versions.
+
+### 5. SUMMARY
+21 tests.
+
+### 6. LIMITATIONS
+The supplied public-method list omits several public methods visible in the source; the tests also cover those relevant to symbol operations. Hash repeatability alone does not validate a specific numerical hash result. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

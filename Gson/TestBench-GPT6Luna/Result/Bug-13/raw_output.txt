@@ -1,0 +1,242 @@
+```java
+package com.google.gson.stream;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.gson.internal.JsonReaderInternalAccess;
+import com.google.gson.internal.bind.JsonTreeReader;
+import java.io.Closeable;
+import java.io.EOFException;
+import java.io.IOException;
+import java.io.Reader;
+import java.io.StringReader;
+
+public class JsonReaderTest {
+    @Test
+    public void testLenientSetting() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader("[]"));
+        assertFalse(reader.isLenient());
+        reader.setLenient(true);
+        assertTrue(reader.isLenient());
+    }
+
+    @Test
+    public void testArrayTokensAndPath() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader("[1]"));
+        assertEquals("$", reader.getPath());
+        assertEquals(JsonToken.BEGIN_ARRAY, reader.peek());
+        reader.beginArray();
+        assertEquals("$[0]", reader.getPath());
+        assertEquals(JsonToken.NUMBER, reader.peek());
+        assertTrue(reader.hasNext());
+        assertEquals("1", reader.nextString());
+        assertFalse(reader.hasNext());
+        reader.endArray();
+        assertEquals("$", reader.getPath());
+        assertEquals(JsonToken.END_DOCUMENT, reader.peek());
+    }
+
+    @Test
+    public void testObjectNameAndBoolean() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader("{\"a\":true}"));
+        reader.beginObject();
+        assertTrue(reader.hasNext());
+        assertEquals(JsonToken.NAME, reader.peek());
+        assertEquals("a", reader.nextName());
+        assertEquals("$.a", reader.getPath());
+        assertTrue(reader.nextBoolean());
+        assertFalse(reader.hasNext());
+        reader.endObject();
+        assertEquals("$", reader.getPath());
+    }
+
+    @Test
+    public void testFalseAndNullValues() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader("[false,null]"));
+        reader.beginArray();
+        assertFalse(reader.nextBoolean());
+        assertEquals(JsonToken.NULL, reader.peek());
+        reader.nextNull();
+        assertFalse(reader.hasNext());
+        reader.endArray();
+    }
+
+    @Test
+    public void testNextIntAtMaximum() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader("[2147483647]"));
+        reader.beginArray();
+        assertEquals(Integer.MAX_VALUE, reader.nextInt());
+        reader.endArray();
+    }
+
+    @Test
+    public void testNextIntAtMinimum() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader("[-2147483648]"));
+        reader.beginArray();
+        assertEquals(Integer.MIN_VALUE, reader.nextInt());
+        reader.endArray();
+    }
+
+    @Test
+    public void testNextIntRejectsFirstValueAboveMaximum() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader("[2147483648]"));
+        reader.beginArray();
+        try {
+            reader.nextInt();
+            fail("expected NumberFormatException");
+        } catch (NumberFormatException expected) {
+            assertEquals(JsonToken.NUMBER, reader.peek());
+        }
+    }
+
+    @Test
+    public void testNextIntRejectsFirstValueBelowMinimum() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader("[-2147483649]"));
+        reader.beginArray();
+        try {
+            reader.nextInt();
+            fail("expected NumberFormatException");
+        } catch (NumberFormatException expected) {
+            assertEquals(JsonToken.NUMBER, reader.peek());
+        }
+    }
+
+    @Test
+    public void testNextLongAtMaximum() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader("[9223372036854775807]"));
+        reader.beginArray();
+        assertEquals(Long.MAX_VALUE, reader.nextLong());
+        reader.endArray();
+    }
+
+    @Test
+    public void testNextLongAtMinimum() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader("[-9223372036854775808]"));
+        reader.beginArray();
+        assertEquals(Long.MIN_VALUE, reader.nextLong());
+        reader.endArray();
+    }
+
+    @Test
+    public void testNextLongRejectsFirstValueAboveMaximum() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader("[9223372036854775808]"));
+        reader.beginArray();
+        try {
+            reader.nextLong();
+            fail("expected NumberFormatException");
+        } catch (NumberFormatException expected) {
+            assertEquals(JsonToken.NUMBER, reader.peek());
+        }
+    }
+
+    @Test
+    public void testNextLongRejectsFirstValueBelowMinimum() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader("[-9223372036854775809]"));
+        reader.beginArray();
+        try {
+            reader.nextLong();
+            fail("expected NumberFormatException");
+        } catch (NumberFormatException expected) {
+            assertEquals(JsonToken.NUMBER, reader.peek());
+        }
+    }
+
+    @Test
+    public void testNextDoubleFraction() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader("[1.25]"));
+        reader.beginArray();
+        assertEquals(1.25, reader.nextDouble(), 1e-9);
+        reader.endArray();
+    }
+
+    @Test
+    public void testNumericStringConversions() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader("[\"17\",\"2.5\"]"));
+        reader.beginArray();
+        assertEquals(17, reader.nextInt());
+        assertEquals(2.5, reader.nextDouble(), 1e-9);
+        reader.endArray();
+    }
+
+    @Test
+    public void testSkipNestedValue() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader("[{\"x\":[1,2]},3]"));
+        reader.beginArray();
+        reader.skipValue();
+        assertEquals("$[1]", reader.getPath());
+        assertEquals(3, reader.nextInt());
+        assertFalse(reader.hasNext());
+        reader.endArray();
+    }
+
+    @Test
+    public void testSkipValueUpdatesObjectPath() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader("{\"x\":1,\"y\":2}"));
+        reader.beginObject();
+        assertEquals("x", reader.nextName());
+        reader.skipValue();
+        assertEquals("$.null", reader.getPath());
+        assertEquals("y", reader.nextName());
+        assertEquals("$.y", reader.getPath());
+        assertEquals(2, reader.nextInt());
+        reader.endObject();
+    }
+
+    @Test
+    public void testPromoteNameToValue() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader("{\"key\":1}"));
+        reader.beginObject();
+        JsonReaderInternalAccess.INSTANCE.promoteNameToValue(reader);
+        assertEquals(JsonToken.STRING, reader.peek());
+        assertEquals("key", reader.nextString());
+        assertEquals(1, reader.nextInt());
+        reader.endObject();
+    }
+
+    @Test
+    public void testCloseReader() throws Exception {
+        JsonReader reader = new JsonReader(new StringReader("[]"));
+        reader.close();
+        try {
+            reader.peek();
+            fail("expected IllegalStateException");
+        } catch (IllegalStateException expected) {
+            assertEquals("$", reader.getPath());
+        }
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+Selected token traversal, object names and paths, numeric conversions and integer range checks, recursive skipping, leniency state, closing, and name promotion.
+The four numeric boundaries for `int` and `long` follow the exact-cast checks and Java numeric ranges in the source.
+
+### 2. TEST CASE DESIGN
+- `testLenientSetting`: default false then true; directly follows setter and getter.
+- `testArrayTokensAndPath`: `[1]`; checks array, number, end-of-array and path transitions.
+- `testObjectNameAndBoolean`: `{"a":true}`; checks name, path, boolean, and object end.
+- `testFalseAndNullValues`: `[false,null]`; checks both value token consumers.
+- `testNextIntAtMaximum`: `2147483647`; exact `int` maximum parses and returns unchanged.
+- `testNextIntAtMinimum`: `-2147483648`; exact `int` minimum parses and returns unchanged.
+- `testNextIntRejectsFirstValueAboveMaximum`: `2147483648`; narrowing cast differs from parsed numeric value, so conversion throws.
+- `testNextIntRejectsFirstValueBelowMinimum`: `-2147483649`; narrowing cast differs, so conversion throws.
+- `testNextLongAtMaximum`: `9223372036854775807`; scanner retains and returns the maximum `long`.
+- `testNextLongAtMinimum`: `-9223372036854775808`; scanner supports the minimum `long`.
+- `testNextLongRejectsFirstValueAboveMaximum`: `9223372036854775808`; double-to-long conversion fails the exact-value check.
+- `testNextLongRejectsFirstValueBelowMinimum`: `-9223372036854775809`; double-to-long conversion fails the exact-value check.
+- `testNextDoubleFraction`: `1.25`; parsed double equals the expected value.
+- `testNumericStringConversions`: quoted integer and decimal are parsed by their respective numeric methods.
+- `testSkipNestedValue`: skips an object containing an array; path advances to the next array index.
+- `testSkipValueUpdatesObjectPath`: after skipping, source sets the current path name to `"null"`; next name replaces it.
+- `testPromoteNameToValue`: promotes `"key"` to a string token, then reads its associated integer.
+- `testCloseReader`: closed scope causes `peek()` to throw; path remains at the document root.
+
+### 4. DEFECT DETECTION STRATEGY
+The tests pin token consumption, path updates, strict numeric range behavior, recursive skipping, and state transitions. No defect detection is claimed without execution on both versions.
+
+### 5. SUMMARY
+18 tests.
+
+### 6. LIMITATIONS
+The source does not reveal the faulty implementation, so these tests target observable reference behaviors rather than a known change.
+Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

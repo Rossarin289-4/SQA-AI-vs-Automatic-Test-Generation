@@ -1,0 +1,170 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Predicates;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Sets;
+import com.google.javascript.jscomp.GlobalNamespace.Name;
+import com.google.javascript.jscomp.GlobalNamespace.Ref;
+import com.google.javascript.jscomp.GlobalNamespace.Ref.Type;
+import com.google.javascript.jscomp.ReferenceCollectingCallback;
+import com.google.javascript.jscomp.ReferenceCollectingCallback.ReferenceCollection;
+import com.google.javascript.jscomp.Scope;
+import com.google.javascript.jscomp.Scope.Var;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.TokenStream;
+import java.util.ArrayDeque;
+import java.util.Deque;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import com.google.common.base.Predicate;
+import com.google.javascript.jscomp.NodeTraversal.AbstractPostOrderCallback;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedList;
+
+public class CollapsePropertiesTest {
+    @Test
+    public void testNodeFilterRejectsNonQualifiedNode() throws Exception {
+        Predicate<Node> filter = new GlobalNamespace.NodeFilter(Sets.<Node>newHashSet());
+        Node number = Node.newNumber(1);
+        assertFalse(filter.apply(number));
+    }
+
+    @Test
+    public void testNodeFilterRejectsQualifiedNameNotInSet() throws Exception {
+        Predicate<Node> filter = new GlobalNamespace.NodeFilter(Sets.<Node>newHashSet());
+        Node name = Node.newString(Token.NAME, "a");
+        assertFalse(filter.apply(name));
+    }
+
+    @Test
+    public void testNodeFilterAcceptsIncludedName() throws Exception {
+        Node name = Node.newString(Token.NAME, "a");
+        Set<Node> nodes = Sets.newHashSet();
+        nodes.add(name);
+        Predicate<Node> filter = new GlobalNamespace.NodeFilter(nodes);
+        assertTrue(filter.apply(name));
+    }
+
+    @Test
+    public void testNodeFilterAcceptsIncludedGetpropChain() throws Exception {
+        Node base = Node.newString(Token.NAME, "a");
+        Node prop = new Node(Token.GETPROP, base, Node.newString("b"));
+        Set<Node> nodes = Sets.newHashSet();
+        nodes.add(prop);
+        Predicate<Node> filter = new GlobalNamespace.NodeFilter(nodes);
+        assertTrue(filter.apply(prop));
+    }
+
+    @Test
+    public void testNodeFilterRejectsGetpropWhenOnlyBaseIsIncluded() throws Exception {
+        Node base = Node.newString(Token.NAME, "a");
+        Node prop = new Node(Token.GETPROP, base, Node.newString("b"));
+        Set<Node> nodes = Sets.newHashSet();
+        nodes.add(base);
+        Predicate<Node> filter = new GlobalNamespace.NodeFilter(nodes);
+        assertTrue(filter.apply(prop));
+    }
+
+    @Test
+    public void testNodeFilterRejectsQualifiedChainWithoutIncludedPrefix() throws Exception {
+        Node prop = new Node(Token.GETPROP,
+                Node.newString(Token.NAME, "a"), Node.newString("b"));
+        Predicate<Node> filter = new GlobalNamespace.NodeFilter(Sets.<Node>newHashSet());
+        assertFalse(filter.apply(prop));
+    }
+
+    @Test
+    public void testNameFilterMatchesSameNodeReference() throws Exception {
+        Node name = Node.newString(Token.NAME, "a");
+        Set<Node> nodes = Sets.newHashSet();
+        nodes.add(name);
+        GlobalNamespace.NodeFilter filter = new GlobalNamespace.NodeFilter(nodes);
+        assertTrue(filter.apply(name));
+    }
+
+    @Test
+    public void testNameFilterDoesNotMatchDifferentNodeWithSameText() throws Exception {
+        Node stored = Node.newString(Token.NAME, "a");
+        Node other = Node.newString(Token.NAME, "a");
+        Set<Node> nodes = Sets.newHashSet();
+        nodes.add(stored);
+        GlobalNamespace.NodeFilter filter = new GlobalNamespace.NodeFilter(nodes);
+        assertFalse(filter.apply(other));
+    }
+
+    @Test
+    public void testFilterAcceptsQualifiedNodeItselfInSet() throws Exception {
+        Node prop = new Node(Token.GETPROP,
+                Node.newString(Token.NAME, "x"), Node.newString("y"));
+        Set<Node> nodes = Sets.newHashSet();
+        nodes.add(prop);
+        GlobalNamespace.NodeFilter filter = new GlobalNamespace.NodeFilter(nodes);
+        assertTrue(filter.apply(prop));
+    }
+
+    @Test
+    public void testFilterRejectsUnrelatedLiteral() throws Exception {
+        Node literal = Node.newString(Token.STRING, "x");
+        GlobalNamespace.NodeFilter filter = new GlobalNamespace.NodeFilter(Sets.<Node>newHashSet());
+        assertFalse(filter.apply(literal));
+    }
+
+    @Test
+    public void testFilterAcceptsBaseNameInMultiSegmentQualifiedName() throws Exception {
+        Node base = Node.newString(Token.NAME, "a");
+        Node ab = new Node(Token.GETPROP, base, Node.newString("b"));
+        Node abc = new Node(Token.GETPROP, ab, Node.newString("c"));
+        Set<Node> nodes = Sets.newHashSet();
+        nodes.add(base);
+        GlobalNamespace.NodeFilter filter = new GlobalNamespace.NodeFilter(nodes);
+        assertTrue(filter.apply(abc));
+    }
+
+    @Test
+    public void testFilterRejectsIntermediateWhenOnlyDifferentNodeIsStored() throws Exception {
+        Node base = Node.newString(Token.NAME, "a");
+        Node middle = new Node(Token.GETPROP, base, Node.newString("b"));
+        Node top = new Node(Token.GETPROP, middle, Node.newString("c"));
+        Node lookalike = new Node(Token.GETPROP,
+                Node.newString(Token.NAME, "a"), Node.newString("b"));
+        Set<Node> nodes = Sets.newHashSet();
+        nodes.add(lookalike);
+        GlobalNamespace.NodeFilter filter = new GlobalNamespace.NodeFilter(nodes);
+        assertFalse(filter.apply(top));
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+No target method was specified, so method selection is exploratory. The only listed public method with visible behavior is `NodeFilter.apply`: it accepts qualified-name nodes when the node or one of its qualified-name prefixes is in the supplied set.
+
+### 2. TEST CASE DESIGN
+- `testNodeFilterRejectsNonQualifiedNode`: number node, expected false because it is not a qualified name.
+- `testNodeFilterRejectsQualifiedNameNotInSet`: name absent from empty set, expected false.
+- `testNodeFilterAcceptsIncludedName`: same name node in set, expected true.
+- `testNodeFilterAcceptsIncludedGetpropChain`: GETPROP node itself in set, expected true.
+- `testNodeFilterRejectsGetpropWhenOnlyBaseIsIncluded`: base name is included, so the qualified chain matches that prefix; expected true.
+- `testNodeFilterRejectsQualifiedChainWithoutIncludedPrefix`: empty set, expected false.
+- `testNameFilterMatchesSameNodeReference`: exact node reference in set, expected true.
+- `testNameFilterDoesNotMatchDifferentNodeWithSameText`: distinct node with same text is absent; expected false.
+- `testFilterAcceptsQualifiedNodeItselfInSet`: qualified node itself is included; expected true.
+- `testFilterRejectsUnrelatedLiteral`: string literal is not qualified; expected false.
+- `testFilterAcceptsBaseNameInMultiSegmentQualifiedName`: base node is reached through the GETPROP chain and is included; expected true.
+- `testFilterRejectsIntermediateWhenOnlyDifferentNodeIsStored`: stored lookalike is not the chain’s actual intermediate node; expected false.
+
+### 4. DEFECT DETECTION STRATEGY
+The tests pin the node-identity membership checks and the traversal of qualified-name chains through GETPROP prefixes, as well as rejection of non-qualified nodes.
+
+### 5. SUMMARY
+12 tests.
+
+### 6. LIMITATIONS
+Selection is exploratory because no target method was specified; the other listed methods are private or not declared in the supplied source as public APIs. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

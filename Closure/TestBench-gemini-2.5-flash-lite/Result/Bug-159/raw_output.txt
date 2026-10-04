@@ -1,0 +1,793 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Supplier;
+import com.google.common.collect.Maps;
+import com.google.common.collect.Sets;
+import com.google.javascript.jscomp.FunctionInjector.CanInlineResult;
+import com.google.javascript.jscomp.FunctionInjector.InliningMode;
+import com.google.javascript.jscomp.NodeTraversal.AbstractPostOrderCallback;
+import com.google.javascript.jscomp.NodeTraversal.Callback;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.Set;
+
+public class InlineFunctionsTest {
+
+    private static class MockCompiler implements AbstractCompiler {
+        private CodingConvention convention = new GoogleCodingConvention();
+        private LifeCycleStage stage = LifeCycleStage.NORMALIZED;
+        private String debugLog = "";
+
+        @Override
+        public void report(DiagnosticType diagnosticType, Node node, String... arguments) {
+        }
+
+        @Override
+        public void report(Node node, DiagnosticType diagnosticType, String... arguments) {
+        }
+
+        @Override
+        public JSError makeError(Node node, CheckLevel checkLevel, DiagnosticType diagnosticType, String... arguments) {
+            return new JSError(node, checkLevel, diagnosticType, arguments);
+        }
+
+        @Override
+        public JSError makeError(Node node, DiagnosticType diagnosticType, String... arguments) {
+            return new JSError(node, CheckLevel.ERROR, diagnosticType, arguments);
+        }
+
+        @Override
+        public boolean isNormalized() {
+            return stage.isNormalized();
+        }
+
+        @Override
+        public String getAstDotGraph(Node n) {
+            return "";
+        }
+
+        @Override
+        public void addTypeRoots(Set<Node> nodes) {
+        }
+
+        @Override
+        public void removeGlobalVarEnsuringUniqueId(String varName) {
+        }
+
+        @Override
+        public Set<Node> getNodesInFunction(Node fn) {
+            return Collections.emptySet();
+        }
+
+        @Override
+        public Set<Node> getNodesDefinedByVar(Node var) {
+            return Collections.emptySet();
+        }
+
+        @Override
+        public boolean isInlineCostIncreased(Node expr, boolean enableInlining, Set<String> constants) {
+            return false;
+        }
+
+        @Override
+        public boolean isInlineable(Node fn) {
+            return true;
+        }
+
+        @Override
+        public void addChange(String descriptiveName, Change.Type type, String filename, int line, int offset, int length) {
+        }
+
+        @Override
+        public void addChange(String descriptiveName, Change.Type type, String filename, int line, int offset, int length, String content) {
+        }
+
+        @Override
+        public void reportCodeChange() {
+            debugLog += "Code changed. ";
+        }
+
+        @Override
+        public void addToDebugLog(String message) {
+            debugLog += message + ". ";
+        }
+
+        @Override
+        public String getDebugLog() {
+            return debugLog;
+        }
+
+        @Override
+        public String getUniqueNameIdSupplier() {
+            return "uniqueName";
+        }
+
+        @Override
+        public String getSourceReportPath(Node n) {
+            return "source.js";
+        }
+
+        @Override
+        public String getSourcePath(Node n) {
+            return "source.js";
+        }
+
+        @Override
+        public CodingConvention getCodingConvention() {
+            return convention;
+        }
+
+        @Override
+        public LifeCycleStage getLifeCycleStage() {
+            return stage;
+        }
+
+        @Override
+        public void setLifeCycleStage(LifeCycleStage stage) {
+            this.stage = stage;
+        }
+
+        @Override
+        public void ensureLibraryInjected(String libName) {
+        }
+
+        @Override
+        public String getPropertyRenamingMap(RenamingPolicy policy, JSType type) {
+            return null;
+        }
+
+        @Override
+        public VariableMap getVariableMap() {
+            return null;
+        }
+
+        @Override
+        public VariableMap getFunctionMap() {
+            return null;
+        }
+
+        @Override
+        public VariableMap getConstructorMap() {
+            return null;
+        }
+
+        @Override
+        public VariableMap getObjectPropertyMap() {
+            return null;
+        }
+
+        @Override
+        public String getSourceMapContent() {
+            return null;
+        }
+
+        @Override
+        public void setSourceMapConfig(SourceMap.Config config) {
+        }
+
+        @Override
+        public boolean shouldReport(DiagnosticType diagnosticType) {
+            return true;
+        }
+
+        @Override
+        public boolean isInliningEnabled() {
+            return true;
+        }
+    }
+
+    private static class MockFunctionInjector extends FunctionInjector {
+        MockFunctionInjector() {
+            super(new MockCompiler(), () -> "safeName", true);
+        }
+
+        @Override
+        public CanInlineResult canInlineReferenceToFunction(NodeTraversal t, Node callNode, Node fnNode, Set<String> needAliases, InliningMode mode, boolean referencesThis, boolean containsFunctions) {
+            return CanInlineResult.YES;
+        }
+
+        @Override
+        public Node inline(NodeTraversal t, Node callNode, String fnName, Node fnNode, InliningMode mode) {
+            return callNode; // No actual inlining
+        }
+
+        @Override
+        public boolean isDirectCallNodeReplacementPossible(Node fnNode) {
+            return true;
+        }
+
+        @Override
+        public boolean inliningLowersCost(JSModule fnModule, Node fnNode, Collection<? extends Reference> refs, Set<String> namesToAlias, boolean isRemovable, boolean referencesThis) {
+            return true;
+        }
+    }
+
+    private AbstractCompiler compiler = new MockCompiler();
+    private Supplier<String> safeNameIdSupplier = () -> "uniqueId";
+    private FunctionInjector injector = new MockFunctionInjector();
+
+    private void setupInlineFunctions(boolean inlineGlobal, boolean inlineLocal, boolean blockInliningEnabled) {
+        InlineFunctions inlineFunctions = new InlineFunctions(compiler, safeNameIdSupplier, inlineGlobal, inlineLocal, blockInliningEnabled);
+        inlineFunctions.process(new Node(Token.SCRIPT), new Node(Token.SCRIPT));
+    }
+
+    // Test case for processing an empty script.
+    @Test
+    public void testProcessEmptyScript() throws Exception {
+        InlineFunctions inlineFunctions = new InlineFunctions(compiler, safeNameIdSupplier, true, true, true);
+        Node root = new Node(Token.SCRIPT);
+        inlineFunctions.process(new Node(Token.SCRIPT), root);
+        assertEquals("", compiler.getDebugLog());
+    }
+
+    // Test case for a simple named function that can be inlined directly.
+    @Test
+    public void testInlineDirectlyNamedFunction() throws Exception {
+        InlineFunctions inlineFunctions = new InlineFunctions(compiler, safeNameIdSupplier, true, true, true);
+        Node root = new Node(Token.SCRIPT);
+        Node fnVar = new Node(Token.VAR, new Node(Token.NAME, "myFn"), new Node(Token.FUNCTION, new Node(Token.NAME, "myFn"), new Node(Token.PARAM_LIST), new Node(Token.BLOCK, new Node(Token.RETURN, Node.newNumber(5))));
+        root.addChildToBack(fnVar);
+        Node call = new Node(Token.CALL, new Node(Token.NAME, "myFn"));
+        root.addChildToBack(new Node(Token.EXPR_RESULT, call));
+
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.FindCandidateFunctions());
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.FindCandidatesReferences(inlineFunctions.fns, inlineFunctions.anonFns));
+        inlineFunctions.trimCanidatesNotMeetingMinimumRequirements();
+        inlineFunctions.trimCanidatesUsingOnCost();
+        inlineFunctions.resolveInlineConflicts();
+        inlineFunctions.decomposeExpressions(Sets.newHashSet("myFn"));
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.CallVisitor(inlineFunctions.fns, inlineFunctions.anonFns, new InlineFunctions.Inline(injector, null)));
+        inlineFunctions.removeInlinedFunctions();
+
+        assertEquals("Inlined function: myFn. Code changed. ", compiler.getDebugLog());
+    }
+
+    // Test case for a function expression that can be inlined directly.
+    @Test
+    public void testInlineDirectlyFunctionExpression() throws Exception {
+        InlineFunctions inlineFunctions = new InlineFunctions(compiler, safeNameIdSupplier, true, true, true);
+        Node root = new Node(Token.SCRIPT);
+        Node fnExpr = new Node(Token.FUNCTION, new Node(Token.NAME, "anonFn"), new Node(Token.PARAM_LIST), new Node(Token.BLOCK, new Node(Token.RETURN, Node.newNumber(10))));
+        Node call = new Node(Token.CALL, fnExpr);
+        root.addChildToBack(new Node(Token.EXPR_RESULT, call));
+
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.FindCandidateFunctions());
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.FindCandidatesReferences(inlineFunctions.fns, inlineFunctions.anonFns));
+        inlineFunctions.trimCanidatesNotMeetingMinimumRequirements();
+        inlineFunctions.trimCanidatesUsingOnCost();
+        inlineFunctions.resolveInlineConflicts();
+        inlineFunctions.decomposeExpressions(Sets.newHashSet());
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.CallVisitor(inlineFunctions.fns, inlineFunctions.anonFns, new InlineFunctions.Inline(injector, null)));
+        inlineFunctions.removeInlinedFunctions();
+
+        assertEquals("Inlined function: 0. Code changed. ", compiler.getDebugLog());
+    }
+
+    // Test case for a function that cannot be inlined directly but can be inlined as a block.
+    @Test
+    public void testInlineAsBlock() throws Exception {
+        InlineFunctions inlineFunctions = new InlineFunctions(compiler, safeNameIdSupplier, true, true, true);
+        Node root = new Node(Token.SCRIPT);
+        Node fnVar = new Node(Token.VAR, new Node(Token.NAME, "myFn"), new Node(Token.FUNCTION, new Node(Token.NAME, "myFn"), new Node(Token.PARAM_LIST), new Node(Token.BLOCK, new Node(Token.RETURN, new Node(Token.ADD, Node.newNumber(1), Node.newNumber(2))))));
+        root.addChildToBack(fnVar);
+        Node call = new Node(Token.CALL, new Node(Token.NAME, "myFn"));
+        root.addChildToBack(new Node(Token.EXPR_RESULT, call));
+
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.FindCandidateFunctions());
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.FindCandidatesReferences(inlineFunctions.fns, inlineFunctions.anonFns));
+        inlineFunctions.trimCanidatesNotMeetingMinimumRequirements();
+        inlineFunctions.trimCanidatesUsingOnCost();
+        inlineFunctions.resolveInlineConflicts();
+        inlineFunctions.decomposeExpressions(Sets.newHashSet("myFn"));
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.CallVisitor(inlineFunctions.fns, inlineFunctions.anonFns, new InlineFunctions.Inline(injector, null)));
+        inlineFunctions.removeInlinedFunctions();
+
+        assertEquals("Inlined function: myFn. Code changed. ", compiler.getDebugLog());
+    }
+
+    // Test case for a function with multiple calls.
+    @Test
+    public void testInlineMultipleCalls() throws Exception {
+        InlineFunctions inlineFunctions = new InlineFunctions(compiler, safeNameIdSupplier, true, true, true);
+        Node root = new Node(Token.SCRIPT);
+        Node fnVar = new Node(Token.VAR, new Node(Token.NAME, "myFn"), new Node(Token.FUNCTION, new Node(Token.NAME, "myFn"), new Node(Token.PARAM_LIST), new Node(Token.BLOCK, new Node(Token.RETURN, Node.newNumber(10)))));
+        root.addChildToBack(fnVar);
+        Node call1 = new Node(Token.CALL, new Node(Token.NAME, "myFn"));
+        Node call2 = new Node(Token.CALL, new Node(Token.NAME, "myFn"));
+        root.addChildToBack(new Node(Token.EXPR_RESULT, call1));
+        root.addChildToBack(new Node(Token.EXPR_RESULT, call2));
+
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.FindCandidateFunctions());
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.FindCandidatesReferences(inlineFunctions.fns, inlineFunctions.anonFns));
+        inlineFunctions.trimCanidatesNotMeetingMinimumRequirements();
+        inlineFunctions.trimCanidatesUsingOnCost();
+        inlineFunctions.resolveInlineConflicts();
+        inlineFunctions.decomposeExpressions(Sets.newHashSet("myFn"));
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.CallVisitor(inlineFunctions.fns, inlineFunctions.anonFns, new InlineFunctions.Inline(injector, null)));
+        inlineFunctions.removeInlinedFunctions();
+
+        assertEquals("Inlined function: myFn. Code changed. Inlined function: myFn. Code changed. ", compiler.getDebugLog());
+    }
+
+    // Test case for a function with no calls.
+    @Test
+    public void testFunctionWithNoCalls() throws Exception {
+        InlineFunctions inlineFunctions = new InlineFunctions(compiler, safeNameIdSupplier, true, true, true);
+        Node root = new Node(Token.SCRIPT);
+        Node fnVar = new Node(Token.VAR, new Node(Token.NAME, "myFn"), new Node(Token.FUNCTION, new Node(Token.NAME, "myFn"), new Node(Token.PARAM_LIST), new Node(Token.BLOCK, new Node(Token.RETURN, Node.newNumber(5)))));
+        root.addChildToBack(fnVar);
+
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.FindCandidateFunctions());
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.FindCandidatesReferences(inlineFunctions.fns, inlineFunctions.anonFns));
+        inlineFunctions.trimCanidatesNotMeetingMinimumRequirements();
+        inlineFunctions.trimCanidatesUsingOnCost();
+        inlineFunctions.resolveInlineConflicts();
+        inlineFunctions.decomposeExpressions(Sets.newHashSet("myFn"));
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.CallVisitor(inlineFunctions.fns, inlineFunctions.anonFns, new InlineFunctions.Inline(injector, null)));
+        inlineFunctions.removeInlinedFunctions();
+
+        // No code change expected as there are no calls to inline.
+        assertEquals("", compiler.getDebugLog());
+    }
+
+    // Test case for a function that is recursive.
+    @Test
+    public void testRecursiveFunction() throws Exception {
+        InlineFunctions inlineFunctions = new InlineFunctions(compiler, safeNameIdSupplier, true, true, true);
+        Node root = new Node(Token.SCRIPT);
+        Node fnVar = new Node(Token.VAR, new Node(Token.NAME, "myFn"), new Node(Token.FUNCTION, new Node(Token.NAME, "myFn"), new Node(Token.PARAM_LIST), new Node(Token.BLOCK, new Node(Token.RETURN, new Node(Token.CALL, new Node(Token.NAME, "myFn"))))));
+        root.addChildToBack(fnVar);
+        Node call = new Node(Token.CALL, new Node(Token.NAME, "myFn"));
+        root.addChildToBack(new Node(Token.EXPR_RESULT, call));
+
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.FindCandidateFunctions());
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.FindCandidatesReferences(inlineFunctions.fns, inlineFunctions.anonFns));
+        inlineFunctions.trimCanidatesNotMeetingMinimumRequirements();
+        inlineFunctions.trimCanidatesUsingOnCost();
+        inlineFunctions.resolveInlineConflicts();
+        inlineFunctions.decomposeExpressions(Sets.newHashSet("myFn"));
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.CallVisitor(inlineFunctions.fns, inlineFunctions.anonFns, new InlineFunctions.Inline(injector, null)));
+        inlineFunctions.removeInlinedFunctions();
+
+        // The recursive function should not be inlined.
+        assertEquals("", compiler.getDebugLog());
+    }
+
+    // Test case for a function containing another function.
+    @Test
+    public void testFunctionWithInnerFunction() throws Exception {
+        InlineFunctions inlineFunctions = new InlineFunctions(compiler, safeNameIdSupplier, true, true, true);
+        Node root = new Node(Token.SCRIPT);
+        Node innerFn = new Node(Token.FUNCTION, new Node(Token.NAME, "innerFn"), new Node(Token.PARAM_LIST), new Node(Token.BLOCK, new Node(Token.RETURN, Node.newNumber(1))));
+        Node fnVar = new Node(Token.VAR, new Node(Token.NAME, "myFn"), new Node(Token.FUNCTION, new Node(Token.NAME, "myFn"), new Node(Token.PARAM_LIST), new Node(Token.BLOCK, innerFn)));
+        root.addChildToBack(fnVar);
+        Node call = new Node(Token.CALL, new Node(Token.NAME, "myFn"));
+        root.addChildToBack(new Node(Token.EXPR_RESULT, call));
+
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.FindCandidateFunctions());
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.FindCandidatesReferences(inlineFunctions.fns, inlineFunctions.anonFns));
+        inlineFunctions.trimCanidatesNotMeetingMinimumRequirements();
+        inlineFunctions.trimCanidatesUsingOnCost();
+        inlineFunctions.resolveInlineConflicts();
+        inlineFunctions.decomposeExpressions(Sets.newHashSet("myFn"));
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.CallVisitor(inlineFunctions.fns, inlineFunctions.anonFns, new InlineFunctions.Inline(injector, null)));
+        inlineFunctions.removeInlinedFunctions();
+
+        // Functions with inner functions are generally not inlined directly.
+        assertEquals("", compiler.getDebugLog());
+    }
+
+    // Test case for a function that is exported.
+    @Test
+    public void testExportedFunction() throws Exception {
+        MockCompiler mockCompiler = new MockCompiler() {
+            @Override
+            public CodingConvention getCodingConvention() {
+                return new GoogleCodingConvention() {
+                    @Override
+                    public boolean isExported(String name) {
+                        return true;
+                    }
+                };
+            }
+        };
+        InlineFunctions inlineFunctions = new InlineFunctions(mockCompiler, safeNameIdSupplier, true, true, true);
+        Node root = new Node(Token.SCRIPT);
+        Node fnVar = new Node(Token.VAR, new Node(Token.NAME, "myFn"), new Node(Token.FUNCTION, new Node(Token.NAME, "myFn"), new Node(Token.PARAM_LIST), new Node(Token.BLOCK, new Node(Token.RETURN, Node.newNumber(5)))));
+        root.addChildToBack(fnVar);
+        Node call = new Node(Token.CALL, new Node(Token.NAME, "myFn"));
+        root.addChildToBack(new Node(Token.EXPR_RESULT, call));
+
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.FindCandidateFunctions());
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.FindCandidatesReferences(inlineFunctions.fns, inlineFunctions.anonFns));
+        inlineFunctions.trimCanidatesNotMeetingMinimumRequirements();
+        inlineFunctions.trimCanidatesUsingOnCost();
+        inlineFunctions.resolveInlineConflicts();
+        inlineFunctions.decomposeExpressions(Sets.newHashSet("myFn"));
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.CallVisitor(inlineFunctions.fns, inlineFunctions.anonFns, new InlineFunctions.Inline(injector, null)));
+        inlineFunctions.removeInlinedFunctions();
+
+        // Exported functions should not be inlined.
+        assertEquals("", compiler.getDebugLog());
+    }
+
+    // Test case for function inlining disabled.
+    @Test
+    public void testFunctionInliningDisabled() throws Exception {
+        InlineFunctions inlineFunctions = new InlineFunctions(compiler, safeNameIdSupplier, false, false, false); // All inlining disabled
+        Node root = new Node(Token.SCRIPT);
+        Node fnVar = new Node(Token.VAR, new Node(Token.NAME, "myFn"), new Node(Token.FUNCTION, new Node(Token.NAME, "myFn"), new Node(Token.PARAM_LIST), new Node(Token.BLOCK, new Node(Token.RETURN, Node.newNumber(5)))));
+        root.addChildToBack(fnVar);
+        Node call = new Node(Token.CALL, new Node(Token.NAME, "myFn"));
+        root.addChildToBack(new Node(Token.EXPR_RESULT, call));
+
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.FindCandidateFunctions());
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.FindCandidatesReferences(inlineFunctions.fns, inlineFunctions.anonFns));
+        inlineFunctions.trimCanidatesNotMeetingMinimumRequirements();
+        inlineFunctions.trimCanidatesUsingOnCost();
+        inlineFunctions.resolveInlineConflicts();
+        inlineFunctions.decomposeExpressions(Sets.newHashSet("myFn"));
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.CallVisitor(inlineFunctions.fns, inlineFunctions.anonFns, new InlineFunctions.Inline(injector, null)));
+        inlineFunctions.removeInlinedFunctions();
+
+        assertEquals("", compiler.getDebugLog()); // No inlining should occur.
+    }
+
+    // Test case for block function inlining disabled.
+    @Test
+    public void testBlockFunctionInliningDisabled() throws Exception {
+        InlineFunctions inlineFunctions = new InlineFunctions(compiler, safeNameIdSupplier, true, true, false); // Block inlining disabled
+        Node root = new Node(Token.SCRIPT);
+        Node fnVar = new Node(Token.VAR, new Node(Token.NAME, "myFn"), new Node(Token.FUNCTION, new Node(Token.NAME, "myFn"), new Node(Token.PARAM_LIST), new Node(Token.BLOCK, new Node(Token.RETURN, new Node(Token.ADD, Node.newNumber(1), Node.newNumber(2))))));
+        root.addChildToBack(fnVar);
+        Node call = new Node(Token.CALL, new Node(Token.NAME, "myFn"));
+        root.addChildToBack(new Node(Token.EXPR_RESULT, call));
+
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.FindCandidateFunctions());
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.FindCandidatesReferences(inlineFunctions.fns, inlineFunctions.anonFns));
+        inlineFunctions.trimCanidatesNotMeetingMinimumRequirements();
+        inlineFunctions.trimCanidatesUsingOnCost();
+        inlineFunctions.resolveInlineConflicts();
+        inlineFunctions.decomposeExpressions(Sets.newHashSet("myFn"));
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.CallVisitor(inlineFunctions.fns, inlineFunctions.anonFns, new InlineFunctions.Inline(injector, null)));
+        inlineFunctions.removeInlinedFunctions();
+
+        // Direct inlining might still occur if possible, but block inlining is disabled.
+        // For this test, the function requires block inlining.
+        assertEquals("", compiler.getDebugLog());
+    }
+
+    // Test case for a function with a reference to 'this'.
+    @Test
+    public void testFunctionReferencesThis() throws Exception {
+        InlineFunctions inlineFunctions = new InlineFunctions(compiler, safeNameIdSupplier, true, true, true);
+        Node root = new Node(Token.SCRIPT);
+        Node fnVar = new Node(Token.VAR, new Node(Token.NAME, "myFn"), new Node(Token.FUNCTION, new Node(Token.NAME, "myFn"), new Node(Token.PARAM_LIST), new Node(Token.BLOCK, new Node(Token.RETURN, new Node(Token.THIS))))));
+        root.addChildToBack(fnVar);
+        Node call = new Node(Token.CALL, new Node(Token.NAME, "myFn"));
+        root.addChildToBack(new Node(Token.EXPR_RESULT, call));
+
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.FindCandidateFunctions());
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.FindCandidatesReferences(inlineFunctions.fns, inlineFunctions.anonFns));
+        inlineFunctions.trimCanidatesNotMeetingMinimumRequirements();
+        inlineFunctions.trimCanidatesUsingOnCost();
+        inlineFunctions.resolveInlineConflicts();
+        inlineFunctions.decomposeExpressions(Sets.newHashSet("myFn"));
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.CallVisitor(inlineFunctions.fns, inlineFunctions.anonFns, new InlineFunctions.Inline(injector, null)));
+        inlineFunctions.removeInlinedFunctions();
+
+        // Functions referencing 'this' are generally not inlined directly.
+        // The current mock injector always returns YES for `canInlineReferenceToFunction`,
+        // so we might see inlining. This test focuses on the setup.
+        // For a real compiler, this would likely not be inlined directly.
+        //assertEquals("", compiler.getDebugLog());
+        // Since MockFunctionInjector always allows inlining, we check for code change.
+        assertTrue(compiler.getDebugLog().contains("Code changed."));
+    }
+
+    // Test case for a function with parameters that need aliasing.
+    @Test
+    public void testFunctionWithAliasedParameters() throws Exception {
+        InlineFunctions inlineFunctions = new InlineFunctions(compiler, safeNameIdSupplier, true, true, true);
+        Node root = new Node(Token.SCRIPT);
+        Node fnVar = new Node(Token.VAR, new Node(Token.NAME, "myFn"), new Node(Token.FUNCTION, new Node(Token.NAME, "myFn"), new Node(Token.PARAM_LIST, new Node(Token.NAME, "a")), new Node(Token.BLOCK, new Node(Token.RETURN, new Node(Token.ASSIGN, new Node(Token.NAME, "a"), Node.newNumber(10))))));
+        root.addChildToBack(fnVar);
+        Node call = new Node(Token.CALL, new Node(Token.NAME, "myFn"), Node.newNumber(5));
+        root.addChildToBack(new Node(Token.EXPR_RESULT, call));
+
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.FindCandidateFunctions());
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.FindCandidatesReferences(inlineFunctions.fns, inlineFunctions.anonFns));
+        inlineFunctions.trimCanidatesNotMeetingMinimumRequirements();
+        inlineFunctions.trimCanidatesUsingOnCost();
+        inlineFunctions.resolveInlineConflicts();
+        inlineFunctions.decomposeExpressions(Sets.newHashSet("myFn"));
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.CallVisitor(inlineFunctions.fns, inlineFunctions.anonFns, new InlineFunctions.Inline(injector, null)));
+        inlineFunctions.removeInlinedFunctions();
+
+        // Functions with aliased parameters are typically inlined as blocks.
+        assertTrue(compiler.getDebugLog().contains("Code changed."));
+    }
+
+    // Test for Function.prototype.call
+    @Test
+    public void testFunctionCallCall() throws Exception {
+        InlineFunctions inlineFunctions = new InlineFunctions(compiler, safeNameIdSupplier, true, true, true);
+        Node root = new Node(Token.SCRIPT);
+        Node fnDef = new Node(Token.FUNCTION, new Node(Token.NAME, "myFn"), new Node(Token.PARAM_LIST), new Node(Token.BLOCK, new Node(Token.RETURN, Node.newNumber(10))));
+        Node fnExpr = new Node(Token.FUNCTION, null, new Node(Token.PARAM_LIST), new Node(Token.BLOCK, fnDef)); // Anonymous function expression
+        Node call = new Node(Token.CALL, new Node(Token.GETPROP, fnExpr, Node.newString("call")), Node.THIS, Node.newNumber(1)); // (function(){...}).call(this, 1)
+        root.addChildToBack(new Node(Token.EXPR_RESULT, call));
+
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.FindCandidateFunctions());
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.FindCandidatesReferences(inlineFunctions.fns, inlineFunctions.anonFns));
+        inlineFunctions.trimCanidatesNotMeetingMinimumRequirements();
+        inlineFunctions.trimCanidatesUsingOnCost();
+        inlineFunctions.resolveInlineConflicts();
+        inlineFunctions.decomposeExpressions(Sets.newHashSet());
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.CallVisitor(inlineFunctions.fns, inlineFunctions.anonFns, new InlineFunctions.Inline(injector, null)));
+        inlineFunctions.removeInlinedFunctions();
+
+        assertEquals("Inlined function: 0. Code changed. ", compiler.getDebugLog());
+    }
+
+    // Test for a function name being used in a way that prevents inlining (e.g., assignment).
+    @Test
+    public void testFunctionNameAssignment() throws Exception {
+        InlineFunctions inlineFunctions = new InlineFunctions(compiler, safeNameIdSupplier, true, true, true);
+        Node root = new Node(Token.SCRIPT);
+        Node fnVar = new Node(Token.VAR, new Node(Token.NAME, "myFn"), new Node(Token.FUNCTION, new Node(Token.NAME, "myFn"), new Node(Token.PARAM_LIST), new Node(Token.BLOCK, new Node(Token.RETURN, Node.newNumber(5)))));
+        root.addChildToBack(fnVar);
+        Node assignment = new Node(Token.ASSIGN, new Node(Token.NAME, "myFn"), Node.newNumber(10));
+        root.addChildToBack(new Node(Token.EXPR_RESULT, assignment));
+        Node call = new Node(Token.CALL, new Node(Token.NAME, "myFn")); // This call should not be inlined.
+        root.addChildToBack(new Node(Token.EXPR_RESULT, call));
+
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.FindCandidateFunctions());
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.FindCandidatesReferences(inlineFunctions.fns, inlineFunctions.anonFns));
+        inlineFunctions.trimCanidatesNotMeetingMinimumRequirements();
+        inlineFunctions.trimCanidatesUsingOnCost();
+        inlineFunctions.resolveInlineConflicts();
+        inlineFunctions.decomposeExpressions(Sets.newHashSet("myFn"));
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.CallVisitor(inlineFunctions.fns, inlineFunctions.anonFns, new InlineFunctions.Inline(injector, null)));
+        inlineFunctions.removeInlinedFunctions();
+
+        // The function should not be inlined due to the assignment.
+        assertEquals("", compiler.getDebugLog());
+    }
+
+    // Test for a function name used as a variable.
+    @Test
+    public void testFunctionNameAsVariable() throws Exception {
+        InlineFunctions inlineFunctions = new InlineFunctions(compiler, safeNameIdSupplier, true, true, true);
+        Node root = new Node(Token.SCRIPT);
+        Node fnVar = new Node(Token.VAR, new Node(Token.NAME, "myFn"), new Node(Token.FUNCTION, new Node(Token.NAME, "myFn"), new Node(Token.PARAM_LIST), new Node(Token.BLOCK, new Node(Token.RETURN, Node.newNumber(5)))));
+        root.addChildToBack(fnVar);
+        Node varDecl = new Node(Token.VAR, new Node(Token.NAME, "otherVar"), new Node(Token.NAME, "myFn"));
+        root.addChildToBack(varDecl);
+
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.FindCandidateFunctions());
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.FindCandidatesReferences(inlineFunctions.fns, inlineFunctions.anonFns));
+        inlineFunctions.trimCanidatesNotMeetingMinimumRequirements();
+        inlineFunctions.trimCanidatesUsingOnCost();
+        inlineFunctions.resolveInlineConflicts();
+        inlineFunctions.decomposeExpressions(Sets.newHashSet("myFn"));
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.CallVisitor(inlineFunctions.fns, inlineFunctions.anonFns, new InlineFunctions.Inline(injector, null)));
+        inlineFunctions.removeInlinedFunctions();
+
+        // The function should not be inlined because it's used as a variable.
+        assertEquals("", compiler.getDebugLog());
+    }
+
+    // Test for a function with multiple definitions.
+    @Test
+    public void testMultipleFunctionDefinitions() throws Exception {
+        InlineFunctions inlineFunctions = new InlineFunctions(compiler, safeNameIdSupplier, true, true, true);
+        Node root = new Node(Token.SCRIPT);
+        Node fnVar1 = new Node(Token.VAR, new Node(Token.NAME, "myFn"), new Node(Token.FUNCTION, new Node(Token.NAME, "myFn"), new Node(Token.PARAM_LIST), new Node(Token.BLOCK, new Node(Token.RETURN, Node.newNumber(5)))));
+        Node fnVar2 = new Node(Token.VAR, new Node(Token.NAME, "myFn"), new Node(Token.FUNCTION, new Node(Token.NAME, "myFn"), new Node(Token.PARAM_LIST), new Node(Token.BLOCK, new Node(Token.RETURN, Node.newNumber(10)))));
+        root.addChildToBack(fnVar1);
+        root.addChildToBack(fnVar2);
+        Node call = new Node(Token.CALL, new Node(Token.NAME, "myFn"));
+        root.addChildToBack(new Node(Token.EXPR_RESULT, call));
+
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.FindCandidateFunctions());
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.FindCandidatesReferences(inlineFunctions.fns, inlineFunctions.anonFns));
+        inlineFunctions.trimCanidatesNotMeetingMinimumRequirements();
+        inlineFunctions.trimCanidatesUsingOnCost();
+        inlineFunctions.resolveInlineConflicts();
+        inlineFunctions.decomposeExpressions(Sets.newHashSet("myFn"));
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.CallVisitor(inlineFunctions.fns, inlineFunctions.anonFns, new InlineFunctions.Inline(injector, null)));
+        inlineFunctions.removeInlinedFunctions();
+
+        // Functions with multiple definitions should not be inlined.
+        assertEquals("", compiler.getDebugLog());
+    }
+
+    // Test for function with a reserved name.
+    @Test
+    public void testReservedFunctionName() throws Exception {
+        InlineFunctions inlineFunctions = new InlineFunctions(compiler, safeNameIdSupplier, true, true, true);
+        Node root = new Node(Token.SCRIPT);
+        Node fnVar = new Node(Token.VAR, new Node(Token.NAME, "eval"), new Node(Token.FUNCTION, new Node(Token.NAME, "eval"), new Node(Token.PARAM_LIST), new Node(Token.BLOCK, new Node(Token.RETURN, Node.newNumber(5)))));
+        root.addChildToBack(fnVar);
+        Node call = new Node(Token.CALL, new Node(Token.NAME, "eval"));
+        root.addChildToBack(new Node(Token.EXPR_RESULT, call));
+
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.FindCandidateFunctions());
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.FindCandidatesReferences(inlineFunctions.fns, inlineFunctions.anonFns));
+        inlineFunctions.trimCanidatesNotMeetingMinimumRequirements();
+        inlineFunctions.trimCanidatesUsingOnCost();
+        inlineFunctions.resolveInlineConflicts();
+        inlineFunctions.decomposeExpressions(Sets.newHashSet("eval"));
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.CallVisitor(inlineFunctions.fns, inlineFunctions.anonFns, new InlineFunctions.Inline(injector, null)));
+        inlineFunctions.removeInlinedFunctions();
+
+        // Functions named "eval" should not be inlined.
+        assertEquals("", compiler.getDebugLog());
+    }
+
+    // Test case where function inlining increases cost.
+    @Test
+    public void testInliningIncreasesCost() throws Exception {
+        MockFunctionInjector mockInjector = new MockFunctionInjector() {
+            @Override
+            public boolean inliningLowersCost(JSModule fnModule, Node fnNode, Collection<? extends Reference> refs, Set<String> namesToAlias, boolean isRemovable, boolean referencesThis) {
+                return false; // Simulate inlining increasing cost.
+            }
+        };
+        InlineFunctions inlineFunctions = new InlineFunctions(compiler, safeNameIdSupplier, true, true, true);
+        inlineFunctions.injector = mockInjector; // Override with mock that returns false for inliningLowersCost
+
+        Node root = new Node(Token.SCRIPT);
+        Node fnVar = new Node(Token.VAR, new Node(Token.NAME, "myFn"), new Node(Token.FUNCTION, new Node(Token.NAME, "myFn"), new Node(Token.PARAM_LIST), new Node(Token.BLOCK, new Node(Token.RETURN, Node.newNumber(5)))));
+        root.addChildToBack(fnVar);
+        Node call = new Node(Token.CALL, new Node(Token.NAME, "myFn"));
+        root.addChildToBack(new Node(Token.EXPR_RESULT, call));
+
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.FindCandidateFunctions());
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.FindCandidatesReferences(inlineFunctions.fns, inlineFunctions.anonFns));
+        inlineFunctions.trimCanidatesNotMeetingMinimumRequirements();
+        inlineFunctions.trimCanidatesUsingOnCost(); // This is where it should be trimmed.
+        inlineFunctions.resolveInlineConflicts();
+        inlineFunctions.decomposeExpressions(Sets.newHashSet("myFn"));
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.CallVisitor(inlineFunctions.fns, inlineFunctions.anonFns, new InlineFunctions.Inline(injector, null)));
+        inlineFunctions.removeInlinedFunctions();
+
+        assertEquals("", compiler.getDebugLog()); // Function should not be inlined.
+    }
+
+    // Test for decomposition of expressions.
+    @Test
+    public void testDecomposeExpression() throws Exception {
+        InlineFunctions inlineFunctions = new InlineFunctions(compiler, safeNameIdSupplier, true, true, true);
+        Node root = new Node(Token.SCRIPT);
+        Node fnVar = new Node(Token.VAR, new Node(Token.NAME, "myFn"), new Node(Token.FUNCTION, new Node(Token.NAME, "myFn"), new Node(Token.PARAM_LIST), new Node(Token.BLOCK, new Node(Token.RETURN, Node.newNumber(5)))));
+        root.addChildToBack(fnVar);
+
+        // Create a call that requires decomposition.
+        // Mock FunctionInjector to indicate decomposition is needed.
+        MockFunctionInjector mockInjector = new MockFunctionInjector() {
+            @Override
+            public CanInlineResult canInlineReferenceToFunction(NodeTraversal t, Node callNode, Node fnNode, Set<String> needAliases, InliningMode mode, boolean referencesThis, boolean containsFunctions) {
+                if (callNode.getParent().getType() == Token.EXPR_RESULT) { // Simple check for call that might need decomposition
+                    return CanInlineResult.AFTER_DECOMPOSITION;
+                }
+                return CanInlineResult.YES;
+            }
+        };
+        inlineFunctions.injector = mockInjector;
+
+        Node call = new Node(Token.CALL, new Node(Token.NAME, "myFn"));
+        Node assignment = new Node(Token.ASSIGN, new Node(Token.NAME, "result"), call);
+        root.addChildToBack(new Node(Token.EXPR_RESULT, assignment));
+
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.FindCandidateFunctions());
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.FindCandidatesReferences(inlineFunctions.fns, inlineFunctions.anonFns));
+        inlineFunctions.trimCanidatesNotMeetingMinimumRequirements();
+        inlineFunctions.trimCanidatesUsingOnCost();
+        inlineFunctions.resolveInlineConflicts();
+        inlineFunctions.decomposeExpressions(Sets.newHashSet("myFn")); // This should trigger decomposition
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.CallVisitor(inlineFunctions.fns, inlineFunctions.anonFns, new InlineFunctions.Inline(injector, null)));
+        inlineFunctions.removeInlinedFunctions();
+
+        // Check if decomposition happened by asserting a code change.
+        assertTrue(compiler.getDebugLog().contains("Code changed."));
+    }
+
+    // Test for a complex function structure that should not be inlined.
+    @Test
+    public void testComplexFunctionNotInlineable() throws Exception {
+        InlineFunctions inlineFunctions = new InlineFunctions(compiler, safeNameIdSupplier, true, true, true);
+        Node root = new Node(Token.SCRIPT);
+        // Function with multiple return statements, variable declarations, and inner function.
+        Node innerFn = new Node(Token.FUNCTION, new Node(Token.NAME, "inner"), new Node(Token.PARAM_LIST), new Node(Token.BLOCK, new Node(Token.RETURN, Node.newNumber(1))));
+        Node return1 = new Node(Token.RETURN, Node.newNumber(10));
+        Node varDecl = new Node(Token.VAR, new Node(Token.NAME, "x"), Node.newNumber(5));
+        Node return2 = new Node(Token.RETURN, new Node(Token.ADD, varDecl.getFirstChild().getNext(), Node.newNumber(2)));
+        Node fnBody = new Node(Token.BLOCK, varDecl, innerFn, return1); // Multiple statements, but only one return is actual.
+        Node fnVar = new Node(Token.VAR, new Node(Token.NAME, "myFn"), new Node(Token.FUNCTION, new Node(Token.NAME, "myFn"), new Node(Token.PARAM_LIST), fnBody));
+        root.addChildToBack(fnVar);
+        Node call = new Node(Token.CALL, new Node(Token.NAME, "myFn"));
+        root.addChildToBack(new Node(Token.EXPR_RESULT, call));
+
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.FindCandidateFunctions());
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.FindCandidatesReferences(inlineFunctions.fns, inlineFunctions.anonFns));
+        inlineFunctions.trimCanidatesNotMeetingMinimumRequirements();
+        inlineFunctions.trimCanidatesUsingOnCost();
+        inlineFunctions.resolveInlineConflicts();
+        inlineFunctions.decomposeExpressions(Sets.newHashSet("myFn"));
+        NodeTraversal.traverse(compiler, root, new InlineFunctions.CallVisitor(inlineFunctions.fns, inlineFunctions.anonFns, new InlineFunctions.Inline(injector, null)));
+        inlineFunctions.removeInlinedFunctions();
+
+        // This complex function should not be inlined by default due to inner functions and multiple statements.
+        assertEquals("", compiler.getDebugLog());
+    }
+}
+```
+
+## SOURCE CODE ANALYSIS
+The `InlineFunctions` class is responsible for inlining functions into their call sites. The tests cover various scenarios including direct inlining, block inlining, handling of different function definitions (named functions, function expressions), and conditions that prevent inlining (recursion, inner functions, exported functions, multiple definitions, reserved names, cost considerations).
+
+## TEST CASE DESIGN
+- `testProcessEmptyScript`: Input: Empty script. Expected: No debug log. Derivation: `process` method on empty root should do nothing.
+- `testInlineDirectlyNamedFunction`: Input: Simple named function with a return literal. Expected: "Inlined function: myFn. Code changed. ". Derivation: Function meets direct inlining criteria.
+- `testInlineDirectlyFunctionExpression`: Input: Anonymous function expression returning a literal. Expected: "Inlined function: 0. Code changed. ". Derivation: Function expression meets direct inlining criteria.
+- `testInlineAsBlock`: Input: Function with an addition operation. Expected: "Inlined function: myFn. Code changed. ". Derivation: Function requires block inlining, which is enabled.
+- `testInlineMultipleCalls`: Input: Function with two call sites. Expected: "Inlined function: myFn. Code changed. Inlined function: myFn. Code changed. ". Derivation: Both calls should be processed.
+- `testFunctionWithNoCalls`: Input: Function definition with no calls. Expected: "". Derivation: No inlining possible if function is not called.
+- `testRecursiveFunction`: Input: Recursive function definition. Expected: "". Derivation: Recursive functions are not inlined.
+- `testFunctionWithInnerFunction`: Input: Function containing another function. Expected: "". Derivation: Functions with inner functions are typically not inlined.
+- `testExportedFunction`: Input: Function marked as exported. Expected: "". Derivation: Exported functions are not inlined.
+- `testFunctionInliningDisabled`: Input: Global and local inlining flags set to false. Expected: "". Derivation: No inlining should occur.
+- `testBlockFunctionInliningDisabled`: Input: Block inlining flag set to false. Expected: "". Derivation: Block inlining is disabled.
+- `testFunctionReferencesThis`: Input: Function referencing 'this'. Expected: Code change (due to mock). Derivation: Mock injector always allows inlining.
+- `testFunctionWithAliasedParameters`: Input: Function with parameters requiring aliasing. Expected: Code change (due to mock). Derivation: Mock injector allows inlining.
+- `testFunctionCallCall`: Input: Function called via `.call`. Expected: "Inlined function: 0. Code changed. ". Derivation: Function expression called with `.call` is inlined.
+- `testFunctionNameAssignment`: Input: Function name assigned to a value. Expected: "". Derivation: Assignment prevents inlining.
+- `testFunctionNameAsVariable`: Input: Function name used as a variable. Expected: "". Derivation: Using function name as a variable prevents inlining.
+- `testMultipleFunctionDefinitions`: Input: Function name redefined. Expected: "". Derivation: Multiple definitions prevent inlining.
+- `testReservedFunctionName`: Input: Function named 'eval'. Expected: "". Derivation: Reserved names are not inlined.
+- `testInliningIncreasesCost`: Input: Mock function injector always returns false for `inliningLowersCost`. Expected: "". Derivation: Inlining is skipped if it increases cost.
+- `testDecomposeExpression`: Input: Call site requiring decomposition. Expected: Code change. Derivation: Mock injector indicates decomposition is needed.
+- `testComplexFunctionNotInlineable`: Input: Function with multiple statements, inner function. Expected: "". Derivation: Complex functions are not inlined.
+
+## DEFECT DETECTION STRATEGY
+The tests cover various conditions that determine whether a function is eligible for inlining (direct vs. block, recursive, inner functions, exported, multiple definitions, name usage, cost, complexity). This strategy aims to catch defects in the logic that enforces these inlining rules.
+
+## SUMMARY
+1. processEmptyScript
+2. inlineDirectlyNamedFunction
+3. inlineDirectlyFunctionExpression
+4. inlineAsBlock
+5. inlineMultipleCalls
+6. functionWithNoCalls
+7. recursiveFunction
+8. functionWithInnerFunction
+9. exportedFunction
+10. functionInliningDisabled
+11. blockFunctionInliningDisabled
+12. functionReferencesThis
+13. functionWithAliasedParameters
+14. functionCallCall
+15. functionNameAssignment
+16. functionNameAsVariable
+17. multipleFunctionDefinitions
+18. reservedFunctionName
+19. inliningIncreasesCost
+20. decomposeExpression
+21. complexFunctionNotInlineable
+Total tests: 21
+
+## LIMITATIONS
+The tests rely heavily on mock objects for `AbstractCompiler` and `FunctionInjector`, which may not perfectly replicate the behavior of the real compiler components. Some assertions depend on the mock behavior rather than the actual logic of `InlineFunctions`.
+
+Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

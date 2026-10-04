@@ -1,0 +1,273 @@
+```java
+package org.apache.commons.collections.map;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.io.Serializable;
+import java.util.AbstractCollection;
+import java.util.AbstractSet;
+import java.util.Collection;
+import java.util.Iterator;
+import java.util.Map;
+import java.util.NoSuchElementException;
+import java.util.Set;
+import org.apache.commons.collections.IterableMap;
+import org.apache.commons.collections.MapIterator;
+import org.apache.commons.collections.ResettableIterator;
+import org.apache.commons.collections.iterators.EmptyIterator;
+import org.apache.commons.collections.iterators.EmptyMapIterator;
+
+public class Flat3MapTest {
+
+    @Test
+    public void testEmptyMapBasics() throws Exception {
+        Flat3Map map = new Flat3Map();
+        assertEquals(0, map.size());
+        assertTrue(map.isEmpty());
+        assertNull(map.get("absent"));
+        assertFalse(map.containsKey("absent"));
+        assertFalse(map.containsValue("absent"));
+    }
+
+    @Test
+    public void testNullKeyAndValue() throws Exception {
+        Flat3Map map = new Flat3Map();
+        assertNull(map.put(null, null));
+        assertEquals(1, map.size());
+        assertTrue(map.containsKey(null));
+        assertTrue(map.containsValue(null));
+        assertNull(map.get(null));
+        assertNull(map.put(null, "now"));
+        assertEquals("now", map.get(null));
+    }
+
+    @Test
+    public void testReplaceExistingValueAndPreserveSize() throws Exception {
+        Flat3Map map = new Flat3Map();
+        assertNull(map.put("k", "old"));
+        assertEquals("old", map.put("k", "new"));
+        assertEquals(1, map.size());
+        assertEquals("new", map.get("k"));
+    }
+
+    @Test
+    public void testThreeFlatEntriesIncludingNull() throws Exception {
+        Flat3Map map = new Flat3Map();
+        map.put("a", 1);
+        map.put(null, 2);
+        map.put("c", 3);
+        assertEquals(3, map.size());
+        assertEquals(1, map.get("a"));
+        assertEquals(2, map.get(null));
+        assertEquals(3, map.get("c"));
+        assertTrue(map.containsValue(2));
+    }
+
+    @Test
+    public void testCrossingThreeEntryLimitAndReplacing() throws Exception {
+        Flat3Map map = new Flat3Map();
+        map.put("a", 1);
+        map.put("b", 2);
+        map.put("c", 3);
+        assertNull(map.put("d", 4));
+        assertEquals(4, map.size());
+        assertEquals(2, map.put("b", 20));
+        assertEquals(4, map.size());
+        assertEquals(20, map.get("b"));
+        assertEquals(4, map.get("d"));
+    }
+
+    @Test
+    public void testRemoveFirstMiddleAndLastFlatEntry() throws Exception {
+        Flat3Map map = new Flat3Map();
+        map.put("a", 1);
+        map.put("b", 2);
+        map.put("c", 3);
+        assertEquals(1, map.remove("a"));
+        assertEquals(2, map.size());
+        assertEquals(2, map.get("b"));
+        assertEquals(3, map.get("c"));
+        assertEquals(3, map.remove("c"));
+        assertEquals(2, map.remove("b"));
+        assertTrue(map.isEmpty());
+    }
+
+    @Test
+    public void testRemoveNullKeyFromMiddle() throws Exception {
+        Flat3Map map = new Flat3Map();
+        map.put("a", 1);
+        map.put(null, 2);
+        map.put("c", 3);
+        assertEquals(2, map.remove(null));
+        assertEquals(2, map.size());
+        assertFalse(map.containsKey(null));
+        assertEquals(1, map.get("a"));
+        assertEquals(3, map.get("c"));
+    }
+
+    @Test
+    public void testRemoveMissingKeyDoesNotChangeMap() throws Exception {
+        Flat3Map map = new Flat3Map();
+        map.put("a", 1);
+        assertNull(map.remove("missing"));
+        assertEquals(1, map.size());
+        assertEquals(1, map.get("a"));
+    }
+
+    @Test
+    public void testPutAllFromSmallMap() throws Exception {
+        Map source = new java.util.HashMap();
+        source.put("a", 1);
+        source.put(null, 2);
+        Flat3Map map = new Flat3Map(source);
+        assertEquals(2, map.size());
+        assertEquals(1, map.get("a"));
+        assertEquals(2, map.get(null));
+    }
+
+    @Test
+    public void testPutAllAtAndAboveFourEntries() throws Exception {
+        Map source = new java.util.HashMap();
+        source.put("a", 1);
+        source.put("b", 2);
+        source.put("c", 3);
+        source.put("d", 4);
+        Flat3Map map = new Flat3Map();
+        map.put("prior", 0);
+        map.putAll(source);
+        assertEquals(5, map.size());
+        assertEquals(0, map.get("prior"));
+        assertEquals(4, map.get("d"));
+        assertEquals(2, map.get("b"));
+    }
+
+    @Test
+    public void testClearAfterDelegateModeAllowsReuse() throws Exception {
+        Flat3Map map = new Flat3Map();
+        map.put("a", 1);
+        map.put("b", 2);
+        map.put("c", 3);
+        map.put("d", 4);
+        map.clear();
+        assertTrue(map.isEmpty());
+        assertEquals(0, map.size());
+        assertNull(map.put("new", 5));
+        assertEquals(1, map.size());
+        assertEquals(5, map.get("new"));
+    }
+
+    @Test
+    public void testMapIteratorSetValueAndReset() throws Exception {
+        Flat3Map map = new Flat3Map();
+        map.put("a", 1);
+        map.put("b", 2);
+        MapIterator it = map.mapIterator();
+        assertEquals("a", it.next());
+        assertEquals("a", it.getKey());
+        assertEquals(1, it.getValue());
+        assertEquals(1, it.setValue(10));
+        assertEquals(10, map.get("a"));
+    }
+
+    @Test
+    public void testMapIteratorRemoveUpdatesMap() throws Exception {
+        Flat3Map map = new Flat3Map();
+        map.put("a", 1);
+        map.put("b", 2);
+        MapIterator it = map.mapIterator();
+        assertEquals("a", it.next());
+        it.remove();
+        assertEquals(1, map.size());
+        assertFalse(map.containsKey("a"));
+        assertEquals("b", it.next());
+    }
+
+    @Test
+    public void testEntrySetRemovalAndLiveSize() throws Exception {
+        Flat3Map map = new Flat3Map();
+        map.put("a", 1);
+        map.put("b", 2);
+        Set entries = map.entrySet();
+        assertEquals(2, entries.size());
+        assertTrue(entries.remove(new java.util.AbstractMap.SimpleEntry("a", 1)));
+        assertEquals(1, entries.size());
+        assertFalse(map.containsKey("a"));
+    }
+
+    @Test
+    public void testKeySetRemoveAndValuesContain() throws Exception {
+        Flat3Map map = new Flat3Map();
+        map.put("a", 1);
+        map.put("b", 2);
+        Set keys = map.keySet();
+        Collection values = map.values();
+        assertTrue(keys.contains("b"));
+        assertTrue(values.contains(1));
+        assertTrue(keys.remove("b"));
+        assertEquals(1, map.size());
+        assertFalse(values.contains(2));
+    }
+
+    @Test
+    public void testEntryIteratorEntryViewMutatesMap() throws Exception {
+        Flat3Map map = new Flat3Map();
+        map.put("k", "old");
+        Iterator it = map.entrySet().iterator();
+        Map.Entry entry = (Map.Entry) it.next();
+        assertEquals("k", entry.getKey());
+        assertEquals("old", entry.getValue());
+        assertEquals("old", entry.setValue("new"));
+        assertEquals("new", map.get("k"));
+    }
+
+    @Test
+    public void testEqualityAndHashCodeForFlatMap() throws Exception {
+        Flat3Map map = new Flat3Map();
+        map.put("a", 1);
+        map.put(null, 2);
+        Map other = new java.util.HashMap();
+        other.put("a", 1);
+        other.put(null, 2);
+        assertTrue(map.equals(other));
+        assertEquals(other.hashCode(), map.hashCode());
+        other.put("a", 3);
+        assertFalse(map.equals(other));
+    }
+
+    @Test
+    public void testToStringForEmptyAndMultipleEntries() throws Exception {
+        Flat3Map map = new Flat3Map();
+        assertEquals("{}", map.toString());
+        map.put("a", 1);
+        map.put("b", 2);
+        assertEquals("{b=2,a=1}", map.toString());
+    }
+
+    @Test
+    public void testCloneIsIndependentForFlatStorage() throws Exception {
+        Flat3Map map = new Flat3Map();
+        map.put("a", 1);
+        Flat3Map copy = (Flat3Map) map.clone();
+        assertTrue(map.equals(copy));
+        copy.put("a", 2);
+        assertEquals(1, map.get("a"));
+        assertEquals(2, copy.get("a"));
+    }
+
+    @Test
+    public void testEqualsAndHashCodeAfterDelegateTransition() throws Exception {
+        Flat3Map map = new Flat3Map();
+        Map other = new java.util.HashMap();
+        for (int i = 0; i < 4; i++) {
+            String key = "k" + i;
+            map.put(key, i);
+            other.put(key, i);
+        }
+        assertTrue(map.equals(other));
+        assertEquals(other.hashCode(), map.hashCode());
+    }
+}
+```

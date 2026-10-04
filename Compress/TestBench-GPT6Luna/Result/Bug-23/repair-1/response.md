@@ -1,0 +1,172 @@
+```java
+package org.apache.commons.compress.archivers.sevenz;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.io.FilterInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.security.GeneralSecurityException;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.Arrays;
+import java.util.zip.Deflater;
+import java.util.zip.DeflaterOutputStream;
+import java.util.zip.Inflater;
+import java.util.zip.InflaterInputStream;
+import javax.crypto.Cipher;
+import javax.crypto.CipherInputStream;
+import javax.crypto.SecretKey;
+import javax.crypto.spec.IvParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
+import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream;
+import org.apache.commons.compress.compressors.bzip2.BZip2CompressorOutputStream;
+import org.tukaani.xz.LZMAInputStream;
+
+public class CodersTest {
+    @Test
+    public void testCopyDecoderReturnsInputUnchanged() throws Exception {
+        InputStream input = new InputStream() {
+            public int read() {
+                return 42;
+            }
+        };
+        Coders.CoderBase decoder = new Coders.CopyDecoder();
+        assertSame(input, decoder.decode(input, null, null));
+    }
+
+    @Test
+    public void testCopyEncoderReturnsOutputUnchanged() throws Exception {
+        OutputStream output = new OutputStream() {
+            public void write(int value) {
+            }
+        };
+        assertSame(output, new Coders.CopyDecoder().encode(output, null));
+    }
+
+    @Test
+    public void testBaseEncoderUnsupported() throws Exception {
+        OutputStream output = new OutputStream() {
+            public void write(int value) {
+            }
+        };
+        try {
+            new Coders.DeflateDecoder().encode(output, null);
+            fail("expected UnsupportedOperationException");
+        } catch (UnsupportedOperationException expected) {
+        }
+    }
+
+    @Test
+    public void testAddEncoderCopy() throws Exception {
+        OutputStream output = new OutputStream() {
+            public void write(int value) {
+            }
+        };
+        assertSame(output, Coders.addEncoder(output, SevenZMethod.COPY, null));
+    }
+
+    @Test
+    public void testAddEncoderDeflateRoundTrip() throws Exception {
+        java.io.ByteArrayOutputStream compressed = new java.io.ByteArrayOutputStream();
+        OutputStream encoder = Coders.addEncoder(compressed, SevenZMethod.DEFLATE, null);
+        byte[] plain = new byte[] {1, 2, 3};
+        encoder.write(plain);
+        encoder.close();
+        InputStream decoded = Coders.addDecoder(
+                new java.io.ByteArrayInputStream(compressed.toByteArray()),
+                coderFor(SevenZMethod.DEFLATE), null);
+        assertEquals(1, decoded.read());
+        assertEquals(2, decoded.read());
+        assertEquals(3, decoded.read());
+        assertEquals(-1, decoded.read());
+    }
+
+    @Test
+    public void testAddEncoderUnsupported() throws Exception {
+        OutputStream output = new OutputStream() {
+            public void write(int value) {
+            }
+        };
+        try {
+            Coders.addEncoder(output, null, null);
+            fail("expected IOException");
+        } catch (IOException expected) {
+        }
+    }
+
+    @Test
+    public void testAddDecoderCopyPreservesInput() throws Exception {
+        InputStream input = new java.io.ByteArrayInputStream(new byte[] {0, 127, (byte) 255});
+        InputStream decoded = Coders.addDecoder(input, coderFor(SevenZMethod.COPY), null);
+        assertSame(input, decoded);
+        assertEquals(0, decoded.read());
+        assertEquals(127, decoded.read());
+        assertEquals(255, decoded.read());
+        assertEquals(-1, decoded.read());
+    }
+
+    @Test
+    public void testAddDecoderUnknownMethod() throws Exception {
+        Coder coder = coderFor(SevenZMethod.COPY);
+        coder.decompressionMethodId = new byte[] {99};
+        try {
+            Coders.addDecoder(new java.io.ByteArrayInputStream(new byte[0]), coder, null);
+            fail("expected IOException");
+        } catch (IOException expected) {
+        }
+    }
+
+    @Test
+    public void testAddDecoderMatchesCompleteMethodId() throws Exception {
+        Coder coder = coderFor(SevenZMethod.COPY);
+        coder.decompressionMethodId = SevenZMethod.COPY.getId().clone();
+        InputStream input = new java.io.ByteArrayInputStream(new byte[] {7});
+        assertSame(input, Coders.addDecoder(input, coder, null));
+    }
+
+    @Test
+    public void testDeflateDecoderEmptyStreamEnds() throws Exception {
+        java.io.ByteArrayOutputStream compressed = new java.io.ByteArrayOutputStream();
+        OutputStream encoder = new Coders.DeflateDecoder().encode(compressed, null);
+        encoder.close();
+        InputStream decoded = new Coders.DeflateDecoder().decode(
+                new java.io.ByteArrayInputStream(compressed.toByteArray()), null, null);
+        assertEquals(-1, decoded.read());
+    }
+
+    @Test
+    public void testDeflateDecoderDecodesFirstAndLastBytes() throws Exception {
+        java.io.ByteArrayOutputStream compressed = new java.io.ByteArrayOutputStream();
+        OutputStream encoder = new Coders.DeflateDecoder().encode(compressed, null);
+        encoder.write(new byte[] {10, 20, 30});
+        encoder.close();
+        InputStream decoded = new Coders.DeflateDecoder().decode(
+                new java.io.ByteArrayInputStream(compressed.toByteArray()), null, null);
+        assertEquals(10, decoded.read());
+        assertEquals(20, decoded.read());
+        assertEquals(30, decoded.read());
+        assertEquals(-1, decoded.read());
+    }
+
+    @Test
+    public void testLzmaRejectsDictionaryOverMaximum() throws Exception {
+        Coder coder = coderFor(SevenZMethod.LZMA);
+        coder.properties = new byte[] {0, 0, 0, 0, (byte) 0x80};
+        try {
+            new Coders.LZMADecoder().decode(new java.io.ByteArrayInputStream(new byte[0]),
+                    coder, null);
+            fail("expected IOException");
+        } catch (IOException expected) {
+        }
+    }
+
+    private static Coder coderFor(SevenZMethod method) {
+        Coder coder = new Coder();
+        coder.decompressionMethodId = method.getId();
+        coder.properties = method.getProperties();
+        return coder;
+    }
+}
+```

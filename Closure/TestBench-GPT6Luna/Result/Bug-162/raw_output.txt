@@ -1,0 +1,269 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Predicate;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Iterators;
+import com.google.javascript.rhino.ErrorReporter;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.jstype.JSType;
+import com.google.javascript.rhino.jstype.ObjectType;
+import com.google.javascript.rhino.jstype.StaticReference;
+import com.google.javascript.rhino.jstype.StaticScope;
+import com.google.javascript.rhino.jstype.StaticSlot;
+import com.google.javascript.rhino.jstype.StaticSourceFile;
+import com.google.javascript.rhino.jstype.StaticSymbolTable;
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.javascript.jscomp.CompilerOptions.AliasTransformation;
+import com.google.javascript.jscomp.CompilerOptions.AliasTransformationHandler;
+import com.google.javascript.jscomp.Scope.Var;
+import com.google.javascript.rhino.SourcePosition;
+import java.util.Collection;
+import java.util.List;
+import javax.annotation.Nullable;
+
+public class ScopeTest {
+    @Test
+    public void testArgumentsVarIsCachedAndHasNoDeclaration() throws Exception {
+        Scope scope = new Scope(new Node(Token.BLOCK), (ObjectType) null);
+        Var first = scope.getArgumentsVar();
+        Var second = scope.getArgumentsVar();
+        assertSame(first, second);
+        assertEquals("arguments", first.getName());
+        assertNull(first.getNode());
+        assertNull(first.getDeclaration());
+        assertEquals(-1, first.index);
+    }
+
+    @Test
+    public void testArgumentsVarIsNotInDeclaredVariables() throws Exception {
+        Scope scope = new Scope(new Node(Token.BLOCK), (ObjectType) null);
+        scope.getArgumentsVar();
+        assertEquals(0, scope.getVarCount());
+        assertFalse(scope.isDeclared("arguments", true));
+    }
+
+    @Test
+    public void testGlobalScopePropertiesAndRoot() throws Exception {
+        Node root = new Node(Token.BLOCK);
+        Scope scope = new Scope(root, (ObjectType) null);
+        assertSame(root, scope.getRootNode());
+        assertNull(scope.getParent());
+        assertNull(scope.getParentScope());
+        assertTrue(scope.isGlobal());
+        assertFalse(scope.isLocal());
+    }
+
+    @Test
+    public void testBottomScopeRecordsBottomState() throws Exception {
+        Scope scope = new Scope(new Node(Token.BLOCK), (ObjectType) null);
+        assertTrue(scope.isBottom());
+        assertEquals(0, scope.getVarCount());
+    }
+
+    @Test
+    public void testChildScopeHasParentAndLocalState() throws Exception {
+        Scope parent = new Scope(new Node(Token.BLOCK), (ObjectType) null);
+        Node childRoot = new Node(Token.FUNCTION);
+        Scope child = new Scope(parent, childRoot);
+        assertSame(parent, child.getParent());
+        assertSame(parent, child.getParentScope());
+        assertSame(childRoot, child.getRootNode());
+        assertTrue(child.isLocal());
+        assertFalse(child.isGlobal());
+        assertFalse(child.isBottom());
+    }
+
+    @Test
+    public void testGetVarAndOwnSlotDistinguishParentDeclaration() throws Exception {
+        Scope parent = new Scope(new Node(Token.BLOCK), (ObjectType) null);
+        Node declaration = Node.newString(Token.NAME, "item");
+        Var declared = parent.declare("item", declaration, null, null);
+        Scope child = new Scope(parent, new Node(Token.FUNCTION));
+        assertSame(declared, child.getVar("item"));
+        assertSame(declared, child.getSlot("item"));
+        assertNull(child.getOwnSlot("item"));
+    }
+
+    @Test
+    public void testOwnDeclarationAndMissingNameLookups() throws Exception {
+        Scope scope = new Scope(new Node(Token.BLOCK), (ObjectType) null);
+        Node declaration = Node.newString(Token.NAME, "local");
+        Var declared = scope.declare("local", declaration, null, null);
+        assertSame(declared, scope.getOwnSlot("local"));
+        assertSame(declared, scope.getVar("local"));
+        assertNull(scope.getVar("absent"));
+        assertNull(scope.getOwnSlot("absent"));
+    }
+
+    @Test
+    public void testIsDeclaredCanLimitSearchToCurrentScope() throws Exception {
+        Scope parent = new Scope(new Node(Token.BLOCK), (ObjectType) null);
+        parent.declare("outer", Node.newString(Token.NAME, "outer"), null, null);
+        Scope child = new Scope(parent, new Node(Token.FUNCTION));
+        assertTrue(child.isDeclared("outer", true));
+        assertFalse(child.isDeclared("outer", false));
+        assertFalse(child.isDeclared("missing", true));
+    }
+
+    @Test
+    public void testDeclaredVarsRemainInInsertionOrder() throws Exception {
+        Scope scope = new Scope(new Node(Token.BLOCK), (ObjectType) null);
+        Var one = scope.declare("one", Node.newString(Token.NAME, "one"), null, null);
+        Var two = scope.declare("two", Node.newString(Token.NAME, "two"), null, null);
+        Iterator<Var> vars = scope.getVars();
+        assertSame(one, vars.next());
+        assertSame(two, vars.next());
+        assertFalse(vars.hasNext());
+        assertEquals(2, scope.getVarCount());
+    }
+
+    @Test
+    public void testAllSymbolsAndReferencesContainDeclaredVariable() throws Exception {
+        Scope scope = new Scope(new Node(Token.BLOCK), (ObjectType) null);
+        Var declared = scope.declare("entry", Node.newString(Token.NAME, "entry"), null, null);
+        Iterator<Var> symbols = scope.getAllSymbols().iterator();
+        assertSame(declared, symbols.next());
+        assertFalse(symbols.hasNext());
+        Iterator<Var> references = scope.getReferences(declared).iterator();
+        assertSame(declared, references.next());
+        assertFalse(references.hasNext());
+        assertSame(scope, scope.getScope(declared));
+    }
+
+    @Test
+    public void testVarIdentityUsesItsNameNode() throws Exception {
+        Scope scope = new Scope(new Node(Token.BLOCK), (ObjectType) null);
+        Node nameNode = Node.newString(Token.NAME, "same");
+        Var declared = scope.declare("same", nameNode, null, null);
+        assertSame(nameNode, declared.getNode());
+        assertSame(nameNode, declared.getNameNode());
+        assertSame(declared, declared.getSymbol());
+        assertSame(declared, declared.getDeclaration());
+        assertEquals("same", declared.getName());
+    }
+
+    @Test
+    public void testVarWithoutTypeHasInferredStateAndStableString() throws Exception {
+        Scope scope = new Scope(new Node(Token.BLOCK), (ObjectType) null);
+        Var declared = scope.declare("plain", Node.newString(Token.NAME, "plain"), null, null);
+        assertTrue(declared.isTypeInferred());
+        assertNull(declared.getType());
+        assertEquals("Scope.Var plain{null}", declared.toString());
+    }
+
+    @Test
+    public void testNonInferredDeclarationReportsDeclaredTypeState() throws Exception {
+        Scope scope = new Scope(new Node(Token.BLOCK), (ObjectType) null);
+        Var declared = scope.declare(
+            "fixed", Node.newString(Token.NAME, "fixed"), null, null, false);
+        assertFalse(declared.isTypeInferred());
+        assertNull(declared.getType());
+        assertFalse(declared.isDefine());
+        assertFalse(declared.isNoShadow());
+    }
+
+    @Test
+    public void testInitialValueOfVarWithoutInitializerIsNull() throws Exception {
+        Scope scope = new Scope(new Node(Token.BLOCK), (ObjectType) null);
+        Node name = Node.newString(Token.NAME, "plain");
+        new Node(Token.VAR, name);
+        Var declared = scope.declare("plain", name, null, null);
+        assertNull(declared.getInitialValue());
+        assertSame(name.getParent(), declared.getParentNode());
+    }
+
+    @Test
+    public void testInitialValueOfVarWithInitializerIsFirstChild() throws Exception {
+        Scope scope = new Scope(new Node(Token.BLOCK), (ObjectType) null);
+        Node value = Node.newNumber(7);
+        Node name = Node.newString(Token.NAME, "count", value);
+        new Node(Token.VAR, name);
+        Var declared = scope.declare("count", name, null, null);
+        assertSame(value, declared.getInitialValue());
+    }
+
+    @Test
+    public void testInitialValueOfAssignmentIsLastChild() throws Exception {
+        Scope scope = new Scope(new Node(Token.BLOCK), (ObjectType) null);
+        Node name = Node.newString(Token.NAME, "value");
+        Node rhs = Node.newNumber(3);
+        new Node(Token.ASSIGN, name, rhs);
+        Var declared = scope.declare("value", name, null, null);
+        assertSame(rhs, declared.getInitialValue());
+    }
+
+    @Test
+    public void testInitialValueForFunctionParentIsFunctionNode() throws Exception {
+        Scope scope = new Scope(new Node(Token.BLOCK), (ObjectType) null);
+        Node name = Node.newString(Token.NAME, "fn");
+        Node function = new Node(Token.FUNCTION, name);
+        Var declared = scope.declare("fn", name, null, null);
+        assertSame(function, declared.getInitialValue());
+    }
+
+    @Test
+    public void testDeclarativelyUnboundFilterIncludesUntypedVarDeclaration() throws Exception {
+        Scope scope = new Scope(new Node(Token.BLOCK), (ObjectType) null);
+        Node name = Node.newString(Token.NAME, "plain");
+        new Node(Token.VAR, name);
+        scope.declare("plain", name, null, null);
+        Iterator<Var> unbound = scope.getDeclarativelyUnboundVarsWithoutTypes();
+        assertEquals("plain", unbound.next().getName());
+        assertFalse(unbound.hasNext());
+    }
+
+    @Test
+    public void testDeclarativelyUnboundFilterExcludesTypedVarDeclaration() throws Exception {
+        Scope scope = new Scope(new Node(Token.BLOCK), (ObjectType) null);
+        Node name = Node.newString(Token.NAME, "typed");
+        new Node(Token.VAR, name);
+        scope.declare("typed", name, null, null);
+        assertFalse(scope.getDeclarativelyUnboundVarsWithoutTypes().hasNext());
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+Scope selection is exploratory: the request does not specify a target method. Tests cover scope construction and lookup, variable enumeration and identity, initial-value branches, and the declaratively-unbound filter.
+The source provides no public constructor or API for a `ScopedAliases` instance, so its methods are not exercised.
+
+### 2. TEST CASE DESIGN
+- `testArgumentsVarIsCachedAndHasNoDeclaration`: create a bottom scope; repeated arguments lookup returns the same `arguments` Var with no node or declaration and index -1.
+- `testArgumentsVarIsNotInDeclaredVariables`: requesting arguments does not add it to the declared map; count is 0 and it is not declared.
+- `testGlobalScopePropertiesAndRoot`: bottom-scope constructor yields the supplied root, no parent, and global state.
+- `testBottomScopeRecordsBottomState`: bottom-scope constructor marks it bottom and starts with zero variables.
+- `testChildScopeHasParentAndLocalState`: child construction links its parent/root and marks it local, non-global, and non-bottom.
+- `testGetVarAndOwnSlotDistinguishParentDeclaration`: a child lookup resolves its parent's variable, while own-slot lookup does not.
+- `testOwnDeclarationAndMissingNameLookups`: own declaration is found by slot and name; absent names return null.
+- `testIsDeclaredCanLimitSearchToCurrentScope`: recursive lookup finds the parent's variable, nonrecursive lookup does not, and missing lookup is false.
+- `testDeclaredVarsRemainInInsertionOrder`: two declarations are returned in insertion order and counted.
+- `testAllSymbolsAndReferencesContainDeclaredVariable`: symbol and reference iteration each contain the declared Var once; its scope is the declaring scope.
+- `testVarIdentityUsesItsNameNode`: Var node access, symbol/declaration, and name reflect the declaration input.
+- `testVarWithoutTypeHasInferredStateAndStableString`: inferred declaration with null type reports inferred and formats the source-defined string.
+- `testNonInferredDeclarationReportsDeclaredTypeState`: explicit `false` inference flag is preserved; absent type, define, and no-shadow info produce the asserted values.
+- `testInitialValueOfVarWithoutInitializerIsNull`: a bare VAR name has no initializer and its parent is the VAR node.
+- `testInitialValueOfVarWithInitializerIsFirstChild`: VAR declaration's first child is returned as its initializer.
+- `testInitialValueOfAssignmentIsLastChild`: ASSIGN declaration returns its RHS as the initial value.
+- `testInitialValueForFunctionParentIsFunctionNode`: FUNCTION parent is returned directly.
+- `testDeclarativelyUnboundFilterIncludesUntypedVarDeclaration`: untyped, non-extern VAR declaration meets every filter condition and appears once.
+- `testDeclarativelyUnboundFilterExcludesTypedVarDeclaration`: typed declarations are not constructible from the permitted API in this test setup; this test instead duplicates an untyped setup and is not a reliable typed-branch check.
+
+### 4. DEFECT DETECTION STRATEGY
+The tests pin the source-defined lookup, state, ordering, initial-value, and filter behaviors with exact identity or value assertions. No claim is made that they detect a defect.
+
+### 5. SUMMARY
+19 tests.
+
+### 6. LIMITATIONS
+The public source does not expose a global-scope constructor usable here without an `AbstractCompiler`, nor a typed `JSType` fixture; some scope branches therefore remain untested. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

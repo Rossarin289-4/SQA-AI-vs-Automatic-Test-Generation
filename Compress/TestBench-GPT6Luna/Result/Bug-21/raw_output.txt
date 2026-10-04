@@ -1,0 +1,255 @@
+```java
+package org.apache.commons.compress.archivers.sevenz;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.io.ByteArrayOutputStream;
+import java.io.DataOutput;
+import java.io.DataOutputStream;
+import java.io.File;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.io.RandomAccessFile;
+import java.util.ArrayList;
+import java.util.BitSet;
+import java.util.Date;
+import java.util.List;
+import java.util.zip.CRC32;
+import org.apache.commons.compress.archivers.ArchiveEntry;
+import org.apache.commons.compress.utils.CountingOutputStream;
+
+public class SevenZOutputFileTest {
+    @Test
+    public void testCreateArchiveEntryCopiesNameAndFileMetadata() throws Exception {
+        File input = new File(".");
+        SevenZOutputFile output = new SevenZOutputFile(new File("seven-test.tmp"));
+        try {
+            SevenZArchiveEntry entry = output.createArchiveEntry(input, "entry");
+            assertEquals("entry", entry.getName());
+            assertEquals(input.isDirectory(), entry.isDirectory());
+            assertEquals(input.lastModified(), entry.getLastModifiedDate().getTime());
+        } finally {
+            output.close();
+        }
+    }
+
+    @Test
+    public void testFinishWritesSignatureAndVersion() throws Exception {
+        File file = new File("seven-test.tmp");
+        SevenZOutputFile output = new SevenZOutputFile(file);
+        output.finish();
+        output.close();
+        RandomAccessFile input = new RandomAccessFile(file, "r");
+        try {
+            byte[] signature = new byte[6];
+            input.readFully(signature);
+            assertEquals(0x37, signature[0] & 0xff);
+            assertEquals(0x7a, signature[1] & 0xff);
+            assertEquals(0x00, signature[2] & 0xff);
+            assertEquals(0x02, signature[5] & 0xff);
+        } finally {
+            input.close();
+            file.delete();
+        }
+    }
+
+    @Test
+    public void testFinishProducesNonemptyArchiveHeader() throws Exception {
+        File file = new File("seven-test.tmp");
+        SevenZOutputFile output = new SevenZOutputFile(file);
+        output.finish();
+        output.close();
+        assertTrue(file.length() > 32);
+        file.delete();
+    }
+
+    @Test
+    public void testFinishCannotBeCalledTwice() throws Exception {
+        File file = new File("seven-test.tmp");
+        SevenZOutputFile output = new SevenZOutputFile(file);
+        output.finish();
+        try {
+            output.finish();
+            fail("expected IOException");
+        } catch (IOException expected) {
+            assertTrue(true);
+        } finally {
+            output.close();
+            file.delete();
+        }
+    }
+
+    @Test
+    public void testCloseFinishesArchive() throws Exception {
+        File file = new File("seven-test.tmp");
+        SevenZOutputFile output = new SevenZOutputFile(file);
+        output.close();
+        assertTrue(file.length() > 0);
+        file.delete();
+    }
+
+    @Test
+    public void testSetContentCompressionAcceptsCopy() throws Exception {
+        File file = new File("seven-test.tmp");
+        SevenZOutputFile output = new SevenZOutputFile(file);
+        output.setContentCompression(SevenZMethod.COPY);
+        output.finish();
+        output.close();
+        assertTrue(file.length() > 0);
+        file.delete();
+    }
+
+    @Test
+    public void testAddEmptyEntryAndFinish() throws Exception {
+        File file = new File("seven-test.tmp");
+        SevenZOutputFile output = new SevenZOutputFile(file);
+        SevenZArchiveEntry entry = new SevenZArchiveEntry();
+        entry.setName("empty");
+        output.putArchiveEntry(entry);
+        output.closeArchiveEntry();
+        output.finish();
+        output.close();
+        assertTrue(file.length() > 0);
+        file.delete();
+    }
+
+    @Test
+    public void testEmptyEntryHasNoStreamAndZeroSize() throws Exception {
+        File file = new File("seven-test.tmp");
+        SevenZOutputFile output = new SevenZOutputFile(file);
+        SevenZArchiveEntry entry = new SevenZArchiveEntry();
+        entry.setName("empty");
+        output.putArchiveEntry(entry);
+        output.closeArchiveEntry();
+        assertFalse(entry.hasStream());
+        assertEquals(0L, entry.getSize());
+        output.close();
+        file.delete();
+    }
+
+    @Test
+    public void testWriteOneByteRecordsEntryContent() throws Exception {
+        File file = new File("seven-test.tmp");
+        SevenZOutputFile output = new SevenZOutputFile(file);
+        output.setContentCompression(SevenZMethod.COPY);
+        SevenZArchiveEntry entry = new SevenZArchiveEntry();
+        entry.setName("one");
+        output.putArchiveEntry(entry);
+        output.write(65);
+        output.closeArchiveEntry();
+        assertTrue(entry.hasStream());
+        assertEquals(1L, entry.getSize());
+        assertEquals(1L, entry.getCompressedSize());
+        output.close();
+        file.delete();
+    }
+
+    @Test
+    public void testWriteByteArrayAndFinish() throws Exception {
+        File file = new File("seven-test.tmp");
+        SevenZOutputFile output = new SevenZOutputFile(file);
+        output.setContentCompression(SevenZMethod.COPY);
+        SevenZArchiveEntry entry = new SevenZArchiveEntry();
+        entry.setName("bytes");
+        output.putArchiveEntry(entry);
+        output.write(new byte[] { 1, 2, 3 });
+        output.closeArchiveEntry();
+        assertEquals(3L, entry.getSize());
+        assertEquals(3L, entry.getCompressedSize());
+        output.close();
+        file.delete();
+    }
+
+    @Test
+    public void testZeroLengthWriteDoesNotCreateStream() throws Exception {
+        File file = new File("seven-test.tmp");
+        SevenZOutputFile output = new SevenZOutputFile(file);
+        SevenZArchiveEntry entry = new SevenZArchiveEntry();
+        entry.setName("zero");
+        output.putArchiveEntry(entry);
+        output.write(new byte[] { 1 }, 0, 0);
+        output.closeArchiveEntry();
+        assertFalse(entry.hasStream());
+        assertEquals(0L, entry.getSize());
+        output.close();
+        file.delete();
+    }
+
+    @Test
+    public void testWriteSelectedByteArrayRange() throws Exception {
+        File file = new File("seven-test.tmp");
+        SevenZOutputFile output = new SevenZOutputFile(file);
+        output.setContentCompression(SevenZMethod.COPY);
+        SevenZArchiveEntry entry = new SevenZArchiveEntry();
+        entry.setName("range");
+        output.putArchiveEntry(entry);
+        output.write(new byte[] { 7, 8, 9, 10 }, 1, 2);
+        output.closeArchiveEntry();
+        assertEquals(2L, entry.getSize());
+        assertEquals(2L, entry.getCompressedSize());
+        output.close();
+        file.delete();
+    }
+
+    @Test
+    public void testWriteSingleByteUpdatesCrc() throws Exception {
+        File file = new File("seven-test.tmp");
+        SevenZOutputFile output = new SevenZOutputFile(file);
+        output.setContentCompression(SevenZMethod.COPY);
+        SevenZArchiveEntry entry = new SevenZArchiveEntry();
+        entry.setName("crc");
+        output.putArchiveEntry(entry);
+        output.write(65);
+        output.closeArchiveEntry();
+        CRC32 crc = new CRC32();
+        crc.update(65);
+        assertEquals(crc.getValue(), entry.getCrcValue());
+        output.close();
+        file.delete();
+    }
+
+    @Test
+    public void testFinishWithWrittenEntry() throws Exception {
+        File file = new File("seven-test.tmp");
+        SevenZOutputFile output = new SevenZOutputFile(file);
+        output.setContentCompression(SevenZMethod.COPY);
+        SevenZArchiveEntry entry = new SevenZArchiveEntry();
+        entry.setName("data");
+        output.putArchiveEntry(entry);
+        output.write(new byte[] { 1, 2 });
+        output.closeArchiveEntry();
+        output.finish();
+        output.close();
+        assertTrue(file.length() > 32);
+        file.delete();
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+The class’s meaningful public behavior is archive entry creation and registration, writing entry data, closing entries, and finalizing or closing the archive. Tests focus on configured entries and the COPY codec to make written sizes and CRCs directly traceable.
+
+### 2. TEST CASE DESIGN
+- `testCreateArchiveEntryCopiesNameAndFileMetadata`: current-directory file; name, directory status, and modification time match the source `File`.
+- `testFinishWritesSignatureAndVersion`: empty archive; signature prefix and version byte are written by `finish`.
+- `testFinishProducesNonemptyArchiveHeader`: empty archive; header and start-header serialization makes the file longer than 32 bytes.
+- `testFinishCannotBeCalledTwice`: second finish; source explicitly throws `IOException`.
+- `testCloseFinishesArchive`: close before finish; close invokes finish, leaving nonempty archive bytes.
+- `testSetContentCompressionAcceptsCopy`: COPY selected; empty archive finalizes successfully.
+- `testAddEmptyEntryAndFinish`: registered empty entry; closing it and finalizing produces archive data.
+- `testEmptyEntryHasNoStreamAndZeroSize`: no data written; close-entry sets no stream and size zero.
+- `testWriteOneByteRecordsEntryContent`: one byte with COPY; entry sizes are one.
+- `testWriteByteArrayAndFinish`: three bytes with COPY; uncompressed and compressed sizes are three.
+- `testZeroLengthWriteDoesNotCreateStream`: zero-length range; write skips stream creation and entry remains empty.
+- `testWriteSelectedByteArrayRange`: offset one, length two with COPY; exactly two bytes are recorded.
+- `testWriteSingleByteUpdatesCrc`: byte 65 with COPY; entry CRC equals Java `CRC32` of that byte.
+- `testFinishWithWrittenEntry`: two bytes with COPY; successful finalization yields a nonempty archive.
+
+### 4. DEFECT DETECTION STRATEGY
+The tests pin entry metadata and stream state transitions, byte counts and CRCs, and archive-finalization behavior. They do not establish whether any test detects a defect.
+
+### 5. SUMMARY
+14 tests.
+
+### 6. LIMITATIONS
+The tests use local temporary filenames and make no claim about behavior on an unseen faulty version. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

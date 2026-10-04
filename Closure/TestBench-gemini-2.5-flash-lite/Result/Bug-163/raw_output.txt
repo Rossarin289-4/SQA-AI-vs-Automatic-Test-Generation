@@ -1,0 +1,896 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Preconditions;
+import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.common.collect.Sets;
+import com.google.javascript.jscomp.NodeTraversal.AbstractPostOrderCallback;
+import com.google.javascript.jscomp.Scope.Var;
+import com.google.javascript.jscomp.graph.FixedPointGraphTraversal;
+import com.google.javascript.jscomp.graph.LinkedDirectedGraph;
+import com.google.javascript.jscomp.graph.FixedPointGraphTraversal.EdgeCallback;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import java.util.ArrayDeque;
+import java.util.Collection;
+import java.util.Deque;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.Stack;
+import com.google.javascript.jscomp.AnalyzePrototypeProperties.NameInfo;
+import com.google.javascript.jscomp.AnalyzePrototypeProperties.Property;
+import com.google.javascript.jscomp.AnalyzePrototypeProperties.Symbol;
+import com.google.javascript.rhino.IR;
+import java.io.Serializable;
+import java.util.Iterator;
+import java.util.logging.Logger;
+
+public class AnalyzePrototypePropertiesTest {
+    // Mock compiler and module graph for testing
+    private static class MockCompiler implements AbstractCompiler {
+        @Override
+        public Node getNodeForCodeInsertion(JSModule module) {
+            return IR.script(); // Dummy node
+        }
+
+        @Override
+        public void report(JSError error) {}
+
+        @Override
+        public void reportCodeChange() {}
+
+        @Override
+        public JSModuleGraph getModuleGraph() {
+            // For simplicity, assume no module graph if null is passed.
+            return null;
+        }
+
+        @Override
+        public CodingConvention getCodingConvention() {
+            // Mock a coding convention that does not export anything by default.
+            return new CodingConvention() {
+                @Override
+                public String extractPackageName(Node node) { return null; }
+                @Override
+                public String extractClassName(Node node) { return null; }
+                @Override
+                public String extractInterfaceName(Node node) { return null; }
+                @Override
+                public boolean isAbstractMethod(Node node) { return false; }
+                @Override
+                public String getAbstractMethodName(Node node) { return null; }
+                @Override
+                public String getPropertySignature(Node node) { return null; }
+                @Override
+                public String getPropertyConvention(String name) { return null; }
+                @Override
+                public String getExportedNamespace(Node node) { return null; }
+                @Override
+                public String getGlobalObject(Node node) { return null; }
+                @Override
+                public boolean isGlobalAccessible(String name) { return false; }
+                @Override
+                public boolean isExported(String name) { return false; }
+                @Override
+                public void declare(NodeTraversal t, Var var, Node value) {}
+                @Override
+                public String getCtorName(Node node) { return null; }
+                @Override
+                public String getGlobalObject(String name) { return null; }
+                @Override
+                public String getQualifiedName(Node node) { return null; }
+                @Override
+                public String getSource (Node node) { return null; }
+                @Override
+                public String[] getImportNamespace(Node node) { return null; }
+                @Override
+                public boolean isInterface(Node node) { return false; }
+                @Override
+                public boolean isInnerClass(Node node) { return false; }
+                @Override
+                public boolean isPrivate(Node node) { return false; }
+                @Override
+                public boolean isConstructor(Node node) { return false; }
+                @Override
+                public String getThisName(Node node) { return null; }
+                @Override
+                public String getVarSignature(Node node) { return null; }
+                @Override
+                public String getArgSignature(Node node) { return null; }
+                @Override
+                public String getPrototypeClassName(Node node) { return null; }
+                @Override
+                public String getPrototypePropertyName(Node node) { return null; }
+                @Override
+                public String getSetterKey(Node node) { return null; }
+                @Override
+                public String getGetterKey(Node node) { return null; }
+                @Override
+                public String getCallSignature(Node node) { return null; }
+                @Override
+                public String getSuperclassName(Node node) { return null; }
+                @Override
+                public void validateDeclaration(Node node) {}
+                @Override
+                public void declare(NodeTraversal t, Var var) {}
+            };
+        }
+        
+        @Override
+        public void setErrorManager(ErrorManager errorManager) {}
+
+        @Override
+        public boolean isIdeMode() { return false; }
+
+        @Override
+        public Node parseSyntheticCode(String code) {
+            return IR.script(); // Dummy node
+        }
+    }
+
+    private static class MockJSModuleGraph extends JSModuleGraph {
+        MockJSModuleGraph() {
+            super(Lists.newArrayList()); // Empty list of modules
+        }
+    }
+
+    private static class MockIdGenerator extends CrossModuleMethodMotion.IdGenerator {
+        private int idCounter = 0;
+        @Override
+        public int newId() {
+            return idCounter++;
+        }
+        @Override
+        public boolean hasGeneratedAnyIds() {
+            return idCounter > 0;
+        }
+    }
+
+    private static AbstractCompiler compiler = new MockCompiler();
+    private static JSModule module1 = new JSModule("module1");
+    private static JSModule module2 = new JSModule("module2");
+    private static MockJSModuleGraph moduleGraph = new MockJSModuleGraph();
+    private static MockIdGenerator idGenerator = new MockIdGenerator();
+
+    // Helper to create a Node for a property assignment.
+    private Node createPropAssign(String objName, String propName, Node value) {
+        Node prop = IR.string(propName);
+        Node getProp = IR.getprop(IR.name(objName), prop);
+        Node assign = IR.assign(getProp, value);
+        return IR.exprResult(assign);
+    }
+
+    // Helper to create a Node for a function declaration.
+    private Node createFunctionNode(String name, Node... bodyStmts) {
+        Node body = IR.block(bodyStmts);
+        Node fn = IR.function(IR.name(name), IR.paramList(), body);
+        return fn;
+    }
+
+    // Helper to create a Node for a var declaration.
+    private Node createVarNode(String name, Node value) {
+        return IR.var(IR.name(name), value);
+    }
+
+    @Test
+    public void testImplicitlyUsedProperties() throws Exception {
+        Node externs = IR.script();
+        Node root = IR.script();
+        AnalyzePrototypeProperties pass = new AnalyzePrototypeProperties(compiler, null, false, false);
+        pass.process(externs, root);
+
+        // Check if "length", "toString", "valueOf" are added as extern references.
+        NameInfo lengthInfo = pass.propertyNameInfo.get("length");
+        assertNotNull(lengthInfo);
+        assertTrue(lengthInfo.isReferenced());
+        assertEquals(1, lengthInfo.getDeclarations().size()); // Should have a declaration (from externs)
+
+        NameInfo toStringInfo = pass.propertyNameInfo.get("toString");
+        assertNotNull(toStringInfo);
+        assertTrue(toStringInfo.isReferenced());
+
+        NameInfo valueOfInfo = pass.propertyNameInfo.get("valueOf");
+        assertNotNull(valueOfInfo);
+        assertTrue(valueOfInfo.isReferenced());
+    }
+
+    @Test
+    public void testGlobalReference() throws Exception {
+        Node externs = IR.script();
+        Node root = IR.script(IR.exprResult(IR.name("globalVar"))); // Access globalVar
+        AnalyzePrototypeProperties pass = new AnalyzePrototypeProperties(compiler, null, false, false);
+        pass.process(externs, root);
+
+        NameInfo globalVarInfo = pass.varNameInfo.get("globalVar");
+        assertNotNull(globalVarInfo);
+        assertTrue(globalVarInfo.isReferenced());
+    }
+
+    @Test
+    public void testPropertyNameInfoCreation() throws Exception {
+        Node root = IR.script(
+            createPropAssign("Foo", "bar", IR.string("value"))
+        );
+        AnalyzePrototypeProperties pass = new AnalyzePrototypeProperties(compiler, null, false, false);
+        pass.process(IR.script(), root);
+
+        NameInfo barInfo = pass.propertyNameInfo.get("bar");
+        assertNotNull(barInfo);
+        assertEquals("bar", barInfo.name);
+        assertEquals(1, barInfo.getDeclarations().size());
+    }
+
+    @Test
+    public void testVarNameInfoCreation() throws Exception {
+        Node root = IR.script(
+            createVarNode("myVar", IR.string("value"))
+        );
+        AnalyzePrototypeProperties pass = new AnalyzePrototypeProperties(compiler, null, false, false);
+        pass.process(IR.script(), root);
+
+        NameInfo myVarInfo = pass.varNameInfo.get("myVar");
+        assertNotNull(myVarInfo);
+        assertEquals("myVar", myVarInfo.name);
+        assertEquals(1, myVarInfo.getDeclarations().size());
+    }
+
+    @Test
+    public void testSymbolUseDirectAssignment() throws Exception {
+        Node root = IR.script(
+            createPropAssign("Foo", "bar", IR.string("value"))
+        );
+        AnalyzePrototypeProperties pass = new AnalyzePrototypeProperties(compiler, null, false, false);
+        pass.process(IR.script(), root);
+
+        NameInfo barInfo = pass.propertyNameInfo.get("bar");
+        assertNotNull(barInfo);
+        assertTrue(barInfo.isReferenced());
+    }
+
+    @Test
+    public void testSymbolUseInObjectLit() throws Exception {
+        Node root = IR.script(
+            IR.var(IR.name("obj"), IR.objectlit(
+                IR.string("prop1"), IR.string("val1"),
+                IR.string("prop2"), IR.string("val2")
+            ))
+        );
+        AnalyzePrototypeProperties pass = new AnalyzePrototypeProperties(compiler, null, false, false);
+        pass.process(IR.script(), root);
+
+        NameInfo prop1Info = pass.propertyNameInfo.get("prop1");
+        assertNotNull(prop1Info);
+        assertTrue(prop1Info.isReferenced());
+
+        NameInfo prop2Info = pass.propertyNameInfo.get("prop2");
+        assertNotNull(prop2Info);
+        assertTrue(prop2Info.isReferenced());
+    }
+
+    @Test
+    public void testSymbolUseInName() throws Exception {
+        Node root = IR.script(
+            createVarNode("foo", IR.name("bar"))
+        );
+        AnalyzePrototypeProperties pass = new AnalyzePrototypeProperties(compiler, null, false, false);
+        pass.process(IR.script(), root);
+
+        NameInfo barInfo = pass.varNameInfo.get("bar"); // Assuming 'bar' is a var
+        assertNotNull(barInfo);
+        assertTrue(barInfo.isReferenced());
+    }
+
+    @Test
+    public void testPrototypeReference() throws Exception {
+        Node root = IR.script(
+            IR.assign(
+                IR.getprop(IR.name("Foo"), IR.string("prototype")),
+                IR.objectlit(IR.string("bar"), IR.string("value"))
+            )
+        );
+        AnalyzePrototypeProperties pass = new AnalyzePrototypeProperties(compiler, null, false, false);
+        pass.process(IR.script(), root);
+
+        NameInfo barInfo = pass.propertyNameInfo.get("bar");
+        assertNotNull(barInfo);
+        assertTrue(barInfo.isReferenced());
+        assertEquals(1, barInfo.getDeclarations().size());
+    }
+
+    @Test
+    public void testPrototypeAssignmentToFunction() throws Exception {
+        Node functionBody = IR.block(IR.returnNode(IR.string("hello")));
+        Node function = IR.function(IR.name("myFunc"), IR.paramList(), functionBody);
+        Node root = IR.script(
+            createPropAssign("Foo", "bar", function)
+        );
+        AnalyzePrototypeProperties pass = new AnalyzePrototypeProperties(compiler, null, false, false);
+        pass.process(IR.script(), root);
+
+        NameInfo barInfo = pass.propertyNameInfo.get("bar");
+        assertNotNull(barInfo);
+        assertTrue(barInfo.isReferenced());
+        assertEquals(1, barInfo.getDeclarations().size());
+        assertTrue(barInfo.getDeclarations().peek() instanceof AnalyzePrototypeProperties.AssignmentProperty);
+    }
+
+    @Test
+    public void testGlobalFunctionDeclaration() throws Exception {
+        Node functionBody = IR.block(IR.returnNode(IR.string("global")));
+        Node function = IR.function(IR.name("globalFunc"), IR.paramList(), functionBody);
+        Node root = IR.script(createVarNode("globalFunc", function));
+
+        AnalyzePrototypeProperties pass = new AnalyzePrototypeProperties(compiler, null, false, false);
+        pass.process(IR.script(), root);
+
+        NameInfo globalFuncInfo = pass.varNameInfo.get("globalFunc");
+        assertNotNull(globalFuncInfo);
+        assertTrue(globalFuncInfo.isReferenced());
+        assertEquals(1, globalFuncInfo.getDeclarations().size());
+        assertTrue(globalFuncInfo.getDeclarations().peek() instanceof AnalyzePrototypeProperties.GlobalFunction);
+    }
+
+    @Test
+    public void testAnonymousFunctionWithNoName() throws Exception {
+        Node root = IR.script(
+            createVarNode("foo", IR.function(null, IR.paramList(), IR.block()))
+        );
+        AnalyzePrototypeProperties pass = new AnalyzePrototypeProperties(compiler, null, false, false);
+        pass.process(IR.script(), root);
+
+        // Anonymous functions should not create new NameInfo instances, but should be handled.
+        // They are represented by the anonymousNode.
+        NameInfo anonymousInfo = pass.symbolGraph.getNode(pass.anonymousNode).getValue();
+        assertNotNull(anonymousInfo);
+    }
+
+    @Test
+    public void testGetPropOnPrototype() throws Exception {
+        Node root = IR.script(
+            IR.assign(
+                IR.getprop(IR.getprop(IR.name("Foo"), IR.string("prototype")), IR.string("bar")),
+                IR.string("value")
+            )
+        );
+        AnalyzePrototypeProperties pass = new AnalyzePrototypeProperties(compiler, null, false, false);
+        pass.process(IR.script(), root);
+
+        NameInfo barInfo = pass.propertyNameInfo.get("bar");
+        assertNotNull(barInfo);
+        assertTrue(barInfo.isReferenced());
+    }
+
+    @Test
+    public void testGlobalFunctionInGlobalScope() throws Exception {
+        Node functionBody = IR.block(IR.returnNode(IR.string("global")));
+        Node function = IR.function(IR.name("globalFunc"), IR.paramList(), functionBody);
+        Node root = IR.script(function); // Function declaration at top level
+
+        AnalyzePrototypeProperties pass = new AnalyzePrototypeProperties(compiler, null, false, false);
+        pass.process(IR.script(), root);
+
+        NameInfo globalFuncInfo = pass.varNameInfo.get("globalFunc");
+        assertNotNull(globalFuncInfo);
+        assertTrue(globalFuncInfo.isReferenced());
+        assertEquals(1, globalFuncInfo.getDeclarations().size());
+    }
+
+    @Test
+    public void testGetPropOnProtoChain() throws Exception {
+        Node root = IR.script(
+            createPropAssign("Foo", "bar",
+                IR.call(IR.getprop(IR.name("Foo"), IR.string("prototype")))
+            )
+        );
+        AnalyzePrototypeProperties pass = new AnalyzePrototypeProperties(compiler, null, false, false);
+        pass.process(IR.script(), root);
+
+        NameInfo barInfo = pass.propertyNameInfo.get("bar");
+        assertNotNull(barInfo);
+        assertTrue(barInfo.isReferenced());
+    }
+
+    @Test
+    public void testLiteralPropertyInObjectLit() throws Exception {
+        Node map = IR.objectlit(
+            IR.string("key1"), IR.string("value1"),
+            IR.string("key2"), IR.number(123)
+        );
+        Node assign = IR.assign(
+            IR.getprop(IR.name("Foo"), IR.string("prototype")),
+            map
+        );
+        Node root = IR.script(assign);
+
+        AnalyzePrototypeProperties pass = new AnalyzePrototypeProperties(compiler, null, false, false);
+        pass.process(IR.script(), root);
+
+        NameInfo key1Info = pass.propertyNameInfo.get("key1");
+        assertNotNull(key1Info);
+        assertTrue(key1Info.isReferenced());
+        assertEquals(1, key1Info.getDeclarations().size());
+        assertTrue(key1Info.getDeclarations().peek() instanceof AnalyzePrototypeProperties.LiteralProperty);
+
+        NameInfo key2Info = pass.propertyNameInfo.get("key2");
+        assertNotNull(key2Info);
+        assertTrue(key2Info.isReferenced());
+        assertEquals(1, key2Info.getDeclarations().size());
+        assertTrue(key2Info.getDeclarations().peek() instanceof AnalyzePrototypeProperties.LiteralProperty);
+    }
+
+    @Test
+    public void testPrototypePropertyAccessedViaGetProp() throws Exception {
+        Node root = IR.script(
+            IR.exprResult(
+                IR.getprop(IR.name("Foo"), IR.string("bar"))
+            )
+        );
+        AnalyzePrototypeProperties pass = new AnalyzePrototypeProperties(compiler, null, false, false);
+        pass.process(IR.script(), root);
+
+        NameInfo barInfo = pass.propertyNameInfo.get("bar");
+        assertNotNull(barInfo);
+        assertTrue(barInfo.isReferenced());
+    }
+
+    @Test
+    public void testGlobalFunctionAccessedViaName() throws Exception {
+        Node functionBody = IR.block(IR.returnNode(IR.string("global")));
+        Node function = IR.function(IR.name("globalFunc"), IR.paramList(), functionBody);
+        Node root = IR.script(
+            createVarNode("caller", IR.call(IR.name("globalFunc")))
+        );
+        AnalyzePrototypeProperties pass = new AnalyzePrototypeProperties(compiler, null, false, false);
+        pass.process(IR.script(), root);
+
+        NameInfo globalFuncInfo = pass.varNameInfo.get("globalFunc");
+        assertNotNull(globalFuncInfo);
+        assertTrue(globalFuncInfo.isReferenced());
+    }
+
+    @Test
+    public void testImplicitlyUsedPropertiesInExterns() throws Exception {
+        Node externs = IR.script(
+            IR.exprResult(IR.getprop(IR.name("Object"), IR.string("toString")))
+        );
+        AnalyzePrototypeProperties pass = new AnalyzePrototypeProperties(compiler, null, false, false);
+        pass.process(externs, IR.script());
+
+        NameInfo toStringInfo = pass.propertyNameInfo.get("toString");
+        assertNotNull(toStringInfo);
+        assertTrue(toStringInfo.isReferenced()); // Should be marked as referenced from externs
+    }
+
+    @Test
+    public void testNonFunctionPrototypeAssignment() throws Exception {
+        Node root = IR.script(
+            createPropAssign("Foo", "bar", IR.string("just a string"))
+        );
+        AnalyzePrototypeProperties pass = new AnalyzePrototypeProperties(compiler, null, false, false);
+        pass.process(IR.script(), root);
+
+        NameInfo barInfo = pass.propertyNameInfo.get("bar");
+        assertNotNull(barInfo);
+        assertTrue(barInfo.isReferenced());
+        assertEquals(1, barInfo.getDeclarations().size());
+        assertTrue(barInfo.getDeclarations().peek() instanceof AnalyzePrototypeProperties.AssignmentProperty);
+    }
+
+    @Test
+    public void testComplexPrototypeChains() throws Exception {
+        Node protoAssign = IR.assign(
+            IR.getprop(IR.name("Bar"), IR.string("prototype")),
+            IR.objectlit(IR.string("baz"), IR.string("value"))
+        );
+        Node classDef = IR.var(IR.name("Foo"), IR.function(IR.name("Foo"), IR.paramList(), IR.block()));
+        Node propAssign = createPropAssign("Foo", "bar", IR.name("Bar").getParent()); // Foo.bar = Bar.prototype
+        Node root = IR.script(classDef, protoAssign, propAssign);
+
+        AnalyzePrototypeProperties pass = new AnalyzePrototypeProperties(compiler, null, false, false);
+        pass.process(IR.script(), root);
+
+        NameInfo bazInfo = pass.propertyNameInfo.get("baz");
+        assertNotNull(bazInfo);
+        assertTrue(bazInfo.isReferenced());
+
+        NameInfo barInfo = pass.propertyNameInfo.get("bar");
+        assertNotNull(barInfo);
+        assertTrue(barInfo.isReferenced());
+    }
+
+    @Test
+    public void testPropagateReferencesWithModules() throws Exception {
+        JSModuleGraph moduleGraphWithModules = new JSModuleGraph(Lists.newArrayList(module1, module2));
+        AnalyzePrototypeProperties pass = new AnalyzePrototypeProperties(compiler, moduleGraphWithModules, false, false);
+
+        // Module 1: Foo.prototype.bar = function() {};
+        Node fn1 = IR.function(null, IR.paramList(), IR.block());
+        Node assign1 = IR.assign(
+            IR.getprop(IR.getprop(IR.name("Foo"), IR.string("prototype")), IR.string("bar")),
+            fn1);
+        Node root1 = IR.script(assign1);
+        NodeTraversal.traverse(compiler, root1, new NodeTraversal.ScopedCallback() {
+            @Override
+            public void enterScope(NodeTraversal t) {}
+            @Override
+            public void exitScope(NodeTraversal t) {}
+            @Override
+            public boolean shouldTraverse(NodeTraversal t, Node n, Node parent) { return true; }
+            @Override
+            public void visit(NodeTraversal t, Node n, Node parent) {
+                if (n.isFunction() && n.getParent() == assign1) {
+                    pass.visit(t, n, parent);
+                }
+            }
+        });
+        // This setup is complex. We need to manually connect the symbol graph for demonstration.
+        // In a real scenario, NodeTraversal would populate this.
+        NameInfo barInfo = pass.getNameInfoForName("bar", SymbolType.PROPERTY);
+        barInfo.markReference(module1); // Simulate reference in module1
+
+        // Module 2: Foo.prototype.bar();
+        Node call1 = IR.call(IR.getprop(IR.name("Foo"), IR.string("bar")));
+        Node root2 = IR.script(call1);
+        NodeTraversal.traverse(compiler, root2, new NodeTraversal.ScopedCallback() {
+            @Override
+            public void enterScope(NodeTraversal t) {}
+            @Override
+            public void exitScope(NodeTraversal t) {}
+            @Override
+            public boolean shouldTraverse(NodeTraversal t, Node n, Node parent) { return true; }
+            @Override
+            public void visit(NodeTraversal t, Node n, Node parent) {
+                if (n.isGetProp() && n.getParent() == call1) {
+                     pass.visit(t, n, parent);
+                }
+            }
+        });
+        
+        // After traversal and fixed point computation
+        FixedPointGraphTraversal<NameInfo, JSModule> t =
+            FixedPointGraphTraversal.newTraversal(new AnalyzePrototypeProperties.PropagateReferences());
+        t.computeFixedPoint(pass.symbolGraph, Sets.newHashSet(pass.externNode, pass.globalNode));
+
+        // Assuming Foo.prototype.bar is declared in module1 and referenced in module2.
+        // The deepest common module should be module1.
+        assertEquals(module1, barInfo.getDeepestCommonModuleRef());
+    }
+
+    @Test
+    public void testReadClosureVariables() throws Exception {
+        Node outerVar = IR.name("outerVar");
+        Node innerFnBody = IR.block(IR.returnNode(outerVar));
+        Node innerFn = IR.function(null, IR.paramList(), innerFnBody);
+        Node root = IR.script(
+            IR.var(IR.name("outerVar"), IR.string("value")),
+            IR.exprResult(innerFn)
+        );
+
+        AnalyzePrototypeProperties pass = new AnalyzePrototypeProperties(compiler, null, false, false);
+        pass.process(IR.script(), root);
+
+        // The NameInfo for "outerVar" should be marked as reading closure variables.
+        NameInfo outerVarInfo = pass.varNameInfo.get("outerVar");
+        assertNotNull(outerVarInfo);
+        // This is tricky because outerVar is accessed within an anonymous function,
+        // the `readClosureVariables` flag is set on the `NameContext` of the function,
+        // not directly on the `NameInfo` of the variable.
+        // The `ProcessProperties.visit` method updates `readClosureVariables` on the `NameContext`.
+        // To test this, we'd need to introspect the `NameContext` stack, which is internal.
+        // A proxy for this is that `readsClosureVariables()` on `NameInfo` might be true if it's part of a closure.
+        // However, the current `NameInfo` class doesn't directly expose this from the `NameContext`.
+        // The `readsClosureVariables` flag on `NameInfo` is set by `ProcessProperties.visit`.
+        // We can check if `outerVarInfo` itself is marked as reading closure variables,
+        // although the current implementation of `readsClosureVariables` on `NameInfo`
+        // is set within `ProcessProperties.visit`.
+        // The logic is: if a function reads a variable from an outer scope, that function's context
+        // will have `readClosureVariables` set to true. Then, if `outerVar` is accessed within this closure,
+        // `outerVar`'s `NameInfo` should reflect this.
+        // The `readClosureVariables` flag on `NameInfo` is intended for this.
+        // Let's assume the `visit` method correctly sets it on `NameInfo`.
+        // A more robust test would require access to internal state or a mock of `NameContext`.
+        // For now, we'll assume the flag `readClosureVariables` on `NameInfo` indicates this.
+        // If the `NameInfo` class doesn't have such a flag, this test is moot.
+        // Looking at `AnalyzePrototypeProperties.NameInfo`, it has `readClosureVariables`.
+        assertTrue(outerVarInfo.readsClosureVariables());
+    }
+
+    @Test
+    public void testGlobalFunctionExported() throws Exception {
+        // Mock compiler to indicate "globalFunc" is exported.
+        MockCompiler exportingCompiler = new MockCompiler() {
+            @Override
+            public CodingConvention getCodingConvention() {
+                return new MockCodingConvention() {
+                    @Override
+                    public boolean isExported(String name) {
+                        return "globalFunc".equals(name);
+                    }
+                };
+            }
+        };
+
+        Node functionBody = IR.block(IR.returnNode(IR.string("global")));
+        Node function = IR.function(IR.name("globalFunc"), IR.paramList(), functionBody);
+        Node root = IR.script(function);
+
+        AnalyzePrototypeProperties pass = new AnalyzePrototypeProperties(exportingCompiler, null, false, false);
+        pass.process(IR.script(), root);
+
+        NameInfo globalFuncInfo = pass.varNameInfo.get("globalFunc");
+        assertNotNull(globalFuncInfo);
+        assertTrue(globalFuncInfo.isReferenced()); // Should be marked as referenced due to export.
+    }
+
+    @Test
+    public void testAnchorUnusedVars() throws Exception {
+        MockCompiler anchoringCompiler = new MockCompiler() {
+            @Override
+            public CodingConvention getCodingConvention() {
+                return new MockCodingConvention(); // No exports
+            }
+        };
+
+        Node unusedVar = IR.var(IR.name("unusedVar"), IR.string("value"));
+        Node root = IR.script(unusedVar);
+
+        // Pass anchorUnusedVars = true
+        AnalyzePrototypeProperties pass = new AnalyzePrototypeProperties(anchoringCompiler, null, false, true);
+        pass.process(IR.script(), root);
+
+        NameInfo unusedVarInfo = pass.varNameInfo.get("unusedVar");
+        assertNotNull(unusedVarInfo);
+        assertTrue(unusedVarInfo.isReferenced()); // Should be marked as referenced due to anchorUnusedVars.
+    }
+
+    @Test
+    public void testAssignmentPropertyRemoval() throws Exception {
+        Node functionNode = IR.function(null, IR.paramList(), IR.block());
+        Node exprAssign = IR.exprResult(
+            IR.assign(
+                IR.getprop(IR.getprop(IR.name("Foo"), IR.string("prototype")), IR.string("bar")),
+                functionNode
+            )
+        );
+        Node root = IR.script(exprAssign);
+
+        AnalyzePrototypeProperties pass = new AnalyzePrototypeProperties(compiler, null, false, false);
+        pass.process(IR.script(), root);
+
+        NameInfo barInfo = pass.propertyNameInfo.get("bar");
+        AnalyzePrototypeProperties.Property prop = barInfo.getDeclarations().peek();
+        assertNotNull(prop);
+        assertTrue(prop instanceof AnalyzePrototypeProperties.AssignmentProperty);
+        
+        // Simulate removing the property
+        prop.remove();
+        // This is hard to assert directly without AST manipulation and re-parsing.
+        // The test here verifies that the Property object is correctly created and holds relevant nodes.
+        // Asserting actual removal would require checking the AST for the node's absence,
+        // which is beyond the scope of just analyzing the `AnalyzePrototypeProperties` class.
+        // We check that getValue() and getPrototype() return correct nodes.
+        assertEquals(functionNode, prop.getValue());
+        assertEquals(IR.getprop(IR.getprop(IR.name("Foo"), IR.string("prototype")), IR.string("bar")),
+                     exprAssign.getFirstChild().getFirstChild().getFirstChild()); // Accessing nested nodes
+    }
+
+    @Test
+    public void testLiteralPropertyRemoval() throws Exception {
+        Node valueNode = IR.string("value");
+        Node keyNode = IR.string("baz");
+        Node mapNode = IR.objectlit(keyNode, valueNode);
+        Node assignNode = IR.assign(IR.getprop(IR.name("Foo"), IR.string("prototype")), mapNode);
+        Node root = IR.script(assignNode);
+
+        AnalyzePrototypeProperties pass = new AnalyzePrototypeProperties(compiler, null, false, false);
+        pass.process(IR.script(), root);
+
+        NameInfo bazInfo = pass.propertyNameInfo.get("baz");
+        AnalyzePrototypeProperties.Property prop = bazInfo.getDeclarations().peek();
+        assertNotNull(prop);
+        assertTrue(prop instanceof AnalyzePrototypeProperties.LiteralProperty);
+
+        // Simulate removing the property
+        prop.remove();
+        // Similar to AssignmentProperty removal, direct AST assertion is complex.
+        // We check if the correct nodes are returned by getter methods.
+        assertEquals(valueNode, prop.getValue());
+        assertEquals(IR.getprop(IR.name("Foo"), IR.string("prototype")), prop.getPrototype());
+        assertNull(mapNode.getLastChild()); // The key should be removed from the map
+    }
+
+    @Test
+    public void testGlobalFunctionRemoval() throws Exception {
+        Node functionNode = IR.function(IR.name("globalFunc"), IR.paramList(), IR.block());
+        Node varNode = IR.var(IR.name("globalFunc"), functionNode);
+        Node root = IR.script(varNode);
+
+        AnalyzePrototypeProperties pass = new AnalyzePrototypeProperties(compiler, null, false, false);
+        pass.process(IR.script(), root);
+
+        NameInfo globalFuncInfo = pass.varNameInfo.get("globalFunc");
+        AnalyzePrototypeProperties.Symbol sym = globalFuncInfo.getDeclarations().peek();
+        assertNotNull(sym);
+        assertTrue(sym instanceof AnalyzePrototypeProperties.GlobalFunction);
+
+        // Simulate removing the function
+        sym.remove();
+        // Asserting AST removal is complex. Check getter.
+        assertEquals(functionNode.getParent(), varNode); // functionNode is child of varNode
+    }
+
+    @Test
+    public void testNameInfoEquality() throws Exception {
+        NameInfo info1 = new NameInfo("testName");
+        NameInfo info2 = new NameInfo("testName");
+        NameInfo info3 = new NameInfo("otherName");
+
+        assertEquals(info1, info2);
+        assertNotEquals(info1, info3);
+        assertEquals(info1.hashCode(), info2.hashCode());
+        assertNotEquals(info1.hashCode(), info3.hashCode());
+    }
+
+    @Test
+    public void testNameInfoMarkReference() throws Exception {
+        NameInfo info = new NameInfo("testName");
+        assertFalse(info.isReferenced());
+        
+        info.markReference(null); // reference without module
+        assertTrue(info.isReferenced());
+    }
+
+    @Test
+    public void testNameInfoDeepestCommonModuleRef() throws Exception {
+        MockJSModuleGraph multiModuleGraph = new MockJSModuleGraph();
+        JSModule m1 = new JSModule("m1");
+        JSModule m2 = new JSModule("m2");
+        JSModule m3 = new JSModule("m3");
+        multiModuleGraph.addModule(m1);
+        multiModuleGraph.addModule(m2);
+        multiModuleGraph.addModule(m3);
+        // Simulate dependencies: m3 depends on m2, m2 depends on m1
+        m2.addDependency(m1);
+        m3.addDependency(m2);
+
+        // AnalyzePrototypeProperties needs a real JSModuleGraph for this to work properly.
+        // For this test, we simulate the behavior of `getDeepestCommonDependencyInclusive`.
+        AnalyzePrototypeProperties pass = new AnalyzePrototypeProperties(compiler, multiModuleGraph, false, false);
+        
+        NameInfo info = new NameInfo("testName");
+        
+        // Mark reference in m1
+        info.markReference(m1);
+        assertEquals(m1, info.getDeepestCommonModuleRef());
+
+        // Mark reference in m2
+        // In a real scenario, this would be calculated by moduleGraph.getDeepestCommonDependencyInclusive(m1, m2)
+        // which should return m1.
+        info.markReference(m2);
+        assertEquals(m1, info.getDeepestCommonModuleRef()); // Assuming m1 is the common ancestor
+
+        // Mark reference in m3
+        // Again, simulating moduleGraph calculation. Common ancestor of m1, m2, m3 is m1.
+        info.markReference(m3);
+        assertEquals(m1, info.getDeepestCommonModuleRef());
+    }
+
+    // Mock CodingConvention for testing purposes
+    private static class MockCodingConvention implements CodingConvention {
+        @Override
+        public String extractPackageName(Node node) { return null; }
+        @Override
+        public String extractClassName(Node node) { return null; }
+        @Override
+        public String extractInterfaceName(Node node) { return null; }
+        @Override
+        public boolean isAbstractMethod(Node node) { return false; }
+        @Override
+        public String getAbstractMethodName(Node node) { return null; }
+        @Override
+        public String getPropertySignature(Node node) { return null; }
+        @Override
+        public String getPropertyConvention(String name) { return null; }
+        @Override
+        public String getExportedNamespace(Node node) { return null; }
+        @Override
+        public String getGlobalObject(Node node) { return null; }
+        @Override
+        public boolean isGlobalAccessible(String name) { return false; }
+        @Override
+        public boolean isExported(String name) { return false; }
+        @Override
+        public void declare(NodeTraversal t, Var var, Node value) {}
+        @Override
+        public String getCtorName(Node node) { return null; }
+        @Override
+        public String getGlobalObject(String name) { return null; }
+        @Override
+        public String getQualifiedName(Node node) { return null; }
+        @Override
+        public String getSource (Node node) { return null; }
+        @Override
+        public String[] getImportNamespace(Node node) { return null; }
+        @Override
+        public boolean isInterface(Node node) { return false; }
+        @Override
+        public boolean isInnerClass(Node node) { return false; }
+        @Override
+        public boolean isPrivate(Node node) { return false; }
+        @Override
+        public boolean isConstructor(Node node) { return false; }
+        @Override
+        public String getThisName(Node node) { return null; }
+        @Override
+        public String getVarSignature(Node node) { return null; }
+        @Override
+        public String getArgSignature(Node node) { return null; }
+        @Override
+        public String getPrototypeClassName(Node node) { return null; }
+        @Override
+        public String getPrototypePropertyName(Node node) { return null; }
+        @Override
+        public String getSetterKey(Node node) { return null; }
+        @Override
+        public String getGetterKey(Node node) { return null; }
+        @Override
+        public String getCallSignature(Node node) { return null; }
+        @Override
+        public String getSuperclassName(Node node) { return null; }
+        @Override
+        public void validateDeclaration(Node node) {}
+        @Override
+        public void declare(NodeTraversal t, Var var) {}
+    }
+}
+```
+
+**SOURCE CODE ANALYSIS**
+The tests cover the creation and usage of `NameInfo` objects for properties and variables. They verify how prototype properties are declared and referenced, how global functions are handled, and the basic mechanics of `NameInfo` and its relationship with symbol graph construction, including implicit references and closure variable tracking.
+
+**TEST CASE DESIGN**
+1. `testImplicitlyUsedProperties`: Asserts that "length", "toString", "valueOf" are recognized as implicitly used properties.
+2. `testGlobalReference`: Checks if accessing a global variable marks its `NameInfo` as referenced.
+3. `testPropertyNameInfoCreation`: Verifies that `NameInfo` is created for prototype properties.
+4. `testVarNameInfoCreation`: Verifies that `NameInfo` is created for variables.
+5. `testSymbolUseDirectAssignment`: Tests that direct assignment to a property marks its `NameInfo` as referenced.
+6. `testSymbolUseInObjectLit`: Checks if properties in object literals are recognized and their `NameInfo` marked as referenced.
+7. `testSymbolUseInName`: Verifies that variable references correctly mark their `NameInfo`.
+8. `testPrototypeReference`: Tests the parsing of `Foo.prototype = {...}` and subsequent property referencing.
+9. `testPrototypeAssignmentToFunction`: Checks handling of prototype assignments where the value is a function.
+10. `testGlobalFunctionDeclaration`: Verifies detection and processing of global function declarations.
+11. `testAnonymousFunctionWithNoName`: Ensures anonymous functions are handled without creating named `NameInfo` entries.
+12. `testGetPropOnPrototype`: Tests direct access to properties on `Foo.prototype`.
+13. `testGlobalFunctionInGlobalScope`: Checks global function declarations at the top level.
+14. `testGetPropOnProtoChain`: Tests property access on prototype chains.
+15. `testLiteralPropertyInObjectLit`: Verifies properties defined within object literals assigned to prototypes.
+16. `testPrototypePropertyAccessedViaGetProp`: Tests accessing prototype properties through `getprop`.
+17. `testGlobalFunctionAccessedViaName`: Checks if global functions accessed by name are marked.
+18. `testImplicitlyUsedPropertiesInExterns`: Ensures implicitly used properties in externs are handled.
+19. `testNonFunctionPrototypeAssignment`: Tests assignments of non-function values to prototype properties.
+20. `testComplexPrototypeChains`: Covers more intricate prototype assignments and references.
+21. `testPropagateReferencesWithModules`: Simulates module dependencies and reference propagation.
+22. `testReadClosureVariables`: Checks if `readClosureVariables` flag is set correctly when inner functions access outer scope variables.
+23. `testGlobalFunctionExported`: Verifies that exported global functions are marked as referenced.
+24. `testAnchorUnusedVars`: Tests that `anchorUnusedVars` option correctly marks unused variables.
+25. `testAssignmentPropertyRemoval`: Verifies the `remove` method of `AssignmentProperty`.
+26. `testLiteralPropertyRemoval`: Verifies the `remove` method of `LiteralProperty`.
+27. `testGlobalFunctionRemoval`: Verifies the `remove` method of `GlobalFunction`.
+28. `testNameInfoEquality`: Asserts correct `equals` and `hashCode` for `NameInfo`.
+29. `testNameInfoMarkReference`: Tests the `markReference` functionality of `NameInfo`.
+30. `testNameInfoDeepestCommonModuleRef`: Simulates and checks the calculation of `deepestCommonModuleRef`.
+
+**DEFECT DETECTION STRATEGY**
+The tests focus on the accurate identification of property and variable declarations and references, including their scope and module context. They verify the correct creation and manipulation of `NameInfo` objects, which are central to the prototype property analysis. Defects in distinguishing between different types of property assignments, incorrect scope tracking, or flawed reference propagation would be targeted.
+
+**SUMMARY**
+30 tests were written.
+
+**LIMITATIONS**
+Mock objects were used for `AbstractCompiler`, `JSModuleGraph`, and `CodingConvention` to isolate the testing of `AnalyzePrototypeProperties`. The AST manipulation assertions for `remove()` methods are limited to checking getter return values due to the complexity of asserting AST modifications. The module dependency logic in `testNameInfoDeepestCommonModuleRef` is simulated due to the need for a properly configured `JSModuleGraph`.
+Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

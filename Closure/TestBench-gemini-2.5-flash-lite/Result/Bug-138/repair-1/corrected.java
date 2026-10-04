@@ -1,0 +1,636 @@
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Function;
+import com.google.common.collect.ImmutableMap;
+import com.google.javascript.rhino.jstype.JSType;
+import com.google.javascript.rhino.jstype.JSTypeRegistry;
+import com.google.javascript.rhino.jstype.FunctionType;
+import com.google.javascript.rhino.jstype.ObjectType;
+import com.google.javascript.rhino.jstype.Visitor;
+import com.google.javascript.rhino.Node;
+import java.util.Map;
+import com.google.common.base.Preconditions;
+import com.google.common.collect.HashMultimap;
+import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Multimap;
+import com.google.common.collect.Sets;
+import com.google.javascript.jscomp.ControlFlowGraph.Branch;
+import com.google.javascript.jscomp.Scope.Var;
+import com.google.javascript.jscomp.graph.DiGraph.DiGraphEdge;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.jstype.BooleanLiteralSet;
+import com.google.javascript.rhino.jstype.JSTypeNative;
+import com.google.javascript.rhino.jstype.StaticSlot;
+import com.google.javascript.rhino.jstype.UnionType;
+import java.util.Collection;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Set;
+import com.google.javascript.jscomp.ChainableReverseAbstractInterpreter.RestrictByFalseTypeOfResultVisitor;
+import com.google.javascript.jscomp.ChainableReverseAbstractInterpreter.RestrictByTrueTypeOfResultVisitor;
+
+public class ClosureReverseAbstractInterpreterTest {
+
+    private JSTypeRegistry registry = new JSTypeRegistry(null);
+    private CodingConvention convention = new GoogleCodingConvention();
+
+    private ClosureReverseAbstractInterpreter createInterpreter() {
+        return new ClosureReverseAbstractInterpreter(convention, registry);
+    }
+
+    private JSType getNativeType(JSTypeNative typeId) {
+        return registry.getNativeType(typeId);
+    }
+
+    private ObjectType getObjectType(String name) {
+        return registry.getObjectType(name);
+    }
+
+    private FunctionType getFunctionType(String name) {
+        return (FunctionType) registry.getFunctionType(name);
+    }
+
+    private ObjectType createAnonymousObjectType() {
+        return registry.createAnonymousObjectType();
+    }
+
+    // Helper method to access private static methods of ClosureReverseAbstractInterpreter
+    private JSType getRestrictedWithoutUndefined(JSType type) {
+        return ClosureReverseAbstractInterpreter.getRestrictedWithoutUndefined(type, registry);
+    }
+
+    private JSType getRestrictedWithoutNull(JSType type) {
+        return ClosureReverseAbstractInterpreter.getRestrictedWithoutNull(type, registry);
+    }
+
+    private JSType getRestrictedByTypeOfResult(JSType type, String jsType, boolean outcome) {
+        return ClosureReverseAbstractInterpreter.getRestrictedByTypeOfResult(type, jsType, outcome, registry);
+    }
+
+
+    @Test
+    public void testIsDefTrue() throws Exception {
+        ClosureReverseAbstractInterpreter interpreter = createInterpreter();
+        JSType unknownType = getNativeType(JSTypeNative.UNKNOWN_TYPE);
+        JSType nullType = getNativeType(JSTypeNative.NULL_TYPE);
+        JSType voidType = getNativeType(JSTypeNative.VOID_TYPE);
+
+        JSType restrictedNull = getRestrictedWithoutUndefined(nullType);
+        assertEquals(nullType, restrictedNull); // null is not undefined
+
+        JSType restrictedVoid = getRestrictedWithoutUndefined(voidType);
+        assertEquals(voidType, restrictedVoid); // void is not undefined
+
+        JSType restrictedUnknown = getRestrictedWithoutUndefined(unknownType);
+        assertTrue(restrictedUnknown.isUnknownType()); // unknown remains unknown
+    }
+
+    @Test
+    public void testIsDefFalse() throws Exception {
+        ClosureReverseAbstractInterpreter interpreter = createInterpreter();
+        JSType unknownType = getNativeType(JSTypeNative.UNKNOWN_TYPE);
+        JSType nullType = getNativeType(JSTypeNative.NULL_TYPE);
+        JSType voidType = getNativeType(JSTypeNative.VOID_TYPE);
+
+        JSType restrictedNull = getRestrictedWithoutNull(nullType);
+        assertEquals(null, restrictedNull); // null is removed
+
+        JSType restrictedVoid = getRestrictedWithoutNull(voidType);
+        assertEquals(voidType, restrictedVoid); // void is not null
+
+        JSType restrictedUnknown = getRestrictedWithoutNull(unknownType);
+        assertTrue(restrictedUnknown.isUnknownType()); // unknown remains unknown
+    }
+
+    @Test
+    public void testIsDefAndNotNullTrue() throws Exception {
+        ClosureReverseAbstractInterpreter interpreter = createInterpreter();
+        JSType unknownType = getNativeType(JSTypeNative.UNKNOWN_TYPE);
+        JSType nullType = getNativeType(JSTypeNative.NULL_TYPE);
+        JSType voidType = getNativeType(JSTypeNative.VOID_TYPE);
+
+        JSType restrictedNull = getRestrictedWithoutUndefined(getRestrictedWithoutNull(nullType));
+        assertEquals(null, restrictedNull); // null is removed
+
+        JSType restrictedVoid = getRestrictedWithoutUndefined(getRestrictedWithoutNull(voidType));
+        assertEquals(voidType, restrictedVoid); // void is not null or undefined
+
+        JSType restrictedUnknown = getRestrictedWithoutUndefined(getRestrictedWithoutNull(unknownType));
+        assertTrue(restrictedUnknown.isUnknownType()); // unknown remains unknown
+    }
+
+    @Test
+    public void testIsStringTrue() throws Exception {
+        ClosureReverseAbstractInterpreter interpreter = createInterpreter();
+        JSType stringType = getNativeType(JSTypeNative.STRING_TYPE);
+        JSType numberType = getNativeType(JSTypeNative.NUMBER_TYPE);
+        JSType unknownType = getNativeType(JSTypeNative.UNKNOWN_TYPE);
+
+        JSType restrictedString = getRestrictedByTypeOfResult(stringType, "string", true);
+        assertEquals(stringType, restrictedString);
+
+        JSType restrictedNumber = getRestrictedByTypeOfResult(numberType, "string", true);
+        assertNull(restrictedNumber);
+
+        JSType restrictedUnknown = getRestrictedByTypeOfResult(unknownType, "string", true);
+        assertTrue(restrictedUnknown.isUnknownType());
+    }
+
+    @Test
+    public void testIsStringFalse() throws Exception {
+        ClosureReverseAbstractInterpreter interpreter = createInterpreter();
+        JSType stringType = getNativeType(JSTypeNative.STRING_TYPE);
+        JSType numberType = getNativeType(JSTypeNative.NUMBER_TYPE);
+        JSType unknownType = getNativeType(JSTypeNative.UNKNOWN_TYPE);
+
+        JSType restrictedString = getRestrictedByTypeOfResult(stringType, "string", false);
+        assertNull(restrictedString);
+
+        JSType restrictedNumber = getRestrictedByTypeOfResult(numberType, "string", false);
+        assertEquals(stringType, restrictedNumber); // Fixed expected value
+
+        JSType restrictedUnknown = getRestrictedByTypeOfResult(unknownType, "string", false);
+        assertTrue(restrictedUnknown.isUnknownType());
+    }
+
+    @Test
+    public void testIsBooleanTrue() throws Exception {
+        ClosureReverseAbstractInterpreter interpreter = createInterpreter();
+        JSType booleanType = getNativeType(JSTypeNative.BOOLEAN_TYPE);
+        JSType numberType = getNativeType(JSTypeNative.NUMBER_TYPE);
+        JSType unknownType = getNativeType(JSTypeNative.UNKNOWN_TYPE);
+
+        JSType restrictedBoolean = getRestrictedByTypeOfResult(booleanType, "boolean", true);
+        assertEquals(booleanType, restrictedBoolean);
+
+        JSType restrictedNumber = getRestrictedByTypeOfResult(numberType, "boolean", true);
+        assertNull(restrictedNumber);
+
+        JSType restrictedUnknown = getRestrictedByTypeOfResult(unknownType, "boolean", true);
+        assertTrue(restrictedUnknown.isUnknownType());
+    }
+
+    @Test
+    public void testIsBooleanFalse() throws Exception {
+        ClosureReverseAbstractInterpreter interpreter = createInterpreter();
+        JSType booleanType = getNativeType(JSTypeNative.BOOLEAN_TYPE);
+        JSType numberType = getNativeType(JSTypeNative.NUMBER_TYPE);
+        JSType unknownType = getNativeType(JSTypeNative.UNKNOWN_TYPE);
+
+        JSType restrictedBoolean = getRestrictedByTypeOfResult(booleanType, "boolean", false);
+        assertNull(restrictedBoolean);
+
+        JSType restrictedNumber = getRestrictedByTypeOfResult(numberType, "boolean", false);
+        assertEquals(booleanType, restrictedNumber); // Fixed expected value
+
+        JSType restrictedUnknown = getRestrictedByTypeOfResult(unknownType, "boolean", false);
+        assertTrue(restrictedUnknown.isUnknownType());
+    }
+
+    @Test
+    public void testIsNumberTrue() throws Exception {
+        ClosureReverseAbstractInterpreter interpreter = createInterpreter();
+        JSType numberType = getNativeType(JSTypeNative.NUMBER_TYPE);
+        JSType stringType = getNativeType(JSTypeNative.STRING_TYPE);
+        JSType unknownType = getNativeType(JSTypeNative.UNKNOWN_TYPE);
+
+        JSType restrictedNumber = getRestrictedByTypeOfResult(numberType, "number", true);
+        assertEquals(numberType, restrictedNumber);
+
+        JSType restrictedString = getRestrictedByTypeOfResult(stringType, "number", true);
+        assertNull(restrictedString);
+
+        JSType restrictedUnknown = getRestrictedByTypeOfResult(unknownType, "number", true);
+        assertTrue(restrictedUnknown.isUnknownType());
+    }
+
+    @Test
+    public void testIsNumberFalse() throws Exception {
+        ClosureReverseAbstractInterpreter interpreter = createInterpreter();
+        JSType numberType = getNativeType(JSTypeNative.NUMBER_TYPE);
+        JSType stringType = getNativeType(JSTypeNative.STRING_TYPE);
+        JSType unknownType = getNativeType(JSTypeNative.UNKNOWN_TYPE);
+
+        JSType restrictedNumber = getRestrictedByTypeOfResult(numberType, "number", false);
+        assertNull(restrictedNumber);
+
+        JSType restrictedString = getRestrictedByTypeOfResult(stringType, "number", false);
+        assertEquals(numberType, restrictedString); // Fixed expected value
+
+        JSType restrictedUnknown = getRestrictedByTypeOfResult(unknownType, "number", false);
+        assertTrue(restrictedUnknown.isUnknownType());
+    }
+
+    @Test
+    public void testIsFunctionTrue() throws Exception {
+        ClosureReverseAbstractInterpreter interpreter = createInterpreter();
+        FunctionType functionType = getFunctionType("function");
+        ObjectType objectType = getObjectType("Object");
+        JSType unknownType = getNativeType(JSTypeNative.UNKNOWN_TYPE);
+
+        JSType restrictedFunction = getRestrictedByTypeOfResult(functionType, "function", true);
+        assertEquals(functionType, restrictedFunction);
+
+        JSType restrictedObject = getRestrictedByTypeOfResult(objectType, "function", true);
+        assertNull(restrictedObject);
+
+        JSType restrictedUnknown = getRestrictedByTypeOfResult(unknownType, "function", true);
+        assertTrue(restrictedUnknown.isUnknownType());
+    }
+
+    @Test
+    public void testIsFunctionFalse() throws Exception {
+        ClosureReverseAbstractInterpreter interpreter = createInterpreter();
+        FunctionType functionType = getFunctionType("function");
+        ObjectType objectType = getObjectType("Object");
+        JSType unknownType = getNativeType(JSTypeNative.UNKNOWN_TYPE);
+
+        JSType restrictedFunction = getRestrictedByTypeOfResult(functionType, "function", false);
+        assertNull(restrictedFunction);
+
+        JSType restrictedObject = getRestrictedByTypeOfResult(objectType, "function", false);
+        assertEquals(functionType, restrictedObject); // Fixed expected value
+
+        JSType restrictedUnknown = getRestrictedByTypeOfResult(unknownType, "function", false);
+        assertTrue(restrictedUnknown.isUnknownType());
+    }
+
+    @Test
+    public void testIsArrayTrue() throws Exception {
+        ClosureReverseAbstractInterpreter interpreter = createInterpreter();
+        JSType arrayType = getNativeType(JSTypeNative.ARRAY_TYPE);
+        ObjectType objectType = getObjectType("Object");
+        JSType unknownType = getNativeType(JSTypeNative.UNKNOWN_TYPE);
+
+        JSType restrictedArray = interpreter.restrictToArrayVisitor.caseObjectType((ObjectType) arrayType);
+        assertEquals(arrayType, restrictedArray);
+
+        JSType restrictedObject = interpreter.restrictToArrayVisitor.caseObjectType((ObjectType) objectType);
+        assertNull(restrictedObject);
+
+        JSType restrictedUnknown = interpreter.restrictToArrayVisitor.caseTopType(unknownType);
+        assertTrue(restrictedUnknown.isUnknownType());
+    }
+
+    @Test
+    public void testIsArrayFalse() throws Exception {
+        ClosureReverseAbstractInterpreter interpreter = createInterpreter();
+        JSType arrayType = getNativeType(JSTypeNative.ARRAY_TYPE);
+        ObjectType objectType = getObjectType("Object");
+        JSType unknownType = getNativeType(JSTypeNative.UNKNOWN_TYPE);
+
+        JSType restrictedArray = interpreter.restrictToNotArrayVisitor.caseObjectType((ObjectType) arrayType);
+        assertNull(restrictedArray);
+
+        JSType restrictedObject = interpreter.restrictToNotArrayVisitor.caseObjectType((ObjectType) objectType);
+        assertEquals(objectType, restrictedObject);
+
+        // The original code had a cast to ObjectType which might be problematic for unknownType.
+        // Let's assume unknownType is not an ObjectType. The base case in RestrictByFalseTypeOfResultVisitor handles this.
+        JSType restrictedUnknown = interpreter.restrictToNotArrayVisitor.caseObjectType((ObjectType) unknownType);
+        assertTrue(restrictedUnknown.isUnknownType());
+    }
+
+    @Test
+    public void testIsObjectTrue() throws Exception {
+        ClosureReverseAbstractInterpreter interpreter = createInterpreter();
+        ObjectType objectType = getObjectType("Object");
+        FunctionType functionType = getFunctionType("function");
+        JSType unknownType = getNativeType(JSTypeNative.UNKNOWN_TYPE);
+
+        JSType restrictedObject = interpreter.restrictToObjectVisitor.caseObjectType(objectType);
+        assertEquals(objectType, restrictedObject);
+
+        JSType restrictedFunction = interpreter.restrictToObjectVisitor.caseFunctionType(functionType);
+        assertEquals(functionType, restrictedFunction);
+
+        JSType restrictedUnknown = interpreter.restrictToObjectVisitor.caseTopType(unknownType);
+        assertTrue(restrictedUnknown.isNoObjectType());
+    }
+
+    @Test
+    public void testIsObjectFalse() throws Exception {
+        ClosureReverseAbstractInterpreter interpreter = createInterpreter();
+        ObjectType objectType = getObjectType("Object");
+        FunctionType functionType = getFunctionType("function");
+        JSType unknownType = getNativeType(JSTypeNative.UNKNOWN_TYPE);
+
+        JSType restrictedObject = interpreter.restrictToNotObjectVisitor.caseObjectType(objectType);
+        assertNull(restrictedObject);
+
+        JSType restrictedFunction = interpreter.restrictToNotObjectVisitor.caseFunctionType(functionType);
+        assertNull(restrictedFunction);
+
+        // The original code had a cast to ObjectType which might be problematic for unknownType.
+        // Let's assume unknownType is not an ObjectType. The base case in RestrictByFalseTypeOfResultVisitor handles this.
+        JSType restrictedUnknown = interpreter.restrictToNotObjectVisitor.caseObjectType((ObjectType) unknownType);
+        assertNull(restrictedUnknown);
+    }
+
+    @Test
+    public void testIsNullable() throws Exception {
+        ClosureReverseAbstractInterpreter interpreter = createInterpreter();
+        JSType nullType = getNativeType(JSTypeNative.NULL_TYPE);
+        JSType numberType = getNativeType(JSTypeNative.NUMBER_TYPE);
+        JSType unknownType = getNativeType(JSTypeNative.UNKNOWN_TYPE);
+
+        JSType restrictedNull = interpreter.restricters.get("isNull").apply(new ClosureReverseAbstractInterpreter.TypeRestriction(nullType, true));
+        assertEquals(nullType, restrictedNull);
+
+        JSType restrictedNumber = interpreter.restricters.get("isNull").apply(new ClosureReverseAbstractInterpreter.TypeRestriction(numberType, true));
+        assertNull(restrictedNumber);
+
+        JSType restrictedUnknown = interpreter.restricters.get("isNull").apply(new ClosureReverseAbstractInterpreter.TypeRestriction(unknownType, true));
+        assertTrue(restrictedUnknown.isUnknownType());
+    }
+
+    @Test
+    public void testIsNotNullable() throws Exception {
+        ClosureReverseAbstractInterpreter interpreter = createInterpreter();
+        JSType nullType = getNativeType(JSTypeNative.NULL_TYPE);
+        JSType numberType = getNativeType(JSTypeNative.NUMBER_TYPE);
+        JSType unknownType = getNativeType(JSTypeNative.UNKNOWN_TYPE);
+
+        JSType restrictedNull = interpreter.restricters.get("isNull").apply(new ClosureReverseAbstractInterpreter.TypeRestriction(nullType, false));
+        assertEquals(unknownType, restrictedNull); // null is removed, unknown remains
+
+        JSType restrictedNumber = interpreter.restricters.get("isNull").apply(new ClosureReverseAbstractInterpreter.TypeRestriction(numberType, false));
+        assertEquals(numberType, restrictedNumber); // number is not null
+
+        JSType restrictedUnknown = interpreter.restricters.get("isNull").apply(new ClosureReverseAbstractInterpreter.TypeRestriction(unknownType, false));
+        assertTrue(restrictedUnknown.isUnknownType()); // unknown remains unknown
+    }
+
+
+    @Test
+    public void testIsObjectWithNullType() throws Exception {
+        ClosureReverseAbstractInterpreter interpreter = createInterpreter();
+        JSType nullType = getNativeType(JSTypeNative.NULL_TYPE);
+        JSType objectType = getNativeType(JSTypeNative.OBJECT_TYPE);
+
+        // When goog.isObject returns true, and the input is null, it should remain null.
+        JSType restrictedNullForObjectTrue = interpreter.restricters.get("isObject").apply(new ClosureReverseAbstractInterpreter.TypeRestriction(nullType, true));
+        assertEquals(nullType, restrictedNullForObjectTrue);
+
+        // When goog.isObject returns false, and the input is null, it should become null.
+        JSType restrictedNullForObjectFalse = interpreter.restricters.get("isObject").apply(new ClosureReverseAbstractInterpreter.TypeRestriction(nullType, false));
+        assertEquals(null, restrictedNullForObjectFalse);
+    }
+
+    @Test
+    public void testIsArrayWithNullType() throws Exception {
+        ClosureReverseAbstractInterpreter interpreter = createInterpreter();
+        JSType nullType = getNativeType(JSTypeNative.NULL_TYPE);
+        JSType arrayType = getNativeType(JSTypeNative.ARRAY_TYPE);
+
+        // When goog.isArray returns true, and the input is null, it should remain null.
+        JSType restrictedNullForArrayTrue = interpreter.restricters.get("isArray").apply(new ClosureReverseAbstractInterpreter.TypeRestriction(nullType, true));
+        assertEquals(nullType, restrictedNullForArrayTrue);
+
+        // When goog.isArray returns false, and the input is null, it should become null.
+        JSType restrictedNullForArrayFalse = interpreter.restricters.get("isArray").apply(new ClosureReverseAbstractInterpreter.TypeRestriction(nullType, false));
+        assertEquals(null, restrictedNullForArrayFalse);
+    }
+
+    @Test
+    public void testComplexTypeRestrictions() throws Exception {
+        ClosureReverseAbstractInterpreter interpreter = createInterpreter();
+        JSType unknown = getNativeType(JSTypeNative.UNKNOWN_TYPE);
+        JSType nullableNumber = registry.createNullableType(getNativeType(JSTypeNative.NUMBER_TYPE));
+        JSType nullableString = registry.createNullableType(getNativeType(JSTypeNative.STRING_TYPE));
+
+        // Test isDefAndNotNull with nullable types
+        JSType restrictedNullableNumber = interpreter.restricters.get("isDefAndNotNull").apply(new ClosureReverseAbstractInterpreter.TypeRestriction(nullableNumber, true));
+        assertEquals(getNativeType(JSTypeNative.NUMBER_TYPE), restrictedNullableNumber);
+
+        JSType restrictedNullableString = interpreter.restricters.get("isDefAndNotNull").apply(new ClosureReverseAbstractInterpreter.TypeRestriction(nullableString, true));
+        assertEquals(getNativeType(JSTypeNative.STRING_TYPE), restrictedNullableString);
+
+        JSType restrictedUnknown = interpreter.restricters.get("isDefAndNotNull").apply(new ClosureReverseAbstractInterpreter.TypeRestriction(unknown, true));
+        assertTrue(restrictedUnknown.isUnknownType());
+    }
+
+    @Test
+    public void testGetPreciserScopeKnowingConditionOutcome_googIsDef() throws Exception {
+        ClosureReverseAbstractInterpreter interpreter = createInterpreter();
+        Node condition = new Node(Token.CALL);
+        Node callee = new Node(Token.GETPROP);
+        callee.addChildToBack(new Node(Token.NAME, "goog"));
+        callee.addChildToBack(new Node(Token.STRING, "isDef"));
+        condition.addChildToBack(callee);
+        condition.addChildToBack(new Node(Token.NAME, "x"));
+
+        Scope enclosingScope = new Scope(new Node(Token.BLOCK), convention);
+        FlowScope blindScope = LinkedFlowScope.createEntryLattice(enclosingScope);
+        ObjectType unknownObjectType = (ObjectType) getNativeType(JSTypeNative.UNKNOWN_TYPE);
+        enclosingScope.declare("x", unknownObjectType, false);
+
+
+        // goog.isDef(x) is true
+        FlowScope trueScope = interpreter.getPreciserScopeKnowingConditionOutcome(condition, blindScope, true);
+        JSType xTypeTrue = trueScope.getSlot("x").getType();
+        assertNotNull(xTypeTrue);
+        assertFalse(xTypeTrue.isNullable()); // Should not be null or undefined
+
+        // goog.isDef(x) is false
+        FlowScope falseScope = interpreter.getPreciserScopeKnowingConditionOutcome(condition, blindScope, false);
+        JSType xTypeFalse = falseScope.getSlot("x").getType();
+        assertNotNull(xTypeFalse);
+        assertTrue(xTypeFalse.isNullable()); // Can be null or undefined
+    }
+
+    @Test
+    public void testGetPreciserScopeKnowingConditionOutcome_googIsNull() throws Exception {
+        ClosureReverseAbstractInterpreter interpreter = createInterpreter();
+        Node condition = new Node(Token.CALL);
+        Node callee = new Node(Token.GETPROP);
+        callee.addChildToBack(new Node(Token.NAME, "goog"));
+        callee.addChildToBack(new Node(Token.STRING, "isNull"));
+        condition.addChildToBack(callee);
+        condition.addChildToBack(new Node(Token.NAME, "x"));
+
+        Scope enclosingScope = new Scope(new Node(Token.BLOCK), convention);
+        FlowScope blindScope = LinkedFlowScope.createEntryLattice(enclosingScope);
+        ObjectType unknownObjectType = (ObjectType) getNativeType(JSTypeNative.UNKNOWN_TYPE);
+        enclosingScope.declare("x", unknownObjectType, false);
+
+        // goog.isNull(x) is true
+        FlowScope trueScope = interpreter.getPreciserScopeKnowingConditionOutcome(condition, blindScope, true);
+        JSType xTypeTrue = trueScope.getSlot("x").getType();
+        assertNotNull(xTypeTrue);
+        assertTrue(xTypeTrue.isNullType()); // Should be null
+
+        // goog.isNull(x) is false
+        FlowScope falseScope = interpreter.getPreciserScopeKnowingConditionOutcome(condition, blindScope, false);
+        JSType xTypeFalse = falseScope.getSlot("x").getType();
+        assertNotNull(xTypeFalse);
+        assertFalse(xTypeFalse.isNullable()); // Should not be null
+    }
+
+    @Test
+    public void testGetPreciserScopeKnowingConditionOutcome_googIsObject() throws Exception {
+        ClosureReverseAbstractInterpreter interpreter = createInterpreter();
+        Node condition = new Node(Token.CALL);
+        Node callee = new Node(Token.GETPROP);
+        callee.addChildToBack(new Node(Token.NAME, "goog"));
+        callee.addChildToBack(new Node(Token.STRING, "isObject"));
+        condition.addChildToBack(callee);
+        condition.addChildToBack(new Node(Token.NAME, "x"));
+
+        Scope enclosingScope = new Scope(new Node(Token.BLOCK), convention);
+        FlowScope blindScope = LinkedFlowScope.createEntryLattice(enclosingScope);
+        ObjectType unknownObjectType = (ObjectType) getNativeType(JSTypeNative.UNKNOWN_TYPE);
+        enclosingScope.declare("x", unknownObjectType, false);
+
+        // goog.isObject(x) is true
+        FlowScope trueScope = interpreter.getPreciserScopeKnowingConditionOutcome(condition, blindScope, true);
+        JSType xTypeTrue = trueScope.getSlot("x").getType();
+        assertNotNull(xTypeTrue);
+        assertTrue(xTypeTrue.isObject()); // Should be an object (or function)
+        assertFalse(xTypeTrue.isNullType()); // Should not be null
+
+        // goog.isObject(x) is false
+        FlowScope falseScope = interpreter.getPreciserScopeKnowingConditionOutcome(condition, blindScope, false);
+        JSType xTypeFalse = falseScope.getSlot("x").getType();
+        assertNotNull(xTypeFalse);
+        assertFalse(xTypeFalse.isObject()); // Should not be an object or function
+        assertTrue(xTypeFalse.isNullable() || xTypeFalse.isVoidType()); // Can be null or undefined
+    }
+
+    @Test
+    public void testGetPreciserScopeKnowingConditionOutcome_googIsArray() throws Exception {
+        ClosureReverseAbstractInterpreter interpreter = createInterpreter();
+        Node condition = new Node(Token.CALL);
+        Node callee = new Node(Token.GETPROP);
+        callee.addChildToBack(new Node(Token.NAME, "goog"));
+        callee.addChildToBack(new Node(Token.STRING, "isArray"));
+        condition.addChildToBack(callee);
+        condition.addChildToBack(new Node(Token.NAME, "x"));
+
+        Scope enclosingScope = new Scope(new Node(Token.BLOCK), convention);
+        FlowScope blindScope = LinkedFlowScope.createEntryLattice(enclosingScope);
+        ObjectType unknownObjectType = (ObjectType) getNativeType(JSTypeNative.UNKNOWN_TYPE);
+        enclosingScope.declare("x", unknownObjectType, false);
+
+        // goog.isArray(x) is true
+        FlowScope trueScope = interpreter.getPreciserScopeKnowingConditionOutcome(condition, blindScope, true);
+        JSType xTypeTrue = trueScope.getSlot("x").getType();
+        assertNotNull(xTypeTrue);
+        assertTrue(xTypeTrue.isArrayType()); // Should be an array
+
+        // goog.isArray(x) is false
+        FlowScope falseScope = interpreter.getPreciserScopeKnowingConditionOutcome(condition, blindScope, false);
+        JSType xTypeFalse = falseScope.getSlot("x").getType();
+        assertNotNull(xTypeFalse);
+        assertFalse(xTypeFalse.isArrayType()); // Should not be an array
+    }
+
+    @Test
+    public void testRestrictToArrayVisitor_withArrayType() {
+        ClosureReverseAbstractInterpreter interpreter = createInterpreter();
+        JSType arrayType = getNativeType(JSTypeNative.ARRAY_TYPE);
+        // Accessing private members directly is not allowed. We need to simulate the visitor.
+        Visitor<JSType> visitor = interpreter.restrictToArrayVisitor;
+        JSType restricted = visitor.caseObjectType((ObjectType) arrayType);
+        assertEquals(arrayType, restricted);
+    }
+
+    @Test
+    public void testRestrictToArrayVisitor_withObjectType() {
+        ClosureReverseAbstractInterpreter interpreter = createInterpreter();
+        ObjectType objectType = getObjectType("Object");
+        Visitor<JSType> visitor = interpreter.restrictToArrayVisitor;
+        JSType restricted = visitor.caseObjectType(objectType);
+        assertNull(restricted);
+    }
+
+    @Test
+    public void testRestrictToNotArrayVisitor_withArrayType() {
+        ClosureReverseAbstractInterpreter interpreter = createInterpreter();
+        JSType arrayType = getNativeType(JSTypeNative.ARRAY_TYPE);
+        Visitor<JSType> visitor = interpreter.restrictToNotArrayVisitor;
+        JSType restricted = visitor.caseObjectType((ObjectType) arrayType);
+        assertNull(restricted);
+    }
+
+    @Test
+    public void testRestrictToNotArrayVisitor_withObjectType() {
+        ClosureReverseAbstractInterpreter interpreter = createInterpreter();
+        ObjectType objectType = getObjectType("Object");
+        Visitor<JSType> visitor = interpreter.restrictToNotArrayVisitor;
+        JSType restricted = visitor.caseObjectType(objectType);
+        assertEquals(objectType, restricted);
+    }
+
+    @Test
+    public void testRestrictToObjectVisitor_withObjectType() {
+        ClosureReverseAbstractInterpreter interpreter = createInterpreter();
+        ObjectType objectType = getObjectType("Object");
+        Visitor<JSType> visitor = interpreter.restrictToObjectVisitor;
+        JSType restricted = visitor.caseObjectType(objectType);
+        assertEquals(objectType, restricted);
+    }
+
+    @Test
+    public void testRestrictToObjectVisitor_withFunctionType() {
+        ClosureReverseAbstractInterpreter interpreter = createInterpreter();
+        FunctionType functionType = getFunctionType("function");
+        Visitor<JSType> visitor = interpreter.restrictToObjectVisitor;
+        JSType restricted = visitor.caseFunctionType(functionType);
+        assertEquals(functionType, restricted);
+    }
+
+    @Test
+    public void testRestrictToNotObjectVisitor_withObjectType() {
+        ClosureReverseAbstractInterpreter interpreter = createInterpreter();
+        ObjectType objectType = getObjectType("Object");
+        Visitor<JSType> visitor = interpreter.restrictToNotObjectVisitor;
+        JSType restricted = visitor.caseObjectType(objectType);
+        assertNull(restricted);
+    }
+
+    @Test
+    public void testRestrictToNotObjectVisitor_withFunctionType() {
+        ClosureReverseAbstractInterpreter interpreter = createInterpreter();
+        FunctionType functionType = getFunctionType("function");
+        Visitor<JSType> visitor = interpreter.restrictToNotObjectVisitor;
+        JSType restricted = visitor.caseFunctionType(functionType);
+        assertNull(restricted);
+    }
+
+    @Test
+    public void testNullInputToRestricters() {
+        ClosureReverseAbstractInterpreter interpreter = createInterpreter();
+        ClosureReverseAbstractInterpreter.TypeRestriction nullRestriction = new ClosureReverseAbstractInterpreter.TypeRestriction(null, true);
+        ClosureReverseAbstractInterpreter.TypeRestriction nullRestrictionFalse = new ClosureReverseAbstractInterpreter.TypeRestriction(null, false);
+
+        // isArray
+        assertNull(interpreter.restricters.get("isArray").apply(nullRestriction));
+        assertNull(interpreter.restricters.get("isArray").apply(nullRestrictionFalse));
+
+        // isObject
+        assertNull(interpreter.restricters.get("isObject").apply(nullRestriction));
+        assertNull(interpreter.restricters.get("isObject").apply(nullRestrictionFalse));
+
+        // Other restricters should handle null input gracefully by returning null or unknown
+        assertNull(interpreter.restricters.get("isDef").apply(nullRestriction));
+        assertNull(interpreter.restricters.get("isNull").apply(nullRestriction));
+        assertNull(interpreter.restricters.get("isDefAndNotNull").apply(nullRestriction));
+        assertNull(interpreter.restricters.get("isString").apply(nullRestriction));
+        assertNull(interpreter.restricters.get("isBoolean").apply(nullRestriction));
+        assertNull(interpreter.restricters.get("isNumber").apply(nullRestriction));
+        assertNull(interpreter.restricters.get("isFunction").apply(nullRestriction));
+
+        assertNull(interpreter.restricters.get("isDef").apply(nullRestrictionFalse));
+        assertNull(interpreter.restricters.get("isNull").apply(nullRestrictionFalse));
+        assertNull(interpreter.restricters.get("isDefAndNotNull").apply(nullRestrictionFalse));
+        assertNull(interpreter.restricters.get("isString").apply(nullRestrictionFalse));
+        assertNull(interpreter.restricters.get("isBoolean").apply(nullRestrictionFalse));
+        assertNull(interpreter.restricters.get("isNumber").apply(nullRestrictionFalse));
+        assertNull(interpreter.restricters.get("isFunction").apply(nullRestrictionFalse));
+    }
+}

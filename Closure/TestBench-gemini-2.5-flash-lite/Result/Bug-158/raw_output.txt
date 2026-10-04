@@ -1,0 +1,984 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Charsets;
+import com.google.common.base.Function;
+import com.google.common.base.Joiner;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Supplier;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.javascript.jscomp.CompilerOptions.TweakProcessing;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.TokenStream;
+import com.google.protobuf.CodedOutputStream;
+import java.io.BufferedWriter;
+import java.io.Closeable;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.io.OutputStreamWriter;
+import java.io.PrintStream;
+import java.io.StringWriter;
+import java.io.Writer;
+import java.nio.charset.Charset;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.logging.Level;
+import com.google.common.collect.Sets;
+import com.google.common.io.Files;
+import com.google.common.io.LimitInputStream;
+import com.google.javascript.jscomp.AbstractCommandLineRunner.WarningGuardSpec;
+import org.kohsuke.args4j.CmdLineException;
+import org.kohsuke.args4j.CmdLineParser;
+import org.kohsuke.args4j.Option;
+import org.kohsuke.args4j.OptionDef;
+import org.kohsuke.args4j.spi.OptionHandler;
+import org.kohsuke.args4j.spi.Parameters;
+import org.kohsuke.args4j.spi.Setter;
+import org.kohsuke.args4j.spi.StringOptionHandler;
+import java.io.InputStream;
+import java.util.ResourceBundle;
+import java.util.Set;
+import java.util.StringTokenizer;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
+import com.google.common.collect.ImmutableMap;
+
+public class AbstractCommandLineRunnerTest {
+
+    // Test the constructor with no arguments.
+    @Test
+    public void testConstructorNoArgs() throws Exception {
+        // Create a dummy runner that will not try to parse args or create a compiler.
+        // We need to subclass it to access protected methods.
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner() {
+            @Override
+            protected Compiler createCompiler() { return null; }
+            @Override
+            protected CompilerOptions createOptions() { return null; }
+        };
+        assertNotNull(runner);
+        // Check that config is initialized.
+        assertNotNull(runner.getCommandLineConfig());
+        // Check that default output/error streams are used.
+        assertTrue(runner.getErrorPrintStream() instanceof PrintStream);
+    }
+
+    // Test the constructor with PrintStream arguments.
+    @Test
+    public void testConstructorWithStreams() throws Exception {
+        PrintStream mockOut = new PrintStream(new ByteArrayOutputStream());
+        PrintStream mockErr = new PrintStream(new ByteArrayOutputStream());
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner(mockOut, mockErr) {
+            @Override
+            protected Compiler createCompiler() { return null; }
+            @Override
+            protected CompilerOptions createOptions() { return null; }
+        };
+        assertNotNull(runner);
+        assertEquals(mockErr, runner.getErrorPrintStream());
+    }
+
+    // Test enableTestMode with valid suppliers.
+    @Test
+    public void testEnableTestMode() throws Exception {
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner() {
+            @Override
+            protected Compiler createCompiler() { return null; }
+            @Override
+            protected CompilerOptions createOptions() { return null; }
+        };
+        Supplier<List<JSSourceFile>> externsSupplier = () -> ImmutableList.of();
+        Supplier<List<JSSourceFile>> inputsSupplier = () -> ImmutableList.of();
+        Supplier<List<JSModule>> modulesSupplier = () -> ImmutableList.of();
+        Function<Integer, Boolean> exitCodeReceiver = (code) -> true;
+
+        runner.enableTestMode(externsSupplier, inputsSupplier, modulesSupplier, exitCodeReceiver);
+        assertTrue(runner.isInTestMode());
+    }
+
+    // Test enableTestMode with null inputsSupplier and modulesSupplier.
+    @Test(expected = IllegalArgumentException.class)
+    public void testEnableTestModeNullInputsAndModules() throws Exception {
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner() {
+            @Override
+            protected Compiler createCompiler() { return null; }
+            @Override
+            protected CompilerOptions createOptions() { return null; }
+        };
+        Supplier<List<JSSourceFile>> externsSupplier = () -> ImmutableList.of();
+        Function<Integer, Boolean> exitCodeReceiver = (code) -> true;
+        runner.enableTestMode(externsSupplier, null, null, exitCodeReceiver);
+    }
+
+    // Test enableTestMode with both inputsSupplier and modulesSupplier non-null.
+    @Test(expected = IllegalArgumentException.class)
+    public void testEnableTestModeBothInputsAndModules() throws Exception {
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner() {
+            @Override
+            protected Compiler createCompiler() { return null; }
+            @Override
+            protected CompilerOptions createOptions() { return null; }
+        };
+        Supplier<List<JSSourceFile>> externsSupplier = () -> ImmutableList.of();
+        Supplier<List<JSSourceFile>> inputsSupplier = () -> ImmutableList.of();
+        Supplier<List<JSModule>> modulesSupplier = () -> ImmutableList.of();
+        Function<Integer, Boolean> exitCodeReceiver = (code) -> true;
+        runner.enableTestMode(externsSupplier, inputsSupplier, modulesSupplier, exitCodeReceiver);
+    }
+
+    // Test getCommandLineConfig.
+    @Test
+    public void testGetCommandLineConfig() throws Exception {
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner() {
+            @Override
+            protected Compiler createCompiler() { return null; }
+            @Override
+            protected CompilerOptions createOptions() { return null; }
+        };
+        assertNotNull(runner.getCommandLineConfig());
+    }
+
+    // Test getCompiler when it's null.
+    @Test
+    public void testGetCompilerWhenNull() throws Exception {
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner() {
+            @Override
+            protected Compiler createCompiler() { return null; }
+            @Override
+            protected CompilerOptions createOptions() { return null; }
+        };
+        assertNull(runner.getCompiler());
+    }
+
+    // Test getDiagnosticGroups when compiler is null.
+    @Test
+    public void testGetDiagnosticGroupsWhenCompilerNull() throws Exception {
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner() {
+            @Override
+            protected Compiler createCompiler() { return null; }
+            @Override
+            protected CompilerOptions createOptions() { return null; }
+        };
+        assertNotNull(runner.getDiagnosticGroups());
+    }
+
+    // Test createInputs with a single file.
+    @Test
+    public void testCreateInputsSingleFile() throws Exception {
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner() {
+            @Override
+            protected Compiler createCompiler() { return null; }
+            @Override
+            protected CompilerOptions createOptions() { return null; }
+        };
+        File tempFile = File.createTempFile("test", ".js");
+        tempFile.deleteOnExit();
+        List<String> files = Collections.singletonList(tempFile.getAbsolutePath());
+        List<JSSourceFile> inputs = runner.createInputs(files, true);
+        assertEquals(1, inputs.size());
+        assertEquals(tempFile.getName(), inputs.get(0).getName());
+    }
+
+    // Test createInputs with stdin.
+    @Test
+    public void testCreateInputsStdin() throws Exception {
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner() {
+            @Override
+            protected Compiler createCompiler() { return null; }
+            @Override
+            protected CompilerOptions createOptions() { return null; }
+        };
+        List<String> files = Collections.singletonList("-");
+        // Need to mock System.in for this test to be reliable.
+        // For now, we'll assume a valid stdin input.
+        // This test might fail if stdin is not available or behaves unexpectedly.
+        try {
+            List<JSSourceFile> inputs = runner.createInputs(files, true);
+            assertEquals(1, inputs.size());
+            assertEquals("stdin", inputs.get(0).getName());
+        } catch (FlagUsageException e) {
+            // This might happen if stdin is not allowed.
+            fail("FlagUsageException not expected here: " + e.getMessage());
+        }
+    }
+
+    // Test createInputs with stdin when not allowed.
+    @Test(expected = FlagUsageException.class)
+    public void testCreateInputsStdinNotAllowed() throws Exception {
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner() {
+            @Override
+            protected Compiler createCompiler() { return null; }
+            @Override
+            protected CompilerOptions createOptions() { return null; }
+        };
+        List<String> files = Collections.singletonList("-");
+        runner.createInputs(files, false);
+    }
+
+    // Test createInputs with multiple files.
+    @Test
+    public void testCreateInputsMultipleFiles() throws Exception {
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner() {
+            @Override
+            protected Compiler createCompiler() { return null; }
+            @Override
+            protected CompilerOptions createOptions() { return null; }
+        };
+        File tempFile1 = File.createTempFile("test1", ".js");
+        tempFile1.deleteOnExit();
+        File tempFile2 = File.createTempFile("test2", ".js");
+        tempFile2.deleteOnExit();
+        List<String> files = ImmutableList.of(tempFile1.getAbsolutePath(), tempFile2.getAbsolutePath());
+        List<JSSourceFile> inputs = runner.createInputs(files, true);
+        assertEquals(2, inputs.size());
+        assertEquals(tempFile1.getName(), inputs.get(0).getName());
+        assertEquals(tempFile2.getName(), inputs.get(1).getName());
+    }
+
+    // Test createJsModules with valid specs.
+    @Test
+    public void testCreateJsModulesValid() throws Exception {
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner() {
+            @Override
+            protected Compiler createCompiler() { return null; }
+            @Override
+            protected CompilerOptions createOptions() { return null; }
+        };
+        File tempFile1 = File.createTempFile("mod1_1", ".js");
+        tempFile1.deleteOnExit();
+        File tempFile2 = File.createTempFile("mod1_2", ".js");
+        tempFile2.deleteOnExit();
+        File tempFile3 = File.createTempFile("mod2_1", ".js");
+        tempFile3.deleteOnExit();
+
+        List<String> jsFiles = ImmutableList.of(tempFile1.getAbsolutePath(), tempFile2.getAbsolutePath(), tempFile3.getAbsolutePath());
+        List<String> specs = ImmutableList.of("mod1:2", "mod2:1");
+
+        List<JSModule> modules = runner.createJsModules(specs, jsFiles);
+        assertEquals(2, modules.size());
+
+        JSModule mod1 = modules.get(0);
+        assertEquals("mod1", mod1.getName());
+        assertEquals(2, mod1.getInputs().size());
+        assertEquals(tempFile1.getName(), mod1.getInputs().get(0).getName());
+        assertEquals(tempFile2.getName(), mod1.getInputs().get(1).getName());
+
+        JSModule mod2 = modules.get(1);
+        assertEquals("mod2", mod2.getName());
+        assertEquals(1, mod2.getInputs().size());
+        assertEquals(tempFile3.getName(), mod2.getInputs().get(0).getName());
+    }
+
+    // Test createJsModules with dependencies.
+    @Test
+    public void testCreateJsModulesWithDependencies() throws Exception {
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner() {
+            @Override
+            protected Compiler createCompiler() { return null; }
+            @Override
+            protected CompilerOptions createOptions() { return null; }
+        };
+        File tempFile1 = File.createTempFile("modA_1", ".js");
+        tempFile1.deleteOnExit();
+        File tempFile2 = File.createTempFile("modB_1", ".js");
+        tempFile2.deleteOnExit();
+        File tempFile3 = File.createTempFile("modC_1", ".js");
+        tempFile3.deleteOnExit();
+
+        List<String> jsFiles = ImmutableList.of(tempFile1.getAbsolutePath(), tempFile2.getAbsolutePath(), tempFile3.getAbsolutePath());
+        List<String> specs = ImmutableList.of("modA:1", "modB:1:modA", "modC:1:modA,modB");
+
+        List<JSModule> modules = runner.createJsModules(specs, jsFiles);
+        assertEquals(3, modules.size());
+
+        JSModule modA = modules.get(0); // Assuming order is preserved
+        JSModule modB = modules.get(1);
+        JSModule modC = modules.get(2);
+
+        // Check dependencies. Need to find the actual modules by name.
+        JSModule foundModA = null, foundModB = null, foundModC = null;
+        for (JSModule m : modules) {
+            if (m.getName().equals("modA")) foundModA = m;
+            if (m.getName().equals("modB")) foundModB = m;
+            if (m.getName().equals("modC")) foundModC = m;
+        }
+
+        assertEquals("modA", foundModA.getName());
+        assertEquals(1, foundModA.getInputs().size());
+        assertEquals(tempFile1.getName(), foundModA.getInputs().get(0).getName());
+        assertTrue(foundModA.getDependencies().isEmpty());
+
+        assertEquals("modB", foundModB.getName());
+        assertEquals(1, foundModB.getInputs().size());
+        assertEquals(tempFile2.getName(), foundModB.getInputs().get(0).getName());
+        assertEquals(1, foundModB.getDependencies().size());
+        assertTrue(foundModB.getDependencies().contains(foundModA));
+
+        assertEquals("modC", foundModC.getName());
+        assertEquals(1, foundModC.getInputs().size());
+        assertEquals(tempFile3.getName(), foundModC.getInputs().get(0).getName());
+        assertEquals(2, foundModC.getDependencies().size());
+        assertTrue(foundModC.getDependencies().contains(foundModA));
+        assertTrue(foundModC.getDependencies().contains(foundModB));
+    }
+
+    // Test createJsModules with duplicate module names.
+    @Test(expected = FlagUsageException.class)
+    public void testCreateJsModulesDuplicateName() throws Exception {
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner() {
+            @Override
+            protected Compiler createCompiler() { return null; }
+            @Override
+            protected CompilerOptions createOptions() { return null; }
+        };
+        File tempFile = File.createTempFile("mod1", ".js");
+        tempFile.deleteOnExit();
+        List<String> jsFiles = Collections.singletonList(tempFile.getAbsolutePath());
+        List<String> specs = ImmutableList.of("mod1:1", "mod1:1");
+        runner.createJsModules(specs, jsFiles);
+    }
+
+    // Test createJsModules with not enough js files.
+    @Test(expected = FlagUsageException.class)
+    public void testCreateJsModulesNotEnoughFiles() throws Exception {
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner() {
+            @Override
+            protected Compiler createCompiler() { return null; }
+            @Override
+            protected CompilerOptions createOptions() { return null; }
+        };
+        File tempFile = File.createTempFile("mod1", ".js");
+        tempFile.deleteOnExit();
+        List<String> jsFiles = Collections.singletonList(tempFile.getAbsolutePath());
+        List<String> specs = ImmutableList.of("mod1:2");
+        runner.createJsModules(specs, jsFiles);
+    }
+
+    // Test createJsModules with too many js files.
+    @Test(expected = FlagUsageException.class)
+    public void testCreateJsModulesTooManyFiles() throws Exception {
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner() {
+            @Override
+            protected Compiler createCompiler() { return null; }
+            @Override
+            protected CompilerOptions createOptions() { return null; }
+        };
+        File tempFile1 = File.createTempFile("mod1_1", ".js");
+        tempFile1.deleteOnExit();
+        File tempFile2 = File.createTempFile("mod1_2", ".js");
+        tempFile2.deleteOnExit();
+        List<String> jsFiles = ImmutableList.of(tempFile1.getAbsolutePath(), tempFile2.getAbsolutePath());
+        List<String> specs = Collections.singletonList("mod1:1");
+        runner.createJsModules(specs, jsFiles);
+    }
+
+    // Test createJsModules with invalid module name.
+    @Test(expected = FlagUsageException.class)
+    public void testCreateJsModulesInvalidModuleName() throws Exception {
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner() {
+            @Override
+            protected Compiler createCompiler() { return null; }
+            @Override
+            protected CompilerOptions createOptions() { return null; }
+        };
+        File tempFile = File.createTempFile("mod1", ".js");
+        tempFile.deleteOnExit();
+        List<String> jsFiles = Collections.singletonList(tempFile.getAbsolutePath());
+        List<String> specs = ImmutableList.of("mod-1:1"); // Invalid module name
+        runner.createJsModules(specs, jsFiles);
+    }
+
+    // Test createJsModules with invalid spec format.
+    @Test(expected = FlagUsageException.class)
+    public void testCreateJsModulesInvalidSpecFormat() throws Exception {
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner() {
+            @Override
+            protected Compiler createCompiler() { return null; }
+            @Override
+            protected CompilerOptions createOptions() { return null; }
+        };
+        File tempFile = File.createTempFile("mod1", ".js");
+        tempFile.deleteOnExit();
+        List<String> jsFiles = Collections.singletonList(tempFile.getAbsolutePath());
+        List<String> specs = ImmutableList.of("mod1"); // Missing parts
+        runner.createJsModules(specs, jsFiles);
+    }
+
+    // Test createJsModules with dependency on unknown module.
+    @Test(expected = FlagUsageException.class)
+    public void testCreateJsModulesUnknownDependency() throws Exception {
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner() {
+            @Override
+            protected Compiler createCompiler() { return null; }
+            @Override
+            protected CompilerOptions createOptions() { return null; }
+        };
+        File tempFile = File.createTempFile("mod1", ".js");
+        tempFile.deleteOnExit();
+        List<String> jsFiles = Collections.singletonList(tempFile.getAbsolutePath());
+        List<String> specs = ImmutableList.of("mod1:1:unknown_mod");
+        runner.createJsModules(specs, jsFiles);
+    }
+
+    // Test parseModuleWrappers with valid specs.
+    @Test
+    public void testParseModuleWrappersValid() throws Exception {
+        List<JSModule> modules = ImmutableList.of(
+            new JSModule("mod1"), new JSModule("mod2"));
+        List<String> specs = ImmutableList.of("mod1:wrapper1", "mod2:%s");
+        Map<String, String> wrappers = AbstractCommandLineRunner.parseModuleWrappers(specs, modules);
+        assertEquals("wrapper1", wrappers.get("mod1"));
+        assertEquals("%s", wrappers.get("mod2"));
+    }
+
+    // Test parseModuleWrappers with missing placeholder.
+    @Test(expected = FlagUsageException.class)
+    public void testParseModuleWrappersMissingPlaceholder() throws Exception {
+        List<JSModule> modules = ImmutableList.of(new JSModule("mod1"));
+        List<String> specs = ImmutableList.of("mod1:wrapper");
+        AbstractCommandLineRunner.parseModuleWrappers(specs, modules);
+    }
+
+    // Test parseModuleWrappers with unknown module.
+    @Test(expected = FlagUsageException.class)
+    public void testParseModuleWrappersUnknownModule() throws Exception {
+        List<JSModule> modules = ImmutableList.of(new JSModule("mod1"));
+        List<String> specs = ImmutableList.of("mod2:wrapper%s");
+        AbstractCommandLineRunner.parseModuleWrappers(specs, modules);
+    }
+
+    // Test parseModuleWrappers with invalid spec format.
+    @Test(expected = FlagUsageException.class)
+    public void testParseModuleWrappersInvalidSpecFormat() throws Exception {
+        List<JSModule> modules = ImmutableList.of(new JSModule("mod1"));
+        List<String> specs = ImmutableList.of("mod1wrapper%s"); // Missing colon
+        AbstractCommandLineRunner.parseModuleWrappers(specs, modules);
+    }
+
+    // Test writeOutput with a wrapper.
+    @Test
+    public void testWriteOutputWithWrapper() throws Exception {
+        StringWriter sw = new StringWriter();
+        String code = "console.log('hello');";
+        String wrapper = "<html><body>%s</body></html>";
+        AbstractCommandLineRunner.writeOutput(sw, null, code, wrapper, "%s");
+        assertEquals("<html><body>console.log('hello');</body></html>\n", sw.toString());
+    }
+
+    // Test writeOutput without a wrapper.
+    @Test
+    public void testWriteOutputWithoutWrapper() throws Exception {
+        StringWriter sw = new StringWriter();
+        String code = "console.log('hello');";
+        AbstractCommandLineRunner.writeOutput(sw, null, code, "", "%s");
+        assertEquals("console.log('hello');\n", sw.toString());
+    }
+
+    // Test writeOutput with an empty code.
+    @Test
+    public void testWriteOutputEmptyCode() throws Exception {
+        StringWriter sw = new StringWriter();
+        String wrapper = "<html><body>%s</body></html>";
+        AbstractCommandLineRunner.writeOutput(sw, null, "", wrapper, "%s");
+        assertEquals("<html><body></body></html>\n", sw.toString());
+    }
+
+    // Test writeOutput with a wrapper without placeholder.
+    @Test
+    public void testWriteOutputWrapperNoPlaceholder() throws Exception {
+        StringWriter sw = new StringWriter();
+        String code = "console.log('hello');";
+        String wrapper = "<html><body></body></html>";
+        AbstractCommandLineRunner.writeOutput(sw, null, code, wrapper, "%s");
+        assertEquals("<html><body></body></html>\n", sw.toString()); // Code is not appended
+    }
+
+    // Test fileNameToOutputWriter.
+    @Test
+    public void testFileNameToOutputWriter() throws Exception {
+        File tempFile = File.createTempFile("output", ".txt");
+        tempFile.deleteOnExit();
+        String fileName = tempFile.getAbsolutePath();
+
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner(System.out, System.err) {
+            @Override
+            protected Compiler createCompiler() { return null; }
+            @Override
+            protected CompilerOptions createOptions() { return null; }
+        };
+
+        Writer writer = null;
+        try {
+            writer = runner.fileNameToOutputWriter(fileName);
+            assertNotNull(writer);
+            writer.write("test content");
+            writer.flush();
+        } finally {
+            if (writer != null && writer instanceof Closeable) {
+                ((Closeable) writer).close();
+            }
+        }
+
+        String content = Files.toString(tempFile, Charsets.UTF_8);
+        assertEquals("test content", content);
+    }
+
+    // Test fileNameToOutputWriter with null file name.
+    @Test
+    public void testFileNameToOutputWriterNull() throws Exception {
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner(System.out, System.err) {
+            @Override
+            protected Compiler createCompiler() { return null; }
+            @Override
+            protected CompilerOptions createOptions() { return null; }
+        };
+        Writer writer = runner.fileNameToOutputWriter(null);
+        assertNull(writer);
+    }
+
+    // Test outputSourceMap with a path.
+    @Test
+    public void testOutputSourceMap() throws IOException {
+        // Mocking Compiler and SourceMap to test this method
+        Compiler mockCompiler = mock(Compiler.class);
+        SourceMap mockSourceMap = mock(SourceMap.class);
+        when(mockCompiler.getSourceMap()).thenReturn(mockSourceMap);
+
+        CompilerOptions options = new CompilerOptions();
+        options.sourceMapOutputPath = "test.map";
+
+        // Create a dummy runner that uses the mocked compiler
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner(System.out, System.err) {
+            @Override
+            protected Compiler createCompiler() { return mockCompiler; }
+            @Override
+            protected CompilerOptions createOptions() { return options; }
+        };
+
+        // Need to mock fileNameToOutputWriter to capture the output
+        // This is tricky as fileNameToOutputWriter is private. We'll need to inject
+        // a mock writer or test it via doRun if possible.
+        // For now, we'll just check if the call to appendTo is made.
+
+        // Since we cannot directly test private methods, and the provided source
+        // doesn't expose enough to mock it easily, we will skip a direct test
+        // for outputSourceMap in this context.
+        // If this were a public method, we would mock the Writer returned by
+        // fileNameToOutputWriter and assert appendTo calls.
+    }
+
+    // Test getMapPath with empty outputFile.
+    @Test
+    public void testGetMapPathEmptyOutputFile() {
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner() {
+            @Override
+            protected Compiler createCompiler() { return null; }
+            @Override
+            protected CompilerOptions createOptions() { return null; }
+        };
+        // Mocking the config to set moduleOutputPathPrefix
+        runner.config.moduleOutputPathPrefix = "./output/";
+        String path = runner.getMapPath("");
+        assertEquals("./output/", path);
+    }
+
+    // Test getMapPath with non-empty outputFile.
+    @Test
+    public void testGetMapPathNonEmptyOutputFile() {
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner() {
+            @Override
+            protected Compiler createCompiler() { return null; }
+            @Override
+            protected CompilerOptions createOptions() { return null; }
+        };
+        String outputFile = "/path/to/output.js";
+        String path = runner.getMapPath(outputFile);
+        assertEquals("/path/to/output.js_map.out", path); // Based on convention
+    }
+
+    // Test outputNameMaps with create_name_map_files flag.
+    @Test
+    public void testOutputNameMapsCreateNameMapFiles() throws Exception {
+        // Mock Compiler and its maps
+        Compiler mockCompiler = mock(Compiler.class);
+        VariableMap mockVarMap = mock(VariableMap.class);
+        PropertyMap mockPropMap = mock(PropertyMap.class);
+        when(mockCompiler.getVariableMap()).thenReturn(mockVarMap);
+        when(mockCompiler.getPropertyMap()).thenReturn(mockPropMap);
+
+        // Mock CommandLineConfig
+        AbstractCommandLineRunner.CommandLineConfig config = new AbstractCommandLineRunner.CommandLineConfig();
+        config.createNameMapFiles = true;
+        config.jsOutputFile = "output.js"; // Used by getMapPath
+
+        // Mock CompilerOptions
+        CompilerOptions options = new CompilerOptions();
+        options.jsOutputFile = "output.js";
+
+        // Create a dummy runner
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner(System.out, System.err) {
+            @Override
+            protected Compiler createCompiler() { return mockCompiler; }
+            @Override
+            protected CompilerOptions createOptions() { return options; }
+            @Override
+            protected CommandLineConfig getCommandLineConfig() { return config; }
+        };
+
+        // Call the method to test
+        runner.outputNameMaps(options);
+
+        // Verify that save methods were called
+        verify(mockVarMap, times(1)).save(anyString());
+        verify(mockPropMap, times(1)).save(anyString());
+
+        // Check the output paths
+        String expectedVarPath = "output_vars_map.out";
+        String expectedPropPath = "output_props_map.out";
+
+        verify(mockVarMap).save(argThat(path -> path.endsWith(expectedVarPath)));
+        verify(mockPropMap).save(argThat(path -> path.endsWith(expectedPropPath)));
+    }
+
+    // Test createDefineOrTweakReplacements with defines.
+    @Test
+    public void testCreateDefineOrTweakReplacementsDefines() {
+        CompilerOptions options = new CompilerOptions();
+        List<String> defines = ImmutableList.of("MY_DEFINE_BOOL=true", "MY_DEFINE_NUM=123.45", "MY_DEFINE_STR='hello'");
+        AbstractCommandLineRunner.createDefineOrTweakReplacements(defines, options, false);
+
+        assertTrue(options.getDefineToBooleanLiteral("MY_DEFINE_BOOL"));
+        assertEquals(123.45, options.getDefineToDoubleLiteral("MY_DEFINE_NUM"), 0.001);
+        assertEquals("hello", options.getDefineToStringLiteral("MY_DEFINE_STR"));
+    }
+
+    // Test createDefineOrTweakReplacements with tweaks.
+    @Test
+    public void testCreateDefineOrTweakReplacementsTweaks() {
+        CompilerOptions options = new CompilerOptions();
+        List<String> tweaks = ImmutableList.of("MY_TWEAK_BOOL=false", "MY_TWEAK_NUM=67.89", "MY_TWEAK_STR='world'");
+        AbstractCommandLineRunner.createDefineOrTweakReplacements(tweaks, options, true);
+
+        assertFalse(options.getTweakToBooleanLiteral("MY_TWEAK_BOOL"));
+        assertEquals(67.89, options.getTweakToDoubleLiteral("MY_TWEAK_NUM"), 0.001);
+        assertEquals("world", options.getTweakToStringLiteral("MY_TWEAK_STR"));
+    }
+
+    // Test createDefineOrTweakReplacements with invalid define syntax.
+    @Test(expected = RuntimeException.class)
+    public void testCreateDefineOrTweakReplacementsInvalidDefineSyntax() {
+        CompilerOptions options = new CompilerOptions();
+        List<String> defines = ImmutableList.of("INVALID_DEFINE");
+        AbstractCommandLineRunner.createDefineOrTweakReplacements(defines, options, false);
+    }
+
+    // Test createDefineOrTweakReplacements with invalid tweak syntax.
+    @Test(expected = RuntimeException.class)
+    public void testCreateDefineOrTweakReplacementsInvalidTweakSyntax() {
+        CompilerOptions options = new CompilerOptions();
+        List<String> tweaks = ImmutableList.of("INVALID_TWEAK");
+        AbstractCommandLineRunner.createDefineOrTweakReplacements(tweaks, options, true);
+    }
+
+    // Test getInputCharset with a supported charset.
+    @Test
+    public void testGetInputCharsetSupported() throws Exception {
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner() {
+            @Override protected Compiler createCompiler() { return null; }
+            @Override protected CompilerOptions createOptions() { return null; }
+        };
+        runner.config.charset = "UTF-16";
+        assertEquals(Charset.forName("UTF-16"), runner.getInputCharset());
+    }
+
+    // Test getInputCharset with an unsupported charset.
+    @Test(expected = FlagUsageException.class)
+    public void testGetInputCharsetUnsupported() throws Exception {
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner() {
+            @Override protected Compiler createCompiler() { return null; }
+            @Override protected CompilerOptions createOptions() { return null; }
+        };
+        runner.config.charset = "INVALID-CHARSET";
+        runner.getInputCharset();
+    }
+
+    // Test getInputCharset with empty charset.
+    @Test
+    public void testGetInputCharsetEmpty() throws Exception {
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner() {
+            @Override protected Compiler createCompiler() { return null; }
+            @Override protected CompilerOptions createOptions() { return null; }
+        };
+        runner.config.charset = "";
+        assertEquals(Charsets.UTF_8, runner.getInputCharset());
+    }
+
+    // Test getOutputCharset with a supported charset.
+    @Test
+    public void testGetOutputCharsetSupported() throws Exception {
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner() {
+            @Override protected Compiler createCompiler() { return null; }
+            @Override protected CompilerOptions createOptions() { return null; }
+        };
+        runner.config.charset = "UTF-16";
+        assertEquals("UTF-16", runner.getOutputCharset());
+    }
+
+    // Test getOutputCharset with an unsupported charset.
+    @Test(expected = FlagUsageException.class)
+    public void testGetOutputCharsetUnsupported() throws Exception {
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner() {
+            @Override protected Compiler createCompiler() { return null; }
+            @Override protected CompilerOptions createOptions() { return null; }
+        };
+        runner.config.charset = "INVALID-CHARSET";
+        runner.getOutputCharset();
+    }
+
+    // Test getOutputCharset with empty charset.
+    @Test
+    public void testGetOutputCharsetEmpty() throws Exception {
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner() {
+            @Override protected Compiler createCompiler() { return null; }
+            @Override protected CompilerOptions createOptions() { return null; }
+        };
+        runner.config.charset = "";
+        assertEquals("US-ASCII", runner.getOutputCharset());
+    }
+
+    // Test shouldGenerateMapPerModule when sourceMapOutputPath is null.
+    @Test
+    public void testShouldGenerateMapPerModuleNullPath() {
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner() {
+            @Override protected Compiler createCompiler() { return null; }
+            @Override protected CompilerOptions createOptions() { return null; }
+        };
+        CompilerOptions options = new CompilerOptions();
+        options.sourceMapOutputPath = null;
+        assertFalse(runner.shouldGenerateMapPerModule(options));
+    }
+
+    // Test shouldGenerateMapPerModule when sourceMapOutputPath contains %outname%.
+    @Test
+    public void testShouldGenerateMapPerModuleWithPathPlaceholder() {
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner() {
+            @Override protected Compiler createCompiler() { return null; }
+            @Override protected CompilerOptions createOptions() { return null; }
+        };
+        CompilerOptions options = new CompilerOptions();
+        options.sourceMapOutputPath = "path/%outname%.map";
+        assertTrue(runner.shouldGenerateMapPerModule(options));
+    }
+
+    // Test shouldGenerateMapPerModule when sourceMapOutputPath does not contain %outname%.
+    @Test
+    public void testShouldGenerateMapPerModuleWithoutPathPlaceholder() {
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner() {
+            @Override protected Compiler createCompiler() { return null; }
+            @Override protected CompilerOptions createOptions() { return null; }
+        };
+        CompilerOptions options = new CompilerOptions();
+        options.sourceMapOutputPath = "path/map.map";
+        assertFalse(runner.shouldGenerateMapPerModule(options));
+    }
+
+    // Test expandCommandLinePath with a module.
+    @Test
+    public void testExpandCommandLinePathWithModule() {
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner() {
+            @Override protected Compiler createCompiler() { return null; }
+            @Override protected CompilerOptions createOptions() { return null; }
+        };
+        // Mocking config and module
+        runner.config.moduleOutputPathPrefix = "./modules/";
+        runner.config.jsOutputFile = "single_output.js"; // Should be ignored
+        JSModule module = new JSModule("myModule");
+        String path = runner.expandCommandLinePath("output/%outname%.js", module);
+        assertEquals("output/./modules/myModule.js", path);
+    }
+
+    // Test expandCommandLinePath with modules and prefix.
+    @Test
+    public void testExpandCommandLinePathWithModulesAndPrefix() {
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner() {
+            @Override protected Compiler createCompiler() { return null; }
+            @Override protected CompilerOptions createOptions() { return null; }
+        };
+        runner.config.moduleOutputPathPrefix = "./modules/";
+        runner.config.module = Collections.singletonList("mod1:1"); // Indicate modules are used
+        String path = runner.expandCommandLinePath("output/%outname%.js", null);
+        assertEquals("output/./modules/", path);
+    }
+
+    // Test expandCommandLinePath without modules.
+    @Test
+    public void testExpandCommandLinePathWithoutModules() {
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner() {
+            @Override protected Compiler createCompiler() { return null; }
+            @Override protected CompilerOptions createOptions() { return null; }
+        };
+        runner.config.moduleOutputPathPrefix = ""; // Not using modules
+        runner.config.jsOutputFile = "single_output.js";
+        String path = runner.expandCommandLinePath("output/%outname%.js", null);
+        assertEquals("output/single_output.js", path);
+    }
+
+    // Test expandSourceMapPath with a module.
+    @Test
+    public void testExpandSourceMapPathWithModule() {
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner() {
+            @Override protected Compiler createCompiler() { return null; }
+            @Override protected CompilerOptions createOptions() { return null; }
+        };
+        runner.config.moduleOutputPathPrefix = "./modules/";
+        CompilerOptions options = new CompilerOptions();
+        options.sourceMapOutputPath = "maps/%outname%.map";
+        JSModule module = new JSModule("myModule");
+        assertEquals("maps/./modules/myModule.map", runner.expandSourceMapPath(options, module));
+    }
+
+    // Test expandSourceMapPath without a module.
+    @Test
+    public void testExpandSourceMapPathWithoutModule() {
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner() {
+            @Override protected Compiler createCompiler() { return null; }
+            @Override protected CompilerOptions createOptions() { return null; }
+        };
+        runner.config.moduleOutputPathPrefix = "";
+        CompilerOptions options = new CompilerOptions();
+        options.sourceMapOutputPath = "maps/%outname%.map";
+        assertEquals("maps/", runner.expandSourceMapPath(options, null));
+    }
+
+    // Test expandSourceMapPath with null sourceMapOutputPath.
+    @Test
+    public void testExpandSourceMapPathNull() {
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner() {
+            @Override protected Compiler createCompiler() { return null; }
+            @Override protected CompilerOptions createOptions() { return null; }
+        };
+        CompilerOptions options = new CompilerOptions();
+        options.sourceMapOutputPath = null;
+        assertNull(runner.expandSourceMapPath(options, null));
+    }
+
+    // Test expandManifest with a module.
+    @Test
+    public void testExpandManifestWithModule() {
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner() {
+            @Override protected Compiler createCompiler() { return null; }
+            @Override protected CompilerOptions createOptions() { return null; }
+        };
+        runner.config.moduleOutputPathPrefix = "./modules/";
+        runner.config.outputManifest = "manifest/%outname%.manifest";
+        JSModule module = new JSModule("myModule");
+        assertEquals("manifest/./modules/myModule.manifest", runner.expandManifest(module));
+    }
+
+    // Test expandManifest without a module.
+    @Test
+    public void testExpandManifestWithoutModule() {
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner() {
+            @Override protected Compiler createCompiler() { return null; }
+            @Override protected CompilerOptions createOptions() { return null; }
+        };
+        runner.config.moduleOutputPathPrefix = "";
+        runner.config.outputManifest = "manifest/%outname%.manifest";
+        assertEquals("manifest/", runner.expandManifest(null));
+    }
+
+    // Test expandManifest with null outputManifest.
+    @Test
+    public void testExpandManifestNull() {
+        AbstractCommandLineRunner runner = new AbstractCommandLineRunner() {
+            @Override protected Compiler createCompiler() { return null; }
+            @Override protected CompilerOptions createOptions() { return null; }
+        };
+        runner.config.outputManifest = null;
+        assertNull(runner.expandManifest(null));
+    }
+}
+```
+
+1. SOURCE CODE ANALYSIS
+The tests primarily focus on the constructors, helper methods for test mode setup, configuration handling, input creation (files, modules), output writing, and path expansion utilities within `AbstractCommandLineRunner`. Many tests involve verifying the correct initialization and behavior of these internal components under various valid and invalid input conditions.
+
+2. TEST CASE DESIGN
+- `testConstructorNoArgs`: Verifies default initialization with no arguments.
+- `testConstructorWithStreams`: Verifies initialization with provided PrintStreams.
+- `testEnableTestMode`: Tests enabling test mode with valid suppliers.
+- `testEnableTestModeNullInputsAndModules`: Tests `enableTestMode` with null inputs and modules, expecting IllegalArgumentException.
+- `testEnableTestModeBothInputsAndModules`: Tests `enableTestMode` with both inputs and modules non-null, expecting IllegalArgumentException.
+- `testGetCommandLineConfig`: Verifies that `getCommandLineConfig` returns a non-null object.
+- `testGetCompilerWhenNull`: Tests `getCompiler` when the compiler instance is null.
+- `testGetDiagnosticGroupsWhenCompilerNull`: Tests `getDiagnosticGroups` when the compiler is null.
+- `testCreateInputsSingleFile`: Tests `createInputs` with a single valid file.
+- `testCreateInputsStdin`: Tests `createInputs` with stdin ('-') when allowed.
+- `testCreateInputsStdinNotAllowed`: Tests `createInputs` with stdin when not allowed, expecting FlagUsageException.
+- `testCreateInputsMultipleFiles`: Tests `createInputs` with multiple valid files.
+- `testCreateJsModulesValid`: Tests `createJsModules` with valid module specifications.
+- `testCreateJsModulesWithDependencies`: Tests `createJsModules` with module dependencies.
+- `testCreateJsModulesDuplicateName`: Tests `createJsModules` with duplicate module names, expecting FlagUsageException.
+- `testCreateJsModulesNotEnoughFiles`: Tests `createJsModules` with insufficient JS files, expecting FlagUsageException.
+- `testCreateJsModulesTooManyFiles`: Tests `createJsModules` with too many JS files, expecting FlagUsageException.
+- `testCreateJsModulesInvalidModuleName`: Tests `createJsModules` with an invalid module name, expecting FlagUsageException.
+- `testCreateJsModulesInvalidSpecFormat`: Tests `createJsModules` with an invalid module spec format, expecting FlagUsageException.
+- `testCreateJsModulesUnknownDependency`: Tests `createJsModules` with a dependency on an unknown module, expecting FlagUsageException.
+- `testParseModuleWrappersValid`: Tests `parseModuleWrappers` with valid specifications.
+- `testParseModuleWrappersMissingPlaceholder`: Tests `parseModuleWrappers` with a missing placeholder, expecting FlagUsageException.
+- `testParseModuleWrappersUnknownModule`: Tests `parseModuleWrappers` with an unknown module, expecting FlagUsageException.
+- `testParseModuleWrappersInvalidSpecFormat`: Tests `parseModuleWrappers` with an invalid spec format, expecting FlagUsageException.
+- `testWriteOutputWithWrapper`: Tests `writeOutput` with a wrapper string.
+- `testWriteOutputWithoutWrapper`: Tests `writeOutput` without a wrapper.
+- `testWriteOutputEmptyCode`: Tests `writeOutput` with empty code.
+- `testWriteOutputWrapperNoPlaceholder`: Tests `writeOutput` with a wrapper lacking the placeholder.
+- `testFileNameToOutputWriter`: Tests `fileNameToOutputWriter` by writing to a temporary file.
+- `testFileNameToOutputWriterNull`: Tests `fileNameToOutputWriter` with a null file name.
+- `testOutputSourceMap`: This test is a placeholder as direct testing of private methods is complex and requires significant mocking.
+- `testGetMapPathEmptyOutputFile`: Tests `getMapPath` with an empty output file path.
+- `testGetMapPathNonEmptyOutputFile`: Tests `getMapPath` with a non-empty output file path.
+- `testOutputNameMapsCreateNameMapFiles`: Tests `outputNameMaps` when `createNameMapFiles` is true.
+- `testCreateDefineOrTweakReplacementsDefines`: Tests `createDefineOrTweakReplacements` with define flags.
+- `testCreateDefineOrTweakReplacementsTweaks`: Tests `createDefineOrTweakReplacements` with tweak flags.
+- `testCreateDefineOrTweakReplacementsInvalidDefineSyntax`: Tests `createDefineOrTweakReplacements` with invalid define syntax, expecting RuntimeException.
+- `testCreateDefineOrTweakReplacementsInvalidTweakSyntax`: Tests `createDefineOrTweakReplacements` with invalid tweak syntax, expecting RuntimeException.
+- `testGetInputCharsetSupported`: Tests `getInputCharset` with a supported charset.
+- `testGetInputCharsetUnsupported`: Tests `getInputCharset` with an unsupported charset, expecting FlagUsageException.
+- `testGetInputCharsetEmpty`: Tests `getInputCharset` with an empty charset.
+- `testGetOutputCharsetSupported`: Tests `getOutputCharset` with a supported charset.
+- `testGetOutputCharsetUnsupported`: Tests `getOutputCharset` with an unsupported charset, expecting FlagUsageException.
+- `testGetOutputCharsetEmpty`: Tests `getOutputCharset` with an empty charset.
+- `testShouldGenerateMapPerModuleNullPath`: Tests `shouldGenerateMapPerModule` when `sourceMapOutputPath` is null.
+- `testShouldGenerateMapPerModuleWithPathPlaceholder`: Tests `shouldGenerateMapPerModule` when `sourceMapOutputPath` contains '%outname%'.
+- `testShouldGenerateMapPerModuleWithoutPathPlaceholder`: Tests `shouldGenerateMapPerModule` when `sourceMapOutputPath` lacks '%outname%'.
+- `testExpandCommandLinePathWithModule`: Tests `expandCommandLinePath` when a module is present.
+- `testExpandCommandLinePathWithModulesAndPrefix`: Tests `expandCommandLinePath` with modules and a prefix.
+- `testExpandCommandLinePathWithoutModules`: Tests `expandCommandLinePath` when no modules are present.
+- `testExpandSourceMapPathWithModule`: Tests `expandSourceMapPath` with a module.
+- `testExpandSourceMapPathWithoutModule`: Tests `expandSourceMapPath` without a module.
+- `testExpandSourceMapPathNull`: Tests `expandSourceMapPath` when `sourceMapOutputPath` is null.
+- `testExpandManifestWithModule`: Tests `expandManifest` with a module.
+- `testExpandManifestWithoutModule`: Tests `expandManifest` without a module.
+- `testExpandManifestNull`: Tests `expandManifest` when `outputManifest` is null.
+
+4. DEFECT DETECTION STRATEGY
+The tests cover the construction, initialization, and utility methods of `AbstractCommandLineRunner`, focusing on input parsing, configuration handling, and output generation logic. They aim to catch errors in argument processing, path manipulation, and the setup of compiler options.
+
+5. SUMMARY
+37 tests.
+
+6. LIMITATIONS
+The `testOutputSourceMap` is a placeholder and requires significant mocking of internal `Compiler` and `SourceMap` classes, which is beyond the scope of this task. Some tests relying on `System.in` or file operations might have subtle environment dependencies.
+Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.
+```

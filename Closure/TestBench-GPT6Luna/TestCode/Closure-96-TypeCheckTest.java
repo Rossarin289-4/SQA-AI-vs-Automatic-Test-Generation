@@ -1,0 +1,81 @@
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Preconditions;
+import com.google.javascript.jscomp.CheckLevel;
+import com.google.javascript.jscomp.Scope.Var;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.jstype.EnumType;
+import com.google.javascript.rhino.jstype.FunctionType;
+import com.google.javascript.rhino.jstype.JSType;
+import com.google.javascript.rhino.jstype.JSTypeNative;
+import com.google.javascript.rhino.jstype.JSTypeRegistry;
+import com.google.javascript.rhino.jstype.ObjectType;
+import com.google.javascript.rhino.jstype.TernaryValue;
+import java.util.Iterator;
+
+public class TypeCheckTest {
+    @Test
+    public void testDiagnosticTypeKey() throws Exception {
+        assertEquals("JSC_BAD_DELETE_OPERAND", TypeCheck.BAD_DELETE.key);
+    }
+
+    @Test
+    public void testDiagnosticTypeDefaultLevel() throws Exception {
+        assertEquals(CheckLevel.WARNING, TypeCheck.BAD_DELETE.defaultLevel);
+    }
+
+    @Test
+    public void testAllDiagnosticsIncludesDeterministicTest() throws Exception {
+        assertFalse(TypeCheck.ALL_DIAGNOSTICS.toString().contains("JSC_DETERMINISTIC_TEST"));
+    }
+
+    @Test
+    public void testAllDiagnosticsIncludesUnknownOverride() throws Exception {
+        assertFalse(TypeCheck.ALL_DIAGNOSTICS.toString().contains("JSC_UNKNOWN_OVERRIDE"));
+    }
+
+    @Test
+    public void testAllDiagnosticsIncludesIllegalImplicitCast() throws Exception {
+        assertFalse(TypeCheck.ALL_DIAGNOSTICS.toString().contains("JSC_ILLEGAL_IMPLICIT_CAST"));
+    }
+
+    @Test
+    public void testOverrideWarningText() throws Exception {
+        assertEquals("overriding prototype with non-object",
+                TypeCheck.OVERRIDING_PROTOTYPE_WITH_NON_OBJECT);
+    }
+
+    @Test
+    public void testUnexpectedTokenDiagnosticKey() throws Exception {
+        assertEquals("JSC_INTERNAL_ERROR_UNEXPECTED_TOKEN", TypeCheck.UNEXPECTED_TOKEN.key);
+    }
+
+    @Test
+    public void testDeterministicTestDiagnosticKey() throws Exception {
+        assertEquals("JSC_DETERMINISTIC_TEST", TypeCheck.DETERMINISTIC_TEST.key);
+    }
+
+    @Test
+    public void testMissingOverrideDiagnosticKey() throws Exception {
+        assertEquals("JSC_UNKNOWN_OVERRIDE", TypeCheck.UNKNOWN_OVERRIDE.key);
+    }
+
+    @Test
+    public void testWrongArgumentCountDiagnosticKey() throws Exception {
+        assertEquals("JSC_WRONG_ARGUMENT_COUNT", TypeCheck.WRONG_ARGUMENT_COUNT.key);
+    }
+
+    @Test
+    public void testInexistentEnumDiagnosticKey() throws Exception {
+        assertEquals("JSC_INEXISTENT_ENUM_ELEMENT", TypeCheck.INEXISTENT_ENUM_ELEMENT.key);
+    }
+
+    @Test
+    public void testMultipleVariableDiagnosticKey() throws Exception {
+        assertEquals("JSC_MULTIPLE_VAR_DEF", TypeCheck.MULTIPLE_VAR_DEF.key);
+    }
+}

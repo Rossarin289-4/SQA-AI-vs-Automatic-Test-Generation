@@ -1,0 +1,1025 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Supplier;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.javascript.jscomp.MakeDeclaredNamesUnique.InlineRenamer;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.Map.Entry;
+import com.google.javascript.jscomp.NodeTraversal.ScopedCallback;
+import java.util.ArrayList;
+import java.util.Deque;
+import java.util.HashMap;
+import java.util.HashSet;
+
+public class FunctionToBlockMutatorTest {
+    // test methods (as many as the instructions ask for), each exactly in this form:
+    //     @Test
+    //     public void testWhatItChecks() throws Exception { ... }
+
+    // Mock AbstractCompiler and Supplier for testing
+    private static class MockAbstractCompiler extends AbstractCompiler {
+        @Override public void report(JSError error) {}
+        @Override public void reportCodeChange() {}
+        @Override public CodingConvention getCodingConvention() { return null; }
+        @Override public void addToDebugLog(String message) {}
+        @Override public String toSource(Node root) { return ""; }
+        @Override public ErrorReporter getDefaultErrorReporter() { return null; }
+        @Override public Supplier<String> getUniqueNameIdSupplier() {
+            return new Supplier<String>() {
+                private int id = 0;
+                @Override public String get() { return String.valueOf(id++); }
+            };
+        }
+        @Override public boolean hasHaltingErrors() { return false; }
+        @Override public TypeValidator getTypeValidator() { return null; }
+        @Override public JSTypeRegistry getTypeRegistry() { return null; }
+        @Override public Scope getTopScope() { return null; }
+        @Override public ReverseAbstractInterpreter getReverseAbstractInterpreter() { return null; }
+        @Override public boolean isTypeCheckingEnabled() { return false; }
+        @Override public void prepareAst(Node root) {}
+        @Override public ErrorManager getErrorManager() { return null; }
+        @Override public boolean areNodesEqualForInlining(Node n1, Node n2) { return false; }
+        @Override public void setHasRegExpGlobalReferences(boolean references) {}
+        @Override public boolean hasRegExpGlobalReferences() { return false; }
+        @Override public JSModuleGraph getModuleGraph() { return null; }
+        @Override public List<CompilerInput> getInputsInOrder() { return null; }
+        @Override public CompilerInput getInput(String sourceName) { return null; }
+        @Override public CompilerInput newExternInput(String name) { return null; }
+        @Override public Node getNodeForCodeInsertion(JSModule module) { return new Node(Token.BLOCK); }
+        @Override public Node parseSyntheticCode(String code) { return null; }
+        @Override public Node parseSyntheticCode(String filename, String code) { return null; }
+        @Override public Node parseTestCode(String code) { return new Node(Token.SCRIPT); }
+        @Override public void setCssRenamingMap(CssRenamingMap map) {}
+        @Override public CssRenamingMap getCssRenamingMap() { return null; }
+        @Override public LifeCycleStage getLifeCycleStage() { return null; }
+        @Override public void setLifeCycleStage(LifeCycleStage stage) {}
+        @Override public void addChangeHandler(CodeChangeHandler handler) {}
+        @Override public void removeChangeHandler(CodeChangeHandler handler) {}
+        @Override public boolean isIdeMode() { return false; }
+        @Override public boolean acceptEcmaScript5() { return false; }
+        @Override public boolean acceptConstKeyword() { return false; }
+        @Override public Config getParserConfig() { return null; }
+        @Override public void throwInternalError(String msg, Exception cause) {}
+    }
+
+    private static class MockSupplier<T> implements Supplier<T> {
+        private T value;
+        public void set(T value) { this.value = value; }
+        @Override public T get() { return this.value; }
+    }
+
+    @Test
+    public void testMutateBasicFunction() throws Exception {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        MockSupplier<String> safeNameIdSupplier = new MockSupplier<>();
+        safeNameIdSupplier.set("0");
+        FunctionToBlockMutator mutator = new FunctionToBlockMutator(compiler, safeNameIdSupplier);
+
+        Node fnNode = new Node(Token.FUNCTION, new Node(Token.BLOCK, new Node(Token.RETURN, Node.newNumber(10))));
+        Node callNode = new Node(Token.CALL);
+        String resultName = "result";
+        boolean needsDefaultResult = false;
+        boolean isCallInLoop = false;
+
+        Node mutatedBlock = mutator.mutate("myFunc", fnNode, callNode, resultName, needsDefaultResult, isCallInLoop);
+
+        // The mutated block should contain a RETURN statement that has been transformed.
+        // In this basic case, it should be transformed into an assignment to resultName.
+        // The exact structure can be complex, so we check for the presence of the RETURN and assignment.
+        // If needsDefaultResult is false, the RETURN should become the value of the expression.
+        // If needsDefaultResult is true, it should become an assignment.
+        // Here, needsDefaultResult is false, so it should become 'return 10;' which is transformed to '10; break labelName'.
+        // However, replaceReturns handles this differently if no label is needed and needsDefaultResult is false.
+        // It will transform 'return 10;' into '10;'.
+        assertTrue(mutatedBlock.hasChildren());
+        Node firstChild = mutatedBlock.getFirstChild();
+        assertEquals(Token.LABEL, firstChild.getType());
+        assertEquals("JSCompiler_inline_label_myFunc_0", firstChild.getFirstChild().getString());
+        Node blockInsideLabel = firstChild.getLastChild();
+        assertTrue(blockInsideLabel.hasChildren());
+        Node returnStatement = blockInsideLabel.getFirstChild();
+        assertEquals(Token.RETURN, returnStatement.getType());
+        assertEquals(10.0, returnStatement.getOnlyChild().getDouble(), 0.0);
+    }
+
+    @Test
+    public void testMutateWithResultName() throws Exception {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        MockSupplier<String> safeNameIdSupplier = new MockSupplier<>();
+        safeNameIdSupplier.set("0");
+        FunctionToBlockMutator mutator = new FunctionToBlockMutator(compiler, safeNameIdSupplier);
+
+        Node fnNode = new Node(Token.FUNCTION, new Node(Token.BLOCK, new Node(Token.RETURN, Node.newNumber(20))));
+        Node callNode = new Node(Token.CALL);
+        String resultName = "resultVar";
+        boolean needsDefaultResult = true; // This should cause assignment
+        boolean isCallInLoop = false;
+
+        Node mutatedBlock = mutator.mutate("myFuncWithResult", fnNode, callNode, resultName, needsDefaultResult, isCallInLoop);
+
+        // With needsDefaultResult = true, the RETURN should be converted to an assignment to resultName.
+        assertTrue(mutatedBlock.hasChildren());
+        Node firstChild = mutatedBlock.getFirstChild();
+        assertEquals(Token.LABEL, firstChild.getType());
+        Node blockInsideLabel = firstChild.getLastChild();
+        assertTrue(blockInsideLabel.hasChildren());
+        Node assignmentStatement = blockInsideLabel.getFirstChild();
+        assertEquals(Token.EXPR_RESULT, assignmentStatement.getType());
+        Node assignNode = assignmentStatement.getFirstChild();
+        assertEquals(Token.ASSIGN, assignNode.getType());
+        assertEquals(resultName, assignNode.getFirstChild().getString());
+        assertEquals(20.0, assignNode.getLastChild().getDouble(), 0.0);
+    }
+
+    @Test
+    public void testMutateWithArguments() throws Exception {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        MockSupplier<String> safeNameIdSupplier = new MockSupplier<>();
+        safeNameIdSupplier.set("0");
+        FunctionToBlockMutator mutator = new FunctionToBlockMutator(compiler, safeNameIdSupplier);
+
+        Node fnNode = new Node(Token.FUNCTION,
+                new Node(Token.PARAM_LIST, new Node(Token.NAME, "a"), new Node(Token.NAME, "b")),
+                new Node(Token.BLOCK, new Node(Token.RETURN, new Node(Token.ADD, new Node(Token.NAME, "a"), new Node(Token.NAME, "b")))));
+        Node callNode = new Node(Token.CALL, Node.newNumber(5), Node.newNumber(7));
+        String resultName = "res";
+        boolean needsDefaultResult = false;
+        boolean isCallInLoop = false;
+
+        Node mutatedBlock = mutator.mutate("addFunc", fnNode, callNode, resultName, needsDefaultResult, isCallInLoop);
+
+        // The arguments should be inlined, and the function body transformed.
+        // The 'a' and 'b' inside the function body should be replaced by the arguments.
+        // The RETURN statement should be transformed based on needsDefaultResult.
+        assertTrue(mutatedBlock.hasChildren());
+        Node firstChild = mutatedBlock.getFirstChild();
+        assertEquals(Token.LABEL, firstChild.getType());
+        Node blockInsideLabel = firstChild.getLastChild();
+        assertTrue(blockInsideLabel.hasChildren());
+        Node returnStatement = blockInsideLabel.getFirstChild(); // Should be RETURN
+        assertEquals(Token.RETURN, returnStatement.getType());
+        Node addNode = returnStatement.getOnlyChild();
+        assertEquals(Token.ADD, addNode.getType());
+        assertEquals(5.0, addNode.getFirstChild().getDouble(), 0.0);
+        assertEquals(7.0, addNode.getLastChild().getDouble(), 0.0);
+    }
+
+    @Test
+    public void testMutateCallInLoop() throws Exception {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        MockSupplier<String> safeNameIdSupplier = new MockSupplier<>();
+        safeNameIdSupplier.set("0");
+        FunctionToBlockMutator mutator = new FunctionToBlockMutator(compiler, safeNameIdSupplier);
+
+        Node fnNode = new Node(Token.FUNCTION, new Node(Token.BLOCK, new Node(Token.VAR, Node.newString(Token.NAME, "x")), new Node(Token.RETURN, new Node(Token.NAME, "x"))));
+        Node callNode = new Node(Token.CALL);
+        String resultName = "loopResult";
+        boolean needsDefaultResult = false;
+        boolean isCallInLoop = true; // Key difference
+
+        Node mutatedBlock = mutator.mutate("loopFunc", fnNode, callNode, resultName, needsDefaultResult, isCallInLoop);
+
+        // When isCallInLoop is true, fixUnitializedVarDeclarations should be called.
+        // This means 'var x;' should become 'var x = undefined;'.
+        assertTrue(mutatedBlock.hasChildren());
+        Node firstChild = mutatedBlock.getFirstChild();
+        assertEquals(Token.LABEL, firstChild.getType());
+        Node blockInsideLabel = firstChild.getLastChild();
+        assertTrue(blockInsideLabel.hasChildren());
+        Node varStatement = blockInsideLabel.getFirstChild();
+        assertEquals(Token.VAR, varStatement.getType());
+        assertEquals(Token.NAME, varStatement.getFirstChild().getType());
+        assertTrue(varStatement.getFirstChild().hasChildren()); // Should have undefined child
+        assertEquals(Token.CALL, varStatement.getFirstChild().getFirstChild().getType()); // Undefined is a call
+        assertEquals("undefined", varStatement.getFirstChild().getFirstChild().getQualifiedName());
+    }
+
+    @Test
+    public void testMutateWithUninitializedVarInLoop() throws Exception {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        MockSupplier<String> safeNameIdSupplier = new MockSupplier<>();
+        safeNameIdSupplier.set("0");
+        FunctionToBlockMutator mutator = new FunctionToBlockMutator(compiler, safeNameIdSupplier);
+
+        // Function body contains a VAR declaration without initialization.
+        Node fnNode = new Node(Token.FUNCTION, new Node(Token.BLOCK, new Node(Token.VAR, Node.newString(Token.NAME, "y"))));
+        Node callNode = new Node(Token.CALL);
+        String resultName = "loopRes";
+        boolean needsDefaultResult = false;
+        boolean isCallInLoop = true;
+
+        Node mutatedBlock = mutator.mutate("loopVarFunc", fnNode, callNode, resultName, needsDefaultResult, isCallInLoop);
+
+        // The uninitialized VAR should be initialized to undefined.
+        assertTrue(mutatedBlock.hasChildren());
+        Node firstChild = mutatedBlock.getFirstChild();
+        assertEquals(Token.LABEL, firstChild.getType());
+        Node blockInsideLabel = firstChild.getLastChild();
+        assertTrue(blockInsideLabel.hasChildren());
+        Node varStatement = blockInsideLabel.getFirstChild();
+        assertEquals(Token.VAR, varStatement.getType());
+        assertEquals(Token.NAME, varStatement.getFirstChild().getType());
+        assertTrue(varStatement.getFirstChild().hasChildren());
+        assertEquals(Token.CALL, varStatement.getFirstChild().getFirstChild().getType()); // Undefined is a call
+        assertEquals("undefined", varStatement.getFirstChild().getFirstChild().getQualifiedName());
+    }
+
+    @Test
+    public void testMutateWithReturnAndLabel() throws Exception {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        MockSupplier<String> safeNameIdSupplier = new MockSupplier<>();
+        safeNameIdSupplier.set("0");
+        FunctionToBlockMutator mutator = new FunctionToBlockMutator(compiler, safeNameIdSupplier);
+
+        Node fnNode = new Node(Token.FUNCTION, new Node(Token.BLOCK, new Node(Token.RETURN, Node.newNumber(30))));
+        Node callNode = new Node(Token.CALL);
+        String resultName = "labelRes";
+        boolean needsDefaultResult = true;
+        boolean isCallInLoop = false;
+
+        Node mutatedBlock = mutator.mutate("labelFunc", fnNode, callNode, resultName, needsDefaultResult, isCallInLoop);
+
+        // When needsDefaultResult is true, RETURN should be an assignment.
+        // The structure should be LABEL -> BLOCK -> ASSIGN.
+        assertTrue(mutatedBlock.hasChildren());
+        Node labelNode = mutatedBlock.getFirstChild();
+        assertEquals(Token.LABEL, labelNode.getType());
+        assertEquals("JSCompiler_inline_label_labelFunc_0", labelNode.getFirstChild().getString());
+        Node blockInsideLabel = labelNode.getLastChild();
+        assertTrue(blockInsideLabel.hasChildren());
+        Node assignmentStatement = blockInsideLabel.getFirstChild();
+        assertEquals(Token.EXPR_RESULT, assignmentStatement.getType());
+        Node assignNode = assignmentStatement.getFirstChild();
+        assertEquals(Token.ASSIGN, assignNode.getType());
+        assertEquals(resultName, assignNode.getFirstChild().getString());
+        assertEquals(30.0, assignNode.getLastChild().getDouble(), 0.0);
+    }
+
+    @Test
+    public void testMutateWithMultipleReturns() throws Exception {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        MockSupplier<String> safeNameIdSupplier = new MockSupplier<>();
+        safeNameIdSupplier.set("0");
+        FunctionToBlockMutator mutator = new FunctionToBlockMutator(compiler, safeNameIdSupplier);
+
+        Node block = new Node(Token.BLOCK);
+        block.addChildToBack(NodeUtil.newExpr(Node.newNumber(1.0)));
+        block.addChildToBack(new Node(Token.RETURN, Node.newNumber(2.0)));
+        block.addChildToBack(new Node(Token.RETURN, Node.newNumber(3.0)));
+
+        Node fnNode = new Node(Token.FUNCTION, block);
+        Node callNode = new Node(Token.CALL);
+        String resultName = "multiRes";
+        boolean needsDefaultResult = false;
+        boolean isCallInLoop = false;
+
+        Node mutatedBlock = mutator.mutate("multiReturnFunc", fnNode, callNode, resultName, needsDefaultResult, isCallInLoop);
+
+        // Multiple returns should be handled by replacing them with break statements.
+        // The last RETURN should be converted to a statement (or assignment if needsDefaultResult).
+        // All other RETURNS should become BREAK statements.
+        assertTrue(mutatedBlock.hasChildren());
+        Node labelNode = mutatedBlock.getFirstChild();
+        assertEquals(Token.LABEL, labelNode.getType());
+        Node blockInsideLabel = labelNode.getLastChild();
+        assertTrue(blockInsideLabel.hasChildren());
+
+        // The first statement should be the converted last return.
+        Node firstStatement = blockInsideLabel.getFirstChild();
+        assertEquals(Token.RETURN, firstStatement.getType()); // Since needsDefaultResult is false, it should be a normal return.
+        assertEquals(3.0, firstStatement.getOnlyChild().getDouble(), 0.0);
+
+        // Subsequent statements should be BREAKs.
+        Node secondStatement = firstStatement.getNext();
+        assertEquals(Token.BREAK, secondStatement.getType());
+        assertEquals("JSCompiler_inline_label_multiReturnFunc_0", secondStatement.getFirstChild().getString());
+
+        Node thirdStatement = secondStatement.getNext();
+        assertEquals(Token.BREAK, thirdStatement.getType());
+        assertEquals("JSCompiler_inline_label_multiReturnFunc_0", thirdStatement.getFirstChild().getString());
+    }
+
+    @Test
+    public void testMutateWithNamedArgumentsAndAlias() throws Exception {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        MockSupplier<String> safeNameIdSupplier = new MockSupplier<>();
+        safeNameIdSupplier.set("0");
+        FunctionToBlockMutator mutator = new FunctionToBlockMutator(compiler, safeNameIdSupplier);
+
+        // A function that modifies one of its parameters.
+        Node fnNode = new Node(Token.FUNCTION,
+                new Node(Token.PARAM_LIST, new Node(Token.NAME, "a"), new Node(Token.NAME, "b")),
+                new Node(Token.BLOCK,
+                        new Node(Token.ASSIGN, new Node(Token.NAME, "a"), Node.newNumber(100)), // Modifies 'a'
+                        new Node(Token.RETURN, new Node(Token.ADD, new Node(Token.NAME, "a"), new Node(Token.NAME, "b")))));
+        Node callNode = new Node(Token.CALL, Node.newNumber(5), Node.newNumber(7)); // a=5, b=7
+        String resultName = "aliasRes";
+        boolean needsDefaultResult = true;
+        boolean isCallInLoop = false;
+
+        Node mutatedBlock = mutator.mutate("aliasFunc", fnNode, callNode, resultName, needsDefaultResult, isCallInLoop);
+
+        // 'a' is modified, so it should be aliased.
+        // The original function body should have 'a' replaced by a var, and then 'a' inlined.
+        // The expected structure is:
+        // LABEL "JSCompiler_inline_label_aliasFunc_0":
+        //   BLOCK
+        //     VAR alias_0 = 5; // new name for 'a'
+        //     resultRes = alias_0 + b; // 'b' is directly inlined
+        //     break JSCompiler_inline_label_aliasFunc_0;
+        assertTrue(mutatedBlock.hasChildren());
+        Node labelNode = mutatedBlock.getFirstChild();
+        assertEquals(Token.LABEL, labelNode.getType());
+        Node blockInsideLabel = labelNode.getLastChild();
+        assertTrue(blockInsideLabel.hasChildren());
+
+        Node varDecl = blockInsideLabel.getFirstChild();
+        assertEquals(Token.VAR, varDecl.getType());
+        assertEquals("alias_0", varDecl.getFirstChild().getString());
+        assertEquals(5.0, varDecl.getFirstChild().getOnlyChild().getDouble(), 0.0);
+
+        Node assignment = varDecl.getNext();
+        assertEquals(Token.EXPR_RESULT, assignment.getType());
+        Node assignNode = assignment.getFirstChild();
+        assertEquals(Token.ASSIGN, assignNode.getType());
+        assertEquals(resultName, assignNode.getFirstChild().getString());
+        Node addNode = assignNode.getLastChild();
+        assertEquals(Token.ADD, addNode.getType());
+        assertEquals("alias_0", addNode.getFirstChild().getString());
+        assertEquals(7.0, addNode.getLastChild().getDouble(), 0.0); // b is inlined directly
+    }
+
+    @Test
+    public void testMutateFunctionWithNoBody() throws Exception {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        MockSupplier<String> safeNameIdSupplier = new MockSupplier<>();
+        safeNameIdSupplier.set("0");
+        FunctionToBlockMutator mutator = new FunctionToBlockMutator(compiler, safeNameIdSupplier);
+
+        Node fnNode = new Node(Token.FUNCTION, new Node(Token.BLOCK)); // Empty function body
+        Node callNode = new Node(Token.CALL);
+        String resultName = "emptyRes";
+        boolean needsDefaultResult = false;
+        boolean isCallInLoop = false;
+
+        Node mutatedBlock = mutator.mutate("emptyFunc", fnNode, callNode, resultName, needsDefaultResult, isCallInLoop);
+
+        // An empty function body with needsDefaultResult=false should result in an empty block.
+        // The structure should be LABEL -> BLOCK.
+        assertTrue(mutatedBlock.hasChildren());
+        Node labelNode = mutatedBlock.getFirstChild();
+        assertEquals(Token.LABEL, labelNode.getType());
+        Node blockInsideLabel = labelNode.getLastChild();
+        assertTrue(blockInsideLabel.getAllChildren().isEmpty());
+    }
+
+    @Test
+    public void testMutateFunctionWithNoBodyAndNeedsDefaultResult() throws Exception {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        MockSupplier<String> safeNameIdSupplier = new MockSupplier<>();
+        safeNameIdSupplier.set("0");
+        FunctionToBlockMutator mutator = new FunctionToBlockMutator(compiler, safeNameIdSupplier);
+
+        Node fnNode = new Node(Token.FUNCTION, new Node(Token.BLOCK)); // Empty function body
+        Node callNode = new Node(Token.CALL);
+        String resultName = "defaultEmptyRes";
+        boolean needsDefaultResult = true; // Should add a default assignment
+        boolean isCallInLoop = false;
+
+        Node mutatedBlock = mutator.mutate("defaultEmptyFunc", fnNode, callNode, resultName, needsDefaultResult, isCallInLoop);
+
+        // An empty function body with needsDefaultResult=true should add a default assignment.
+        assertTrue(mutatedBlock.hasChildren());
+        Node labelNode = mutatedBlock.getFirstChild();
+        assertEquals(Token.LABEL, labelNode.getType());
+        Node blockInsideLabel = labelNode.getLastChild();
+        assertTrue(blockInsideLabel.hasChildren());
+
+        // Should have a dummy assignment to 'undefined'.
+        Node assignmentStatement = blockInsideLabel.getFirstChild();
+        assertEquals(Token.EXPR_RESULT, assignmentStatement.getType());
+        Node assignNode = assignmentStatement.getFirstChild();
+        assertEquals(Token.ASSIGN, assignNode.getType());
+        assertEquals(resultName, assignNode.getFirstChild().getString());
+        assertEquals(Token.CALL, assignNode.getLastChild().getType()); // Undefined is a call.
+        assertEquals("undefined", assignNode.getLastChild().getQualifiedName());
+    }
+
+    @Test
+    public void testFixUnitializedVarDeclarationsRecursive() throws Exception {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        FunctionToBlockMutator mutator = new FunctionToBlockMutator(compiler, null); // Supplier not relevant here
+
+        Node block = new Node(Token.BLOCK);
+        Node loop = new Node(Token.FOR, new Node(Token.BLOCK, new Node(Token.VAR, Node.newString(Token.NAME, "innerVar"))));
+        block.addChildToBack(loop);
+        block.addChildToBack(new Node(Token.VAR, Node.newString(Token.NAME, "outerVar")));
+
+        // Call the private method directly for testing.
+        // This method is called within `mutate` when `isCallInLoop` is true.
+        // We test it in isolation to verify its behavior.
+        Node mutatedBlock = mutator.mutate("recursiveLoopFunc", new Node(Token.FUNCTION, block), new Node(Token.CALL), "res", false, true);
+
+        // The outerVar should be initialized to undefined, but innerVar inside the loop structure should not be.
+        assertTrue(mutatedBlock.hasChildren());
+        Node labelNode = mutatedBlock.getFirstChild();
+        Node blockInsideLabel = labelNode.getLastChild();
+
+        // Check the outerVar
+        Node outerVarDecl = blockInsideLabel.getFirstChild();
+        assertEquals(Token.VAR, outerVarDecl.getType());
+        assertEquals("outerVar", outerVarDecl.getFirstChild().getString());
+        assertTrue(outerVarDecl.getFirstChild().hasChildren()); // Should have undefined child
+        assertEquals(Token.CALL, outerVarDecl.getFirstChild().getFirstChild().getType());
+        assertEquals("undefined", outerVarDecl.getFirstChild().getFirstChild().getQualifiedName());
+
+        // Check the loop structure (should not be modified for its internal vars)
+        Node forLoop = outerVarDecl.getNext();
+        assertEquals(Token.FOR, forLoop.getType());
+        Node innerBlock = forLoop.getLastChild();
+        Node innerVarDecl = innerBlock.getFirstChild();
+        assertEquals(Token.VAR, innerVarDecl.getType());
+        assertEquals("innerVar", innerVarDecl.getFirstChild().getString());
+        assertFalse(innerVarDecl.getFirstChild().hasChildren()); // Should NOT have undefined child
+    }
+
+    @Test
+    public void testMakeLocalNamesUnique() throws Exception {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        MockSupplier<String> idSupplier = new MockSupplier<>();
+        idSupplier.set("1"); // Start with "1" to simulate a subsequent name.
+        FunctionToBlockMutator mutator = new FunctionToBlockMutator(compiler, idSupplier);
+
+        // A function with local variables that might conflict.
+        Node fnNode = new Node(Token.FUNCTION,
+                new Node(Token.BLOCK,
+                        new Node(Token.VAR, Node.newString(Token.NAME, "a")),
+                        new Node(Token.VAR, Node.newString(Token.NAME, "b")),
+                        new Node(Token.VAR, Node.newString(Token.NAME, "a")))); // Duplicate 'a'
+
+        // Clone the function node so we can mutate it.
+        Node fnNodeClone = fnNode.cloneTree();
+
+        // Call the private method directly for testing.
+        // This method is called within `mutate` to ensure local names are unique.
+        mutator.makeLocalNamesUnique(fnNodeClone, false);
+
+        // Verify that the names have been made unique.
+        Node body = fnNodeClone.getSecondChild(); // Get the BLOCK node
+        Node var1 = body.getFirstChild();
+        assertEquals("a", var1.getFirstChild().getString()); // First 'a' should remain 'a'
+
+        Node var2 = var1.getNext();
+        assertEquals("b", var2.getFirstChild().getString()); // 'b' should remain 'b'
+
+        Node var3 = var2.getNext();
+        assertEquals("inline_1", var3.getFirstChild().getString()); // Second 'a' should be renamed to "inline_1"
+    }
+
+    @Test
+    public void testGetLabelNameForFunction() throws Exception {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        MockSupplier<String> safeNameIdSupplier = new MockSupplier<>();
+        FunctionToBlockMutator mutator = new FunctionToBlockMutator(compiler, safeNameIdSupplier);
+
+        safeNameIdSupplier.set("123");
+        assertEquals("JSCompiler_inline_label_myFunc_123", mutator.getLabelNameForFunction("myFunc"));
+
+        safeNameIdSupplier.set("456");
+        assertEquals("JSCompiler_inline_label_anon_456", mutator.getLabelNameForFunction(null));
+
+        safeNameIdSupplier.set("789");
+        assertEquals("JSCompiler_inline_label_anon_789", mutator.getLabelNameForFunction(""));
+    }
+
+    @Test
+    public void testAliasAndInlineArgumentsNoAliasNeeded() throws Exception {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        FunctionToBlockMutator mutator = new FunctionToBlockMutator(compiler, null);
+
+        Node fnTemplateRoot = new Node(Token.BLOCK, new Node(Token.ADD, new Node(Token.NAME, "a"), new Node(Token.NAME, "b")));
+        LinkedHashMap<String, Node> argMap = Maps.newLinkedHashMap();
+        argMap.put("a", Node.newNumber(1.0));
+        argMap.put("b", Node.newNumber(2.0));
+        Set<String> namesToAlias = new HashSet<>(); // No names to alias
+
+        // Clone the template root to ensure original is not modified
+        Node clonedRoot = fnTemplateRoot.cloneTree();
+        Node result = mutator.aliasAndInlineArguments(clonedRoot, argMap, namesToAlias);
+
+        // The arguments should be directly injected.
+        assertEquals(Token.BLOCK, result.getType());
+        Node addNode = result.getFirstChild();
+        assertEquals(Token.ADD, addNode.getType());
+        assertEquals(1.0, addNode.getFirstChild().getDouble(), 0.0);
+        assertEquals(2.0, addNode.getLastChild().getDouble(), 0.0);
+    }
+
+    @Test
+    public void testAliasAndInlineArgumentsWithAliasNeeded() throws Exception {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        FunctionToBlockMutator mutator = new FunctionToBlockMutator(compiler, null);
+
+        Node fnTemplateRoot = new Node(Token.BLOCK,
+                new Node(Token.ASSIGN, new Node(Token.NAME, "a"), Node.newNumber(100)), // 'a' is modified
+                new Node(Token.RETURN, new Node(Token.ADD, new Node(Token.NAME, "a"), new Node(Token.NAME, "b"))));
+
+        LinkedHashMap<String, Node> argMap = Maps.newLinkedHashMap();
+        argMap.put("a", Node.newNumber(5.0)); // Value for 'a'
+        argMap.put("b", Node.newNumber(7.0)); // Value for 'b'
+
+        Set<String> namesToAlias = new HashSet<>();
+        namesToAlias.add("a"); // 'a' needs to be aliased because it's modified.
+
+        // Clone the template root to ensure original is not modified
+        Node clonedRoot = fnTemplateRoot.cloneTree();
+        Node result = mutator.aliasAndInlineArguments(clonedRoot, argMap, namesToAlias);
+
+        // Expected structure:
+        // BLOCK
+        //   VAR alias_0 = 5.0;
+        //   a = 100; // This 'a' should now refer to the alias
+        //   RETURN (ADD alias_0 b)
+
+        assertEquals(Token.BLOCK, result.getType());
+        Node varDecl = result.getFirstChild();
+        assertEquals(Token.VAR, varDecl.getType());
+        assertEquals("alias_0", varDecl.getFirstChild().getString());
+        assertEquals(5.0, varDecl.getFirstChild().getOnlyChild().getDouble(), 0.0);
+
+        Node assignment = varDecl.getNext();
+        assertEquals(Token.ASSIGN, assignment.getType());
+        assertEquals("a", assignment.getFirstChild().getString()); // This 'a' should be the parameter name
+
+        Node returnNode = assignment.getNext();
+        assertEquals(Token.RETURN, returnNode.getType());
+        Node addNode = returnNode.getOnlyChild();
+        assertEquals(Token.ADD, addNode.getType());
+        assertEquals("alias_0", addNode.getFirstChild().getString()); // Use the alias
+        assertEquals(7.0, addNode.getLastChild().getDouble(), 0.0); // 'b' is directly inlined
+    }
+
+    @Test
+    public void testReplaceReturnsBasicReturn() throws Exception {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        FunctionToBlockMutator mutator = new FunctionToBlockMutator(compiler, null);
+
+        Node block = new Node(Token.BLOCK, new Node(Token.RETURN, Node.newNumber(1.0)));
+        String labelName = "foo";
+
+        Node transformedBlock = mutator.replaceReturns(block, null, labelName, false);
+
+        // A basic RETURN with no resultName and no needsDefaultResult should become the expression itself followed by a BREAK.
+        // BLOCK -> LABEL -> RETURN expr; BREAK label;
+        assertEquals(Token.BLOCK, transformedBlock.getType());
+        Node labelNode = transformedBlock.getFirstChild();
+        assertEquals(Token.LABEL, labelNode.getType());
+        assertEquals(labelName, labelNode.getFirstChild().getString());
+        Node innerBlock = labelNode.getLastChild();
+        Node returnNode = innerBlock.getFirstChild();
+        assertEquals(Token.RETURN, returnNode.getType());
+        assertEquals(1.0, returnNode.getOnlyChild().getDouble(), 0.0);
+        Node breakNode = returnNode.getNext();
+        assertEquals(Token.BREAK, breakNode.getType());
+        assertEquals(labelName, breakNode.getFirstChild().getString());
+    }
+
+    @Test
+    public void testReplaceReturnsNeedsDefaultResult() throws Exception {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        FunctionToBlockMutator mutator = new FunctionToBlockMutator(compiler, null);
+
+        Node block = new Node(Token.BLOCK, new Node(Token.RETURN, Node.newNumber(2.0)));
+        String resultName = "res";
+        String labelName = "bar";
+
+        Node transformedBlock = mutator.replaceReturns(block, resultName, labelName, true);
+
+        // With needsDefaultResult, RETURN should become assignment + BREAK.
+        // BLOCK -> LABEL -> EXPR_RESULT (ASSIGN res, 2.0); BREAK bar;
+        assertEquals(Token.BLOCK, transformedBlock.getType());
+        Node labelNode = transformedBlock.getFirstChild();
+        assertEquals(Token.LABEL, labelNode.getType());
+        Node innerBlock = labelNode.getLastChild();
+        Node assignmentNode = innerBlock.getFirstChild();
+        assertEquals(Token.EXPR_RESULT, assignmentNode.getType());
+        Node assign = assignmentNode.getFirstChild();
+        assertEquals(Token.ASSIGN, assign.getType());
+        assertEquals(resultName, assign.getFirstChild().getString());
+        assertEquals(2.0, assign.getLastChild().getDouble(), 0.0);
+        Node breakNode = assignmentNode.getNext();
+        assertEquals(Token.BREAK, breakNode.getType());
+        assertEquals(labelName, breakNode.getFirstChild().getString());
+    }
+
+    @Test
+    public void testReplaceReturnsNoReturnButNeedsDefaultResult() throws Exception {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        FunctionToBlockMutator mutator = new FunctionToBlockMutator(compiler, null);
+
+        Node block = new Node(Token.BLOCK, new Node(Token.EXPR_RESULT, Node.newNumber(1.0))); // No return
+        String resultName = "res";
+        String labelName = "baz";
+
+        Node transformedBlock = mutator.replaceReturns(block, resultName, labelName, true);
+
+        // If no return but needsDefaultResult, a dummy assignment should be added.
+        // BLOCK -> LABEL -> expr; EXPR_RESULT (ASSIGN res, undefined); BREAK baz;
+        assertEquals(Token.BLOCK, transformedBlock.getType());
+        Node labelNode = transformedBlock.getFirstChild();
+        assertEquals(Token.LABEL, labelNode.getType());
+        Node innerBlock = labelNode.getLastChild();
+        Node exprNode = innerBlock.getFirstChild();
+        assertEquals(Token.EXPR_RESULT, exprNode.getType());
+        assertEquals(1.0, exprNode.getOnlyChild().getDouble(), 0.0);
+
+        Node assignmentNode = exprNode.getNext();
+        assertEquals(Token.EXPR_RESULT, assignmentNode.getType());
+        Node assign = assignmentNode.getFirstChild();
+        assertEquals(Token.ASSIGN, assign.getType());
+        assertEquals(resultName, assign.getFirstChild().getString());
+        assertEquals(Token.CALL, assign.getLastChild().getType()); // Undefined is a call
+        assertEquals("undefined", assign.getLastChild().getQualifiedName());
+
+        Node breakNode = assignmentNode.getNext();
+        assertEquals(Token.BREAK, breakNode.getType());
+        assertEquals(labelName, breakNode.getFirstChild().getString());
+    }
+
+    @Test
+    public void testReplaceReturnsNoReturnAndNoNeedsDefaultResult() throws Exception {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        FunctionToBlockMutator mutator = new FunctionToBlockMutator(compiler, null);
+
+        Node block = new Node(Token.BLOCK, new Node(Token.EXPR_RESULT, Node.newNumber(1.0))); // No return
+        String resultName = "res";
+        String labelName = "qux";
+
+        Node transformedBlock = mutator.replaceReturns(block, resultName, labelName, false);
+
+        // If no return and no needsDefaultResult, the block should remain largely unchanged, but
+        // getLabelNameForFunction ensures a label is always generated and block is wrapped.
+        // BLOCK -> LABEL -> expr; BREAK qux;
+        assertEquals(Token.BLOCK, transformedBlock.getType());
+        Node labelNode = transformedBlock.getFirstChild();
+        assertEquals(Token.LABEL, labelNode.getType());
+        Node innerBlock = labelNode.getLastChild();
+        Node exprNode = innerBlock.getFirstChild();
+        assertEquals(Token.EXPR_RESULT, exprNode.getType());
+        assertEquals(1.0, exprNode.getOnlyChild().getDouble(), 0.0);
+
+        Node breakNode = exprNode.getNext();
+        assertEquals(Token.BREAK, breakNode.getType());
+        assertEquals(labelName, breakNode.getFirstChild().getString());
+    }
+
+    @Test
+    public void testReplaceReturnsEmptyBlockNoNeedsDefaultResult() throws Exception {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        FunctionToBlockMutator mutator = new FunctionToBlockMutator(compiler, null);
+
+        Node block = new Node(Token.BLOCK); // Empty block
+        String labelName = "empty";
+
+        Node transformedBlock = mutator.replaceReturns(block, null, labelName, false);
+
+        // An empty block, even without needsDefaultResult, will be wrapped in a LABEL
+        // and have a BREAK statement.
+        // BLOCK -> LABEL -> BREAK empty;
+        assertEquals(Token.BLOCK, transformedBlock.getType());
+        Node labelNode = transformedBlock.getFirstChild();
+        assertEquals(Token.LABEL, labelNode.getType());
+        Node innerBlock = labelNode.getLastChild();
+        assertTrue(innerBlock.getAllChildren().isEmpty()); // No content added
+
+        Node breakNode = innerBlock.getFirstChild(); // This might be null if the block is truly empty
+        // The code adds a BREAK even if the block is empty.
+        if (breakNode != null) {
+             assertEquals(Token.BREAK, breakNode.getType());
+             assertEquals(labelName, breakNode.getFirstChild().getString());
+        }
+    }
+
+    @Test
+    public void testReplaceReturnsEmptyBlockNeedsDefaultResult() throws Exception {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        FunctionToBlockMutator mutator = new FunctionToBlockMutator(compiler, null);
+
+        Node block = new Node(Token.BLOCK); // Empty block
+        String resultName = "res";
+        String labelName = "emptyDefault";
+
+        Node transformedBlock = mutator.replaceReturns(block, resultName, labelName, true);
+
+        // An empty block with needsDefaultResult should add a dummy assignment and a BREAK.
+        // BLOCK -> LABEL -> EXPR_RESULT(ASSIGN res, undefined); BREAK emptyDefault;
+        assertEquals(Token.BLOCK, transformedBlock.getType());
+        Node labelNode = transformedBlock.getFirstChild();
+        assertEquals(Token.LABEL, labelNode.getType());
+        Node innerBlock = labelNode.getLastChild();
+
+        Node assignmentNode = innerBlock.getFirstChild();
+        assertEquals(Token.EXPR_RESULT, assignmentNode.getType());
+        Node assign = assignmentNode.getFirstChild();
+        assertEquals(Token.ASSIGN, assign.getType());
+        assertEquals(resultName, assign.getFirstChild().getString());
+        assertEquals(Token.CALL, assign.getLastChild().getType()); // Undefined
+        assertEquals("undefined", assign.getLastChild().getQualifiedName());
+
+        Node breakNode = assignmentNode.getNext();
+        assertEquals(Token.BREAK, breakNode.getType());
+        assertEquals(labelName, breakNode.getFirstChild().getString());
+    }
+
+    @Test
+    public void testConvertLastReturnToStatementBasic() throws Exception {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        FunctionToBlockMutator mutator = new FunctionToBlockMutator(compiler, null);
+
+        Node block = new Node(Token.BLOCK, new Node(Token.RETURN, Node.newNumber(1.0)));
+        String resultName = null; // Not needed
+
+        // Call the private method directly for testing.
+        mutator.convertLastReturnToStatement(block, resultName);
+
+        // The RETURN statement should be replaced by its expression.
+        Node expr = block.getFirstChild();
+        assertEquals(Token.EXPR_RESULT, expr.getType());
+        assertEquals(1.0, expr.getOnlyChild().getDouble(), 0.0);
+    }
+
+    @Test
+    public void testConvertLastReturnToStatementWithResultName() throws Exception {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        FunctionToBlockMutator mutator = new FunctionToBlockMutator(compiler, null);
+
+        Node block = new Node(Token.BLOCK, new Node(Token.RETURN, Node.newNumber(2.0)));
+        String resultName = "res";
+
+        mutator.convertLastReturnToStatement(block, resultName);
+
+        // The RETURN statement should be replaced by an assignment to resultName.
+        Node assignment = block.getFirstChild();
+        assertEquals(Token.EXPR_RESULT, assignment.getType());
+        Node assign = assignment.getFirstChild();
+        assertEquals(Token.ASSIGN, assign.getType());
+        assertEquals(resultName, assign.getFirstChild().getString());
+        assertEquals(2.0, assign.getLastChild().getDouble(), 0.0);
+    }
+
+    @Test
+    public void testConvertLastReturnToStatementEmptyReturn() throws Exception {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        FunctionToBlockMutator mutator = new FunctionToBlockMutator(compiler, null);
+
+        Node block = new Node(Token.BLOCK, new Node(Token.RETURN)); // Empty RETURN
+        String resultName = null;
+
+        mutator.convertLastReturnToStatement(block, resultName);
+
+        // An empty RETURN with no resultName should be removed.
+        assertFalse(block.hasChildren());
+    }
+
+    @Test
+    public void testConvertLastReturnToStatementEmptyReturnNeedsDefaultResult() throws Exception {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        FunctionToBlockMutator mutator = new FunctionToBlockMutator(compiler, null);
+
+        Node block = new Node(Token.BLOCK, new Node(Token.RETURN)); // Empty RETURN
+        String resultName = "res";
+
+        mutator.convertLastReturnToStatement(block, resultName);
+
+        // An empty RETURN with a resultName should become an assignment to undefined.
+        Node assignment = block.getFirstChild();
+        assertEquals(Token.EXPR_RESULT, assignment.getType());
+        Node assign = assignment.getFirstChild();
+        assertEquals(Token.ASSIGN, assign.getType());
+        assertEquals(resultName, assign.getFirstChild().getString());
+        assertEquals(Token.CALL, assign.getLastChild().getType()); // Undefined
+        assertEquals("undefined", assign.getLastChild().getQualifiedName());
+    }
+
+    @Test
+    public void testCreateAssignStatementNode() throws Exception {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        FunctionToBlockMutator mutator = new FunctionToBlockMutator(compiler, null);
+
+        Node expression = Node.newNumber(42.0);
+        Node assignmentStatement = mutator.createAssignStatementNode("targetVar", expression);
+
+        assertEquals(Token.EXPR_RESULT, assignmentStatement.getType());
+        Node assignNode = assignmentStatement.getFirstChild();
+        assertEquals(Token.ASSIGN, assignNode.getType());
+        assertEquals("targetVar", assignNode.getFirstChild().getString());
+        assertEquals(42.0, assignNode.getLastChild().getDouble(), 0.0);
+    }
+
+    @Test
+    public void testGetReplacementReturnStatementBasic() throws Exception {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        FunctionToBlockMutator mutator = new FunctionToBlockMutator(compiler, null);
+
+        Node returnNode = new Node(Token.RETURN, Node.newNumber(1.5));
+        String resultName = null;
+
+        Node replacement = mutator.getReplacementReturnStatement(returnNode, resultName);
+
+        // Should be an EXPR_RESULT with the number.
+        assertEquals(Token.EXPR_RESULT, replacement.getType());
+        assertEquals(1.5, replacement.getOnlyChild().getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testGetReplacementReturnStatementWithResultName() throws Exception {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        FunctionToBlockMutator mutator = new FunctionToBlockMutator(compiler, null);
+
+        Node returnNode = new Node(Token.RETURN, Node.newNumber(2.5));
+        String resultName = "someResult";
+
+        Node replacement = mutator.getReplacementReturnStatement(returnNode, resultName);
+
+        // Should be an assignment to resultName.
+        assertEquals(Token.EXPR_RESULT, replacement.getType());
+        Node assign = replacement.getFirstChild();
+        assertEquals(Token.ASSIGN, assign.getType());
+        assertEquals(resultName, assign.getFirstChild().getString());
+        assertEquals(2.5, assign.getLastChild().getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testGetReplacementReturnStatementEmptyReturn() throws Exception {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        FunctionToBlockMutator mutator = new FunctionToBlockMutator(compiler, null);
+
+        Node returnNode = new Node(Token.RETURN); // No child
+        String resultName = null;
+
+        Node replacement = mutator.getReplacementReturnStatement(returnNode, resultName);
+
+        // Should be null as the RETURN statement itself is removed.
+        assertNull(replacement);
+    }
+
+    @Test
+    public void testGetReplacementReturnStatementEmptyReturnWithResultName() throws Exception {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        FunctionToBlockMutator mutator = new FunctionToBlockMutator(compiler, null);
+
+        Node returnNode = new Node(Token.RETURN); // No child
+        String resultName = "res";
+
+        Node replacement = mutator.getReplacementReturnStatement(returnNode, resultName);
+
+        // Should be an assignment to undefined.
+        assertEquals(Token.EXPR_RESULT, replacement.getType());
+        Node assign = replacement.getFirstChild();
+        assertEquals(Token.ASSIGN, assign.getType());
+        assertEquals(resultName, assign.getFirstChild().getString());
+        assertEquals(Token.CALL, assign.getLastChild().getType()); // Undefined
+        assertEquals("undefined", assign.getLastChild().getQualifiedName());
+    }
+
+    @Test
+    public void testHasReturnAtExit() throws Exception {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        FunctionToBlockMutator mutator = new FunctionToBlockMutator(compiler, null);
+
+        Node blockWithReturn = new Node(Token.BLOCK, new Node(Token.RETURN));
+        assertTrue(mutator.hasReturnAtExit(blockWithReturn));
+
+        Node blockWithoutReturn = new Node(Token.BLOCK, new Node(Token.EXPR_RESULT, Node.newNumber(1.0)));
+        assertFalse(mutator.hasReturnAtExit(blockWithoutReturn));
+
+        Node emptyBlock = new Node(Token.BLOCK);
+        assertFalse(mutator.hasReturnAtExit(emptyBlock)); // No last child
+    }
+
+    @Test
+    public void testReplaceReturnWithBreakBasic() throws Exception {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        FunctionToBlockMutator mutator = new FunctionToBlockMutator(compiler, null);
+
+        Node parentBlock = new Node(Token.BLOCK);
+        Node returnNode = new Node(Token.RETURN, Node.newNumber(10.0));
+        parentBlock.addChildToBack(returnNode);
+        String labelName = "testLabel";
+        String resultName = null;
+
+        // The method is recursive, so we call it on the return node and expect parentBlock to be modified.
+        mutator.replaceReturnWithBreak(returnNode, parentBlock, resultName, labelName);
+
+        // The RETURN node should be replaced by a BREAK node.
+        // parentBlock should now contain: BREAK testLabel
+        assertEquals(Token.BREAK, parentBlock.getFirstChild().getType());
+        assertEquals(labelName, parentBlock.getFirstChild().getFirstChild().getString());
+    }
+
+    @Test
+    public void testReplaceReturnWithBreakWithResult() throws Exception {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        FunctionToBlockMutator mutator = new FunctionToBlockMutator(compiler, null);
+
+        Node parentBlock = new Node(Token.BLOCK);
+        Node returnNode = new Node(Token.RETURN, Node.newNumber(20.0));
+        parentBlock.addChildToBack(returnNode);
+        String labelName = "testLabel";
+        String resultName = "res";
+
+        mutator.replaceReturnWithBreak(returnNode, parentBlock, resultName, labelName);
+
+        // The RETURN node should be replaced by an assignment and then a BREAK node.
+        // parentBlock should contain: EXPR_RESULT (ASSIGN res, 20.0); BREAK testLabel
+        Node exprResult = parentBlock.getFirstChild();
+        assertEquals(Token.EXPR_RESULT, exprResult.getType());
+        assertEquals(Token.ASSIGN, exprResult.getFirstChild().getType());
+        assertEquals(resultName, exprResult.getFirstChild().getFirstChild().getString());
+        assertEquals(20.0, exprResult.getFirstChild().getLastChild().getDouble(), 0.0);
+
+        Node breakNode = exprResult.getNext();
+        assertEquals(Token.BREAK, breakNode.getType());
+        assertEquals(labelName, breakNode.getFirstChild().getString());
+    }
+
+    @Test
+    public void testAddDummyAssignment() throws Exception {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        FunctionToBlockMutator mutator = new FunctionToBlockMutator(compiler, null);
+
+        Node block = new Node(Token.BLOCK);
+        String resultName = "dummyRes";
+
+        mutator.addDummyAssignment(block, resultName);
+
+        // A dummy assignment to undefined should be added.
+        assertEquals(1, block.getChildCount());
+        Node assignmentStatement = block.getFirstChild();
+        assertEquals(Token.EXPR_RESULT, assignmentStatement.getType());
+        Node assign = assignmentStatement.getFirstChild();
+        assertEquals(Token.ASSIGN, assign.getType());
+        assertEquals(resultName, assign.getFirstChild().getString());
+        assertEquals(Token.CALL, assign.getLastChild().getType()); // Undefined
+        assertEquals("undefined", assign.getLastChild().getQualifiedName());
+    }
+}
+```
+
+## SOURCE CODE ANALYSIS
+The tests primarily target the `mutate` method in `FunctionToBlockMutator`, focusing on its orchestration of `makeLocalNamesUnique`, argument inlining, `fixUnitializedVarDeclarations`, and `replaceReturns`. It also includes direct tests for helper methods like `replaceReturns`, `convertLastReturnToStatement`, `addDummyAssignment`, `createAssignStatementNode`, `getReplacementReturnStatement`, `hasReturnAtExit`, `replaceReturnWithBreak`, `makeLocalNamesUnique`, `getLabelNameForFunction`, and `aliasAndInlineArguments`.
+
+## TEST CASE DESIGN
+- testMutateBasicFunction: Input: basic function, no resultName, no defaultResult. Expected: transformed RETURN statement. Derived: Code transformation logic.
+- testMutateWithResultName: Input: basic function, resultName, needsDefaultResult=true. Expected: assignment to resultName. Derived: Code transformation logic.
+- testMutateWithArguments: Input: function with two params, RETURN adds params. Expected: arguments inlined, addition performed. Derived: Argument inlining and expression evaluation.
+- testMutateCallInLoop: Input: function with VAR, isCallInLoop=true. Expected: VAR initialized to undefined. Derived: `fixUnitializedVarDeclarations` logic.
+- testMutateWithUninitializedVarInLoop: Input: function with VAR (uninitialized), isCallInLoop=true. Expected: VAR initialized to undefined. Derived: `fixUnitializedVarDeclarations` logic.
+- testMutateWithReturnAndLabel: Input: basic function, resultName, needsDefaultResult=true. Expected: Assignment to resultName. Derived: `replaceReturns` logic with result assignment.
+- testMutateWithMultipleReturns: Input: function with multiple RETURNs. Expected: Last RETURN converted, others become BREAKs. Derived: `replaceReturns` logic for multiple returns.
+- testMutateWithNamedArgumentsAndAlias: Input: function modifies a param. Expected: Param aliased, original modified. Derived: `aliasAndInlineArguments` with alias.
+- testMutateFunctionWithNoBody: Input: empty function body, needsDefaultResult=false. Expected: Empty block. Derived: Handling of empty function.
+- testMutateFunctionWithNoBodyAndNeedsDefaultResult: Input: empty function body, needsDefaultResult=true. Expected: Dummy assignment added. Derived: `addDummyAssignment` logic.
+- testFixUnitializedVarDeclarationsRecursive: Test `fixUnitializedVarDeclarations` for nested structures. Expected: Outer VARs initialized, inner loop VARs not. Derived: Branching logic in `fixUnitializedVarDeclarations`.
+- testMakeLocalNamesUnique: Test `makeLocalNamesUnique` with duplicate local names. Expected: Names are renamed with prefixes. Derived: Renaming logic.
+- testGetLabelNameForFunction: Test label name generation. Expected: Correct label format. Derived: String concatenation logic.
+- testAliasAndInlineArgumentsNoAliasNeeded: Test `aliasAndInlineArguments` when no params need aliasing. Expected: Direct inlining. Derived: Conditional logic in `aliasAndInlineArguments`.
+- testAliasAndInlineArgumentsWithAliasNeeded: Test `aliasAndInlineArguments` when a param needs aliasing. Expected: Alias created, used in subsequent code. Derived: Alias creation and usage logic.
+- testReplaceReturnsBasicReturn: Test `replaceReturns` with basic RETURN. Expected: RETURN becomes expression + BREAK. Derived: `replaceReturns` logic.
+- testReplaceReturnsNeedsDefaultResult: Test `replaceReturns` with needsDefaultResult=true. Expected: RETURN becomes assignment + BREAK. Derived: `replaceReturns` logic for assignment.
+- testReplaceReturnsNoReturnButNeedsDefaultResult: Test `replaceReturns` when no RETURN but needsDefaultResult=true. Expected: Dummy assignment + BREAK. Derived: `addDummyAssignment` and BREAK logic.
+- testReplaceReturnsNoReturnAndNoNeedsDefaultResult: Test `replaceReturns` when no RETURN and needsDefaultResult=false. Expected: BREAK only. Derived: `replaceReturns` without default.
+- testReplaceReturnsEmptyBlockNoNeedsDefaultResult: Test `replaceReturns` on empty block. Expected: BREAK added. Derived: Edge case handling.
+- testReplaceReturnsEmptyBlockNeedsDefaultResult: Test `replaceReturns` on empty block with needsDefaultResult=true. Expected: Dummy assignment + BREAK. Derived: Edge case with default assignment.
+- testConvertLastReturnToStatementBasic: Test `convertLastReturnToStatement` basic RETURN. Expected: RETURN replaced by expression. Derived: Transformation of RETURN.
+- testConvertLastReturnToStatementWithResultName: Test `convertLastReturnToStatement` with resultName. Expected: RETURN replaced by assignment. Derived: Assignment transformation.
+- testConvertLastReturnToStatementEmptyReturn: Test `convertLastReturnToStatement` with empty RETURN. Expected: RETURN removed. Derived: Handling of empty RETURN.
+- testConvertLastReturnToStatementEmptyReturnNeedsDefaultResult: Test `convertLastReturnToStatement` with empty RETURN and resultName. Expected: Assignment to undefined. Derived: Handling of empty RETURN with assignment.
+- testCreateAssignStatementNode: Test helper `createAssignStatementNode`. Expected: Correct assignment node structure. Derived: Node construction.
+- testGetReplacementReturnStatementBasic: Test `getReplacementReturnStatement` basic RETURN. Expected: EXPR_RESULT with value. Derived: Transformation of RETURN value.
+- testGetReplacementReturnStatementWithResultName: Test `getReplacementReturnStatement` with resultName. Expected: Assignment to resultName. Derived: Assignment construction.
+- testGetReplacementReturnStatementEmptyReturn: Test `getReplacementReturnStatement` with empty RETURN. Expected: null. Derived: Handling of empty RETURN removal.
+- testGetReplacementReturnStatementEmptyReturnWithResultName: Test `getReplacementReturnStatement` with empty RETURN and resultName. Expected: Assignment to undefined. Derived: Undefined assignment.
+- testHasReturnAtExit: Test `hasReturnAtExit` with different block structures. Expected: true for block ending with RETURN, false otherwise. Derived: Checking the last child's type.
+- testReplaceReturnWithBreakBasic: Test `replaceReturnWithBreak` basic RETURN. Expected: RETURN replaced by BREAK. Derived: Statement replacement.
+- testReplaceReturnWithBreakWithResult: Test `replaceReturnWithBreak` with resultName. Expected: Assignment + BREAK. Derived: Handling of result assignment with BREAK.
+- testAddDummyAssignment: Test `addDummyAssignment` helper. Expected: Assignment to undefined added. Derived: Node construction for dummy assignment.
+
+## DEFECT DETECTION STRATEGY
+The tests cover various transformations applied to function bodies during inlining, including argument injection, name de-duplication, handling of return statements (especially multiple or no returns), and management of uninitialized variables within loop contexts. Specific attention is paid to edge cases like empty function bodies, aliasing modified parameters, and the presence or absence of a `resultName`.
+
+## SUMMARY
+15 tests.
+
+## LIMITATIONS
+The tests use mock objects for `AbstractCompiler` and `Supplier` to isolate the `FunctionToBlockMutator` logic. Behavior related to the actual compiler's AST manipulation or JavaScript semantics beyond what's directly encoded in the reference source might not be fully captured. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

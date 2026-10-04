@@ -1,0 +1,733 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.javascript.rhino.JSDocInfoBuilder;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Predicate;
+import com.google.javascript.jscomp.NodeTraversal.AbstractPostOrderCallback;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.TokenStream;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import com.google.javascript.rhino.JSDocInfo.Visibility;
+import com.google.javascript.rhino.JSTypeExpression;
+
+public class GlobalNamespaceTest {
+    @Test
+    public void testGetNameForest() throws Exception {
+        GlobalNamespace ns = new GlobalNamespace(null, new Node(Token.SCRIPT));
+        assertEquals(0, ns.getNameForest().size());
+    }
+
+    @Test
+    public void testGetNameIndex() throws Exception {
+        GlobalNamespace ns = new GlobalNamespace(null, new Node(Token.SCRIPT));
+        assertEquals(0, ns.getNameIndex().size());
+    }
+
+    @Test
+    public void testProcessGlobalVariableDeclaration() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        root.addChildToBack(Node.newVar("a", Node.newNumber(1)));
+        GlobalNamespace ns = new GlobalNamespace(null, root);
+        ns.getNameForest(); // Trigger process
+        assertEquals(1, ns.getNameIndex().size());
+        assertTrue(ns.getNameIndex().containsKey("a"));
+        assertEquals("a", ns.getNameIndex().get("a").name);
+        assertEquals(1, ns.getNameIndex().get("a").globalSets);
+    }
+
+    @Test
+    public void testProcessGlobalVariableDeclarationWithExterns() throws Exception {
+        Node externsRoot = new Node(Token.SCRIPT);
+        externsRoot.addChildToBack(Node.newVar("b", Node.newNumber(2)));
+        Node root = new Node(Token.SCRIPT);
+        root.addChildToBack(Node.newVar("a", Node.newNumber(1)));
+        GlobalNamespace ns = new GlobalNamespace(null, externsRoot, root);
+        ns.getNameForest(); // Trigger process
+        assertEquals(2, ns.getNameIndex().size());
+        assertTrue(ns.getNameIndex().containsKey("a"));
+        assertTrue(ns.getNameIndex().containsKey("b"));
+        assertEquals(1, ns.getNameIndex().get("a").globalSets);
+        assertEquals(0, ns.getNameIndex().get("b").globalSets); // externs are not sets
+    }
+
+    @Test
+    public void testProcessGlobalAssignment() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        root.addChildToBack(Node.newVar("a"));
+        Node assign = new Node(Token.ASSIGN,
+                               new Node(Token.NAME, null, "a", 0, 0),
+                               Node.newNumber(1), 0, 0);
+        root.addChildToBack(assign);
+        GlobalNamespace ns = new GlobalNamespace(null, root);
+        ns.getNameForest(); // Trigger process
+        assertEquals(1, ns.getNameIndex().size());
+        assertTrue(ns.getNameIndex().containsKey("a"));
+        assertEquals(1, ns.getNameIndex().get("a").globalSets);
+    }
+
+    @Test
+    public void testProcessGlobalPropertyAssignment() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node assign = new Node(Token.ASSIGN,
+                               new Node(Token.GETPROP,
+                                        Node.newString("a"),
+                                        Node.newString("b"), 0, 0),
+                               Node.newNumber(1), 0, 0);
+        root.addChildToBack(assign);
+        GlobalNamespace ns = new GlobalNamespace(null, root);
+        ns.getNameForest(); // Trigger process
+        assertEquals(2, ns.getNameIndex().size()); // a and a.b
+        assertTrue(ns.getNameIndex().containsKey("a"));
+        assertTrue(ns.getNameIndex().containsKey("a.b"));
+        assertEquals(0, ns.getNameIndex().get("a").globalSets);
+        assertEquals(1, ns.getNameIndex().get("a.b").globalSets);
+    }
+
+    @Test
+    public void testProcessNestedGlobalPropertyAssignment() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node assign = new Node(Token.ASSIGN,
+                               new Node(Token.GETPROP,
+                                        new Node(Token.GETPROP,
+                                                 Node.newString("a"),
+                                                 Node.newString("b"), 0, 0),
+                                        Node.newString("c"), 0, 0),
+                               Node.newNumber(1), 0, 0);
+        root.addChildToBack(assign);
+        GlobalNamespace ns = new GlobalNamespace(null, root);
+        ns.getNameForest(); // Trigger process
+        assertEquals(3, ns.getNameIndex().size()); // a, a.b, a.b.c
+        assertTrue(ns.getNameIndex().containsKey("a"));
+        assertTrue(ns.getNameIndex().containsKey("a.b"));
+        assertTrue(ns.getNameIndex().containsKey("a.b.c"));
+        assertEquals(0, ns.getNameIndex().get("a").globalSets);
+        assertEquals(0, ns.getNameIndex().get("a.b").globalSets);
+        assertEquals(1, ns.getNameIndex().get("a.b.c").globalSets);
+    }
+
+    @Test
+    public void testProcessGlobalNameGet() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node var = Node.newVar("a", Node.newNumber(1));
+        root.addChildToBack(var);
+        root.addChildToBack(new Node(Token.GETPROP, new Node(Token.NAME, null, "a", 0, 0), Node.newString("b"), 0, 0));
+        GlobalNamespace ns = new GlobalNamespace(null, root);
+        ns.getNameForest(); // Trigger process
+        assertEquals(1, ns.getNameIndex().size()); // Only "a" is declared
+        assertEquals(1, ns.getNameIndex().get("a").globalSets);
+        assertEquals(1, ns.getNameIndex().get("a").totalGets);
+    }
+
+    @Test
+    public void testProcessGlobalQualifiedNameGet() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node assign = new Node(Token.ASSIGN,
+                               new Node(Token.GETPROP,
+                                        Node.newString("a"),
+                                        Node.newString("b"), 0, 0),
+                               Node.newNumber(1), 0, 0);
+        root.addChildToBack(assign);
+        root.addChildToBack(new Node(Token.GETPROP,
+                                    new Node(Token.GETPROP,
+                                             Node.newString("a"),
+                                             Node.newString("b"), 0, 0),
+                                    Node.newString("c"), 0, 0));
+        GlobalNamespace ns = new GlobalNamespace(null, root);
+        ns.getNameForest(); // Trigger process
+        assertEquals(3, ns.getNameIndex().size()); // a, a.b, a.b.c
+        assertEquals(1, ns.getNameIndex().get("a.b.c").globalSets);
+        assertEquals(1, ns.getNameIndex().get("a.b").totalGets); // a.b is read
+    }
+
+    @Test
+    public void testProcessObjectLiteralKeys() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node objectLit = new Node(Token.OBJECTLIT);
+        objectLit.addChildToBack(Node.newString("a"));
+        objectLit.addChildToBack(Node.newNumber(1));
+        objectLit.addChildToBack(Node.newString("b"));
+        objectLit.addChildToBack(Node.newNumber(2));
+        root.addChildToBack(Node.newVar("obj", objectLit));
+
+        GlobalNamespace ns = new GlobalNamespace(null, root);
+        ns.getNameForest(); // Trigger process
+        assertEquals(3, ns.getNameIndex().size()); // obj, obj.a, obj.b
+        assertTrue(ns.getNameIndex().containsKey("obj"));
+        assertTrue(ns.getNameIndex().containsKey("obj.a"));
+        assertTrue(ns.getNameIndex().containsKey("obj.b"));
+        assertEquals(1, ns.getNameIndex().get("obj").globalSets);
+        assertEquals(1, ns.getNameIndex().get("obj.a").globalSets);
+        assertEquals(1, ns.getNameIndex().get("obj.b").globalSets);
+    }
+
+    @Test
+    public void testProcessObjectLiteralKeysNested() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node innerObjLit = new Node(Token.OBJECTLIT);
+        innerObjLit.addChildToBack(Node.newString("c"));
+        innerObjLit.addChildToBack(Node.newNumber(3));
+
+        Node outerObjLit = new Node(Token.OBJECTLIT);
+        outerObjLit.addChildToBack(Node.newString("a"));
+        outerObjLit.addChildToBack(Node.newNumber(1));
+        outerObjLit.addChildToBack(Node.newString("b"));
+        outerObjLit.addChildToBack(innerObjLit);
+        root.addChildToBack(Node.newVar("obj", outerObjLit));
+
+        GlobalNamespace ns = new GlobalNamespace(null, root);
+        ns.getNameForest(); // Trigger process
+        assertEquals(4, ns.getNameIndex().size()); // obj, obj.a, obj.b, obj.b.c
+        assertTrue(ns.getNameIndex().containsKey("obj"));
+        assertTrue(ns.getNameIndex().containsKey("obj.a"));
+        assertTrue(ns.getNameIndex().containsKey("obj.b"));
+        assertTrue(ns.getNameIndex().containsKey("obj.b.c"));
+        assertEquals(1, ns.getNameIndex().get("obj").globalSets);
+        assertEquals(1, ns.getNameIndex().get("obj.a").globalSets);
+        assertEquals(1, ns.getNameIndex().get("obj.b").globalSets);
+        assertEquals(1, ns.getNameIndex().get("obj.b.c").globalSets);
+    }
+
+    @Test
+    public void testProcessObjectLiteralKeysInAssignment() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node objLit = new Node(Token.OBJECTLIT);
+        objLit.addChildToBack(Node.newString("a"));
+        objLit.addChildToBack(Node.newNumber(1));
+        root.addChildToBack(new Node(Token.ASSIGN, Node.newString("obj"), objLit, 0, 0));
+
+        GlobalNamespace ns = new GlobalNamespace(null, root);
+        ns.getNameForest(); // Trigger process
+        assertEquals(2, ns.getNameIndex().size()); // obj, obj.a
+        assertTrue(ns.getNameIndex().containsKey("obj"));
+        assertTrue(ns.getNameIndex().containsKey("obj.a"));
+        assertEquals(1, ns.getNameIndex().get("obj").globalSets);
+        assertEquals(1, ns.getNameIndex().get("obj.a").globalSets);
+    }
+
+    @Test
+    public void testProcessFunctionDeclaration() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node function = new Node(Token.FUNCTION, null, 0, 0);
+        function.addChildToBack(Node.newString("myFunc"));
+        root.addChildToBack(function);
+
+        GlobalNamespace ns = new GlobalNamespace(null, root);
+        ns.getNameForest(); // Trigger process
+        assertEquals(1, ns.getNameIndex().size());
+        assertTrue(ns.getNameIndex().containsKey("myFunc"));
+        assertEquals(1, ns.getNameIndex().get("myFunc").globalSets);
+        assertEquals(Name.Type.FUNCTION, ns.getNameIndex().get("myFunc").type);
+    }
+
+    @Test
+    public void testProcessAnonymousFunctionDeclaration() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node function = new Node(Token.FUNCTION, null, 0, 0); // Anonymous function
+        root.addChildToBack(function);
+
+        GlobalNamespace ns = new GlobalNamespace(null, root);
+        ns.getNameForest(); // Trigger process
+        assertEquals(0, ns.getNameIndex().size()); // Anonymous functions are not global names
+    }
+
+    @Test
+    public void testProcessFunctionExpressionAssignedToGlobal() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node functionExpr = new Node(Token.FUNCTION, null, 0, 0);
+        root.addChildToBack(new Node(Token.ASSIGN, Node.newString("myFunc"), functionExpr, 0, 0));
+
+        GlobalNamespace ns = new GlobalNamespace(null, root);
+        ns.getNameForest(); // Trigger process
+        assertEquals(1, ns.getNameIndex().size());
+        assertTrue(ns.getNameIndex().containsKey("myFunc"));
+        assertEquals(1, ns.getNameIndex().get("myFunc").globalSets);
+        assertEquals(Name.Type.FUNCTION, ns.getNameIndex().get("myFunc").type);
+    }
+
+    @Test
+    public void testProcessGetPrototype() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node protoAssign = new Node(Token.ASSIGN,
+                                    new Node(Token.GETPROP, Node.newString("MyClass"), Node.newString("prototype"), 0, 0),
+                                    new Node(Token.OBJECTLIT), 0, 0);
+        root.addChildToBack(protoAssign);
+        GlobalNamespace ns = new GlobalNamespace(null, root);
+        ns.getNameForest();
+        assertEquals(3, ns.getNameIndex().size()); // MyClass, MyClass.prototype, MyClass.prototype properties
+        assertTrue(ns.getNameIndex().containsKey("MyClass"));
+        assertTrue(ns.getNameIndex().containsKey("MyClass.prototype"));
+        assertEquals(1, ns.getNameIndex().get("MyClass").globalSets);
+        assertEquals(1, ns.getNameIndex().get("MyClass.prototype").globalSets);
+        // Properties of prototype are not directly added to global namespace by default
+        assertFalse(ns.getNameIndex().containsKey("MyClass.prototype.method"));
+    }
+
+    @Test
+    public void testProcessSetPrototypeProperty() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node protoMethodAssign = new Node(Token.ASSIGN,
+                                          new Node(Token.GETPROP,
+                                                   new Node(Token.GETPROP, Node.newString("MyClass"), Node.newString("prototype"), 0, 0),
+                                                   Node.newString("method"), 0, 0),
+                                          new Node(Token.FUNCTION, null, 0, 0), 0, 0);
+        root.addChildToBack(protoMethodAssign);
+        GlobalNamespace ns = new GlobalNamespace(null, root);
+        ns.getNameForest();
+        // MyClass, MyClass.prototype, MyClass.prototype.method
+        assertEquals(3, ns.getNameIndex().size());
+        assertTrue(ns.getNameIndex().containsKey("MyClass"));
+        assertTrue(ns.getNameIndex().containsKey("MyClass.prototype"));
+        assertTrue(ns.getNameIndex().containsKey("MyClass.prototype.method"));
+        assertEquals(0, ns.getNameIndex().get("MyClass").globalSets); // MyClass is not set, only its prototype
+        assertEquals(0, ns.getNameIndex().get("MyClass.prototype").globalSets); // MyClass.prototype is not set, only its method
+        assertEquals(1, ns.getNameIndex().get("MyClass.prototype.method").globalSets);
+    }
+
+    @Test
+    public void testHandleSetFromGlobalWithPrototypePrefix() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node assign = new Node(Token.ASSIGN,
+                               new Node(Token.GETPROP,
+                                        new Node(Token.GETPROP, Node.newString("MyClass"), Node.newString("prototype"), 0, 0),
+                                        Node.newString("method"), 0, 0),
+                               new Node(Token.FUNCTION, null, 0, 0), 0, 0);
+        root.addChildToBack(assign);
+        GlobalNamespace ns = new GlobalNamespace(null, root);
+        ns.getNameForest(); // Trigger process
+        assertEquals(3, ns.getNameIndex().size());
+        Name method = ns.getNameIndex().get("MyClass.prototype.method");
+        assertNotNull(method);
+        assertEquals(1, method.globalSets);
+        Name proto = ns.getNameIndex().get("MyClass.prototype");
+        assertNotNull(proto);
+        assertEquals(1, proto.aliasingGets); // Because prototype is a prefix of a set
+        Name cls = ns.getNameIndex().get("MyClass");
+        assertNotNull(cls);
+        assertEquals(1, cls.aliasingGets); // Because MyClass is a prefix of a set
+    }
+
+     @Test
+    public void testHandleGetWithPrototypePrefix() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node assign = new Node(Token.ASSIGN,
+                               Node.newString("a"),
+                               new Node(Token.GETPROP,
+                                        new Node(Token.GETPROP, Node.newString("MyClass"), Node.newString("prototype"), 0, 0),
+                                        Node.newString("method"), 0, 0), 0, 0);
+        root.addChildToBack(assign);
+        GlobalNamespace ns = new GlobalNamespace(null, root);
+        ns.getNameForest(); // Trigger process
+        assertEquals(3, ns.getNameIndex().size());
+        Name method = ns.getNameIndex().get("MyClass.prototype.method");
+        assertNotNull(method);
+        assertEquals(1, method.globalSets);
+        Name proto = ns.getNameIndex().get("MyClass.prototype");
+        assertNotNull(proto);
+        assertEquals(1, proto.aliasingGets); // Because prototype is a prefix of a get
+        Name cls = ns.getNameIndex().get("MyClass");
+        assertNotNull(cls);
+        assertEquals(1, cls.aliasingGets); // Because MyClass is a prefix of a get
+    }
+
+    @Test
+    public void testIsGlobalNameReference() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node scopeNode = new Node(Token.FUNCTION);
+        root.addChildToBack(scopeNode);
+        Scope scope = new Scope(null, root);
+        scope.declare("local", null, null, null);
+
+        GlobalNamespace ns = new GlobalNamespace(null, root);
+
+        // Global scope
+        assertTrue(ns.isGlobalNameReference("globalVar", scope.getGlobalScope()));
+        // Local scope, local variable
+        assertFalse(ns.isGlobalNameReference("local", scope));
+        // Local scope, global variable
+        assertTrue(ns.isGlobalNameReference("globalVar", scope));
+    }
+
+    @Test
+    public void testIsGlobalVarReference() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node scopeNode = new Node(Token.FUNCTION);
+        root.addChildToBack(scopeNode);
+        Scope scope = new Scope(null, root);
+        scope.declare("local", null, null, null);
+
+        GlobalNamespace ns = new GlobalNamespace(null, root);
+
+        // Global scope
+        assertTrue(ns.isGlobalVarReference("globalVar", scope.getGlobalScope()));
+        // Local scope, local variable
+        assertFalse(ns.isGlobalVarReference("local", scope));
+        // Local scope, global variable
+        assertTrue(ns.isGlobalVarReference("globalVar", scope));
+    }
+
+    @Test
+    public void testGetTopVarName() {
+        GlobalNamespace ns = new GlobalNamespace(null, new Node(Token.SCRIPT));
+        assertEquals("a", ns.getTopVarName("a"));
+        assertEquals("a", ns.getTopVarName("a.b"));
+        assertEquals("a", ns.getTopVarName("a.b.c"));
+    }
+
+    @Test
+    public void testNameMapPutAndGet() {
+        GlobalNamespace ns = new GlobalNamespace(null, new Node(Token.SCRIPT));
+        Name name1 = new Name("test1", null, false);
+        ns.nameMap.put("test1", name1);
+        assertEquals(name1, ns.nameMap.get("test1"));
+    }
+
+    @Test
+    public void testGetOrCreateName() {
+        GlobalNamespace ns = new GlobalNamespace(null, new Node(Token.SCRIPT));
+        Name name1 = ns.getOrCreateName("a");
+        assertNotNull(name1);
+        assertEquals("a", name1.name);
+        assertTrue(ns.nameMap.containsKey("a"));
+        assertEquals(name1, ns.nameMap.get("a"));
+
+        Name name2 = ns.getOrCreateName("a.b");
+        assertNotNull(name2);
+        assertEquals("b", name2.name);
+        assertEquals(name1, name2.parent);
+        assertTrue(ns.nameMap.containsKey("a.b"));
+        assertEquals(name2, ns.nameMap.get("a.b"));
+    }
+
+    @Test
+    public void testIsClassOrEnumDeclaration() {
+        GlobalNamespace ns = new GlobalNamespace(null, new Node(Token.SCRIPT));
+        Node root = new Node(Token.SCRIPT);
+
+        // Constructor function
+        JSDocInfoBuilder builder = new JSDocInfoBuilder(false);
+        builder.recordConstructor();
+        JSDocInfo info = builder.build("test.js");
+        Node functionNode = Node.newFunction("MyClass", null, 0, 0);
+        functionNode.setJSDocInfo(info);
+        root.addChildToBack(Node.newVar("MyClass", functionNode));
+        ns.process(); // Manually trigger process for testing internal methods
+
+        assertTrue(ns.getNameIndex().get("MyClass").isClassOrEnum);
+    }
+
+    @Test
+    public void testIsClassOrEnumDeclaration_Enum() {
+        GlobalNamespace ns = new GlobalNamespace(null, new Node(Token.SCRIPT));
+        Node root = new Node(Token.SCRIPT);
+
+        // Enum object literal
+        JSDocInfoBuilder builder = new JSDocInfoBuilder(false);
+        builder.recordEnumParameterType(new JSTypeExpression(Node.newString("string"), "test.js", null));
+        JSDocInfo info = builder.build("test.js");
+        Node enumNode = new Node(Token.OBJECTLIT);
+        enumNode.setJSDocInfo(info);
+        root.addChildToBack(Node.newVar("MyEnum", enumNode));
+        ns.process(); // Manually trigger process for testing internal methods
+
+        assertTrue(ns.getNameIndex().get("MyEnum").isClassOrEnum);
+    }
+
+    @Test
+    public void testIsNamespace() {
+        GlobalNamespace ns = new GlobalNamespace(null, new Node(Token.SCRIPT));
+        Node root = new Node(Token.SCRIPT);
+
+        // Class declaration
+        JSDocInfoBuilder builder = new JSDocInfoBuilder(false);
+        builder.recordConstructor();
+        JSDocInfo info = builder.build("test.js");
+        Node classNode = Node.newFunction("MyClass", null, 0, 0);
+        classNode.setJSDocInfo(info);
+        root.addChildToBack(Node.newVar("MyClass", classNode));
+
+        // Another class declaration within MyClass
+        Node subClassNode = Node.newFunction("MySubClass", null, 0, 0);
+        subClassNode.setJSDocInfo(info); // Assume it's also a class for simplicity
+        Node protoAssign = new Node(Token.ASSIGN,
+                                    new Node(Token.GETPROP, Node.newString("MyClass"), Node.newString("prototype"), 0, 0),
+                                    new Node(Token.OBJECTLIT), 0, 0);
+        protoAssign.getFirstChild().getParent().addChildToBack(Node.newString("MySubClass"));
+        protoAssign.getFirstChild().getParent().getParent().addChildToBack(subClassNode);
+        root.addChildToBack(protoAssign);
+
+        ns.process(); // Manually trigger process
+
+        Name myClass = ns.getNameIndex().get("MyClass");
+        assertTrue(myClass.isClassOrEnum);
+        assertTrue(myClass.isNamespace()); // Because it has a class descendant
+
+        Name mySubClass = ns.getNameIndex().get("MyClass.prototype.MySubClass");
+        assertTrue(mySubClass.isClassOrEnum);
+        assertFalse(mySubClass.isNamespace()); // It's a method/property, not an object literal or function declaration itself.
+    }
+
+    @Test
+    public void testCanCollapse() {
+        GlobalNamespace ns = new GlobalNamespace(null, new Node(Token.SCRIPT));
+        Name name = ns.getOrCreateName("a");
+        name.globalSets = 1;
+        name.localSets = 0;
+        name.type = Name.Type.OBJECTLIT;
+        assertFalse(name.canCollapse()); // Needs parent to be collapsable
+
+        Name parentName = ns.getOrCreateName("b");
+        parentName.globalSets = 1;
+        parentName.localSets = 0;
+        parentName.type = Name.Type.OBJECTLIT;
+        parentName.props = new ArrayList<>();
+        parentName.props.add(name);
+        name.parent = parentName;
+
+        assertTrue(name.canCollapse());
+    }
+
+    @Test
+    public void testCanCollapseUnannotatedChildNames() {
+        GlobalNamespace ns = new GlobalNamespace(null, new Node(Token.SCRIPT));
+        Name name = ns.getOrCreateName("a");
+        name.globalSets = 1;
+        name.localSets = 0;
+        name.type = Name.Type.OBJECTLIT;
+        assertTrue(name.canCollapseUnannotatedChildNames());
+
+        // If globalSets is not 1, it cannot collapse
+        name.globalSets = 2;
+        assertFalse(name.canCollapseUnannotatedChildNames());
+        name.globalSets = 1;
+
+        // If localSets is not 0, it cannot collapse
+        name.localSets = 1;
+        assertFalse(name.canCollapseUnannotatedChildNames());
+        name.localSets = 0;
+
+        // If aliasingGets > 0, it cannot collapse
+        name.aliasingGets = 1;
+        assertFalse(name.canCollapseUnannotatedChildNames());
+        name.aliasingGets = 0;
+
+        // If it's a class or enum, it can collapse regardless of other conditions
+        name.isClassOrEnum = true;
+        assertTrue(name.canCollapseUnannotatedChildNames());
+    }
+
+    @Test
+    public void testCanEliminate() {
+        GlobalNamespace ns = new GlobalNamespace(null, new Node(Token.SCRIPT));
+        Name name = ns.getOrCreateName("a");
+        name.globalSets = 1;
+        name.localSets = 0;
+        name.totalGets = 0;
+        name.type = Name.Type.OBJECTLIT;
+
+        // Initially false because totalGets > 0 would prevent elimination
+        assertFalse(name.canEliminate());
+
+        name.totalGets = 0; // Assume no gets
+        // Now it depends on canCollapseUnannotatedChildNames and props
+        assertFalse(name.canEliminate()); // Fails canCollapseUnannotatedChildNames
+
+        // Make it pass canCollapseUnannotatedChildNames
+        name.globalSets = 1;
+        name.localSets = 0;
+        name.totalGets = 0;
+        name.type = Name.Type.OBJECTLIT;
+        name.isClassOrEnum = false;
+        name.parent = ns.getOrCreateName("parent");
+        name.parent.canCollapseUnannotatedChildNames = true; // Assume parent can collapse
+
+        assertTrue(name.canEliminate());
+
+        // Test with properties
+        Name childProp = ns.getOrCreateName("a.b");
+        childProp.globalSets = 1;
+        childProp.localSets = 0;
+        childProp.totalGets = 0;
+        childProp.isClassOrEnum = false;
+        childProp.parent = name;
+        name.props = new ArrayList<>();
+        name.props.add(childProp);
+
+        assertFalse(name.canEliminate()); // Fails because childProp.canCollapse() is false
+    }
+
+    @Test
+    public void testNeedsToBeStubbed() {
+        GlobalNamespace ns = new GlobalNamespace(null, new Node(Token.SCRIPT));
+        Name name = ns.getOrCreateName("a");
+        name.globalSets = 0;
+        name.localSets = 1;
+        assertTrue(name.needsToBeStubbed());
+
+        name.localSets = 0;
+        assertFalse(name.needsToBeStubbed());
+    }
+
+    @Test
+    public void testIsSimpleName() {
+        GlobalNamespace ns = new GlobalNamespace(null, new Node(Token.SCRIPT));
+        Name name = ns.getOrCreateName("a");
+        assertTrue(name.isSimpleName());
+
+        Name qualifiedName = ns.getOrCreateName("a.b");
+        assertFalse(qualifiedName.isSimpleName());
+    }
+
+    @Test
+    public void testFullName() {
+        GlobalNamespace ns = new GlobalNamespace(null, new Node(Token.SCRIPT));
+        Name nameA = ns.getOrCreateName("a");
+        assertEquals("a", nameA.fullName());
+
+        Name nameAB = ns.getOrCreateName("a.b");
+        assertEquals("a.b", nameAB.fullName());
+
+        Name nameABC = ns.getOrCreateName("a.b.c");
+        assertEquals("a.b.c", nameABC.fullName());
+    }
+
+    @Test
+    public void testNameToString() {
+        GlobalNamespace ns = new GlobalNamespace(null, new Node(Token.SCRIPT));
+        Name name = ns.getOrCreateName("test");
+        name.type = Name.Type.FUNCTION;
+        name.globalSets = 1;
+        name.localSets = 2;
+        name.totalGets = 3;
+        name.aliasingGets = 4;
+        name.callGets = 5;
+        String expected = "test (FUNCTION): globalSets=1, localSets=2, totalGets=3, aliasingGets=4, callGets=5";
+        assertEquals(expected, name.toString());
+    }
+
+    @Test
+    public void testGetDocInfoForDeclaration() {
+        GlobalNamespace ns = new GlobalNamespace(null, new Node(Token.SCRIPT));
+        // Create a mock Ref with a node that has JSDocInfo
+        Node nodeWithDoc = new Node(Token.VAR);
+        JSDocInfo docInfo = new JSDocInfo();
+        nodeWithDoc.setJSDocInfo(docInfo);
+        Ref ref = Ref.createRefForTesting(Ref.Type.SET_FROM_GLOBAL);
+        ref.node = nodeWithDoc;
+        ref.sourceName = "test.js"; // Dummy source name
+
+        // Setting a dummy type for the ref to satisfy potential checks
+        JSTypeExpression dummyType = new JSTypeExpression(Node.newString("string"), "test.js", null);
+        // Mocking internal JSDocInfoBuilder usage is complex, so we'll check the direct assignment
+
+        // In a real scenario, NodeTraversal and other context would be needed.
+        // For this test, we'll focus on the direct retrieval logic if possible.
+        // The method relies on parent node types.
+        // Let's simulate a VAR declaration.
+        Node varNode = Node.newVar("testVar", Node.newNumber(1));
+        JSDocInfoBuilder builder = new JSDocInfoBuilder(false);
+        builder.recordType(dummyType);
+        JSDocInfo builderInfo = builder.build("test.js");
+        varNode.setJSDocInfo(builderInfo);
+
+        Ref varRef = Ref.createRefForTesting(Ref.Type.SET_FROM_GLOBAL);
+        varRef.node = varNode.getFirstChild(); // The NAME node for "testVar"
+        varRef.sourceName = "test.js";
+
+        JSDocInfo retrievedDocInfo = Name.getDocInfoForDeclaration(varRef);
+        assertNotNull(retrievedDocInfo);
+        assertTrue(retrievedDocInfo.hasType());
+    }
+
+    @Test
+    public void testRefCreateRefForTesting() {
+        Ref ref = Ref.createRefForTesting(Ref.Type.DIRECT_GET);
+        assertNotNull(ref);
+        assertEquals(Ref.Type.DIRECT_GET, ref.type);
+        assertNull(ref.node);
+        assertNull(ref.twin);
+    }
+
+    @Test
+    public void testRefMarkTwins() {
+        Ref ref1 = Ref.createRefForTesting(Ref.Type.SET_FROM_GLOBAL);
+        Ref ref2 = Ref.createRefForTesting(Ref.Type.ALIASING_GET);
+        Ref.markTwins(ref1, ref2);
+        assertNotNull(ref1.getTwin());
+        assertNotNull(ref2.getTwin());
+        assertEquals(ref2, ref1.getTwin());
+        assertEquals(ref1, ref2.getTwin());
+    }
+
+    @Test
+    public void testRefCloneAndReclassify() {
+        Ref originalRef = Ref.createRefForTesting(Ref.Type.DIRECT_GET);
+        Ref newRef = originalRef.cloneAndReclassify(Ref.Type.CALL_GET);
+        assertNotNull(newRef);
+        assertEquals(Ref.Type.CALL_GET, newRef.type);
+        assertEquals(originalRef.node, newRef.node); // Should be same node if original had one
+        assertEquals(originalRef.sourceName, newRef.sourceName);
+        assertEquals(originalRef.scope, newRef.scope);
+        assertEquals(originalRef.module, newRef.module);
+    }
+}
+```
+
+1. SOURCE CODE ANALYSIS - The tests focus on the `GlobalNamespace` class, specifically its core methods `getNameForest`, `getNameIndex`, and `process`. These methods are responsible for building a namespace from the JavaScript AST. The tests also cover internal helper methods like `getOrCreateName`, `isGlobalNameReference`, `canCollapse`, and `isNamespace`, indirectly testing the logic within `BuildGlobalNamespace`.
+
+2. TEST CASE DESIGN -
+    - testGetNameForest: Checks empty namespace forest. Input: `new GlobalNamespace(null, new Node(Token.SCRIPT))`. Expected: empty list. Derivation: Default state.
+    - testGetNameIndex: Checks empty namespace index. Input: `new GlobalNamespace(null, new Node(Token.SCRIPT))`. Expected: empty map. Derivation: Default state.
+    - testProcessGlobalVariableDeclaration: Tests basic `var a = 1`. Input: Script with `var a = 1`. Expected: `nameMap` contains "a", `a.globalSets = 1`. Derivation: Trace `process` and `handleSetFromGlobal`.
+    - testProcessGlobalVariableDeclarationWithExterns: Tests behavior with externs. Input: Externs with `var b` and script with `var a = 1`. Expected: `a` is global set, `b` is not. Derivation: Trace `process` and `isGlobalVarReference`.
+    - testProcessGlobalAssignment: Tests `a = 1`. Input: Script with `var a; a = 1;`. Expected: `a.globalSets = 1`. Derivation: Trace `process` and `handleSetFromGlobal`.
+    - testProcessGlobalPropertyAssignment: Tests `a.b = 1`. Input: Script with `a.b = 1`. Expected: `a` and `a.b` created, `a.b.globalSets = 1`. Derivation: Trace `process` and `getOrCreateName`.
+    - testProcessNestedGlobalPropertyAssignment: Tests `a.b.c = 1`. Input: Script with `a.b.c = 1`. Expected: `a`, `a.b`, `a.b.c` created, `a.b.c.globalSets = 1`. Derivation: Trace `process` and `getOrCreateName`.
+    - testProcessGlobalNameGet: Tests `a` get after declaration. Input: `var a = 1; a;`. Expected: `a.totalGets = 1`. Derivation: Trace `process` and `handleGet`.
+    - testProcessGlobalQualifiedNameGet: Tests `a.b.c` get after `a.b = 1`. Input: `a.b = 1; a.b.c;`. Expected: `a.b.totalGets = 1`. Derivation: Trace `process` and `handleGet`.
+    - testProcessObjectLiteralKeys: Tests object literal keys as properties. Input: `var obj = {a: 1, b: 2}`. Expected: `obj`, `obj.a`, `obj.b` created and set. Derivation: Trace `BuildGlobalNamespace.visit` for `Token.STRING` within `OBJECTLIT`.
+    - testProcessObjectLiteralKeysNested: Tests nested object literals. Input: `var obj = {a: 1, b: {c: 3}}`. Expected: `obj`, `obj.a`, `obj.b`, `obj.b.c` created and set. Derivation: Trace `BuildGlobalNamespace.visit` and `getNameForObjLitKey`.
+    - testProcessObjectLiteralKeysInAssignment: Tests object literal in assignment. Input: `obj = {a: 1}`. Expected: `obj`, `obj.a` created and set. Derivation: Trace `BuildGlobalNamespace.visit` for `Token.STRING` within `OBJECTLIT` under `ASSIGN`.
+    - testProcessFunctionDeclaration: Tests function declarations. Input: `function myFunc() {}`. Expected: `myFunc` created and set. Derivation: Trace `BuildGlobalNamespace.visit` for `Token.NAME` with `parent.getType() == Token.FUNCTION`.
+    - testProcessAnonymousFunctionDeclaration: Tests anonymous functions. Input: `function() {}`. Expected: No global name. Derivation: Trace `BuildGlobalNamespace.visit` for `NodeUtil.isFunctionAnonymous`.
+    - testProcessFunctionExpressionAssignedToGlobal: Tests function expressions assigned to globals. Input: `myFunc = function() {}`. Expected: `myFunc` created and set. Derivation: Trace `BuildGlobalNamespace.visit` for `Token.NAME` with `parent.getType() == Token.ASSIGN`.
+    - testProcessGetPrototype: Tests prototype access. Input: `MyClass.prototype = {}`. Expected: `MyClass`, `MyClass.prototype` created. Derivation: Trace `BuildGlobalNamespace.visit` for `Token.GETPROP` where one part is "prototype".
+    - testProcessSetPrototypeProperty: Tests setting properties on prototype. Input: `MyClass.prototype.method = function() {}`. Expected: `MyClass`, `MyClass.prototype`, `MyClass.prototype.method` created and set. Derivation: Trace `BuildGlobalNamespace.visit` for nested `GETPROP` in `ASSIGN`.
+    - testHandleSetFromGlobalWithPrototypePrefix: Tests aliasing for prototype setters. Input: `MyClass.prototype.method = ...`. Expected: `MyClass` and `MyClass.prototype` get `aliasingGets`. Derivation: Trace `handleSetFromGlobal` and `maybeHandlePrototypePrefix`.
+    - testHandleGetWithPrototypePrefix: Tests aliasing for prototype getters. Input: `var a = MyClass.prototype.method`. Expected: `MyClass` and `MyClass.prototype` get `aliasingGets`. Derivation: Trace `handleGet` and `maybeHandlePrototypePrefix`.
+    - testIsGlobalNameReference: Tests global scope detection. Input: A `Scope` object and a global/local name. Expected: Correct boolean. Derivation: Trace `isGlobalNameReference`.
+    - testIsGlobalVarReference: Tests global variable reference detection. Input: A `Scope` object and a global/local name. Expected: Correct boolean. Derivation: Trace `isGlobalVarReference`.
+    - testGetTopVarName: Tests extraction of the first part of a qualified name. Input: various qualified names. Expected: The first part. Derivation: Trace `getTopVarName`.
+    - testNameMapPutAndGet: Tests basic map operations for `Name` objects. Input: A `Name` object. Expected: Correct retrieval. Derivation: Direct interaction with `HashMap`.
+    - testGetOrCreateName: Tests creation and retrieval of `Name` objects. Input: Various names. Expected: Correctly created or retrieved `Name` objects. Derivation: Trace `getOrCreateName`.
+    - testIsClassOrEnumDeclaration: Tests detection of class/enum declarations via JSDoc. Input: Var with function/object literal and `@constructor` or `@enum`. Expected: `Name.isClassOrEnum` is true. Derivation: Trace `isConstructorOrEnumDeclaration`.
+    - testIsClassOrEnumDeclaration_Enum: Similar to above, specifically for enums.
+    - testIsNamespace: Tests detection of namespaces based on class/enum descendants. Input: A class declaration. Expected: `isNamespace` is true if it has descendants. Derivation: Trace `isNamespace`.
+    - testCanCollapse: Tests `Name.canCollapse` logic. Input: `Name` object with specific `globalSets`, `localSets`, `type`, and `parent` configuration. Expected: Boolean result based on rules. Derivation: Trace `canCollapse`.
+    - testCanCollapseUnannotatedChildNames: Tests `Name.canCollapseUnannotatedChildNames` logic. Input: `Name` object with varying properties. Expected: Boolean result. Derivation: Trace `canCollapseUnannotatedChildNames`.
+    - testCanEliminate: Tests `Name.canEliminate` logic. Input: `Name` object with different states. Expected: Boolean result. Derivation: Trace `canEliminate`.
+    - testNeedsToBeStubbed: Tests `Name.needsToBeStubbed` logic. Input: `Name` object with varying `globalSets` and `localSets`. Expected: Boolean result. Derivation: Trace `needsToBeStubbed`.
+    - testIsSimpleName: Tests `Name.isSimpleName` logic. Input: `Name` object with/without parent. Expected: Boolean result. Derivation: Trace `isSimpleName`.
+    - testFullName: Tests `Name.fullName` logic. Input: Nested `Name` objects. Expected: Fully qualified name string. Derivation: Trace `fullName`.
+    - testNameToString: Tests `Name.toString` output. Input: A `Name` object with all fields set. Expected: Formatted string. Derivation: Trace `toString`.
+    - testGetDocInfoForDeclaration: Tests retrieval of JSDocInfo from a declaration node. Input: A mock `Ref` pointing to a node with JSDocInfo. Expected: The JSDocInfo object. Derivation: Trace `getDocInfoForDeclaration`.
+    - testRefCreateRefForTesting: Tests creation of a testing `Ref`. Input: `Ref.Type`. Expected: A `Ref` object. Derivation: Direct call to static helper.
+    - testRefMarkTwins: Tests linking of twin references. Input: Two `Ref` objects. Expected: `twin` fields are set correctly. Derivation: Trace `markTwins`.
+    - testRefCloneAndReclassify: Tests `cloneAndReclassify` method. Input: An existing `Ref` and a new `Type`. Expected: New `Ref` with updated type and copied properties. Derivation: Trace `cloneAndReclassify`.
+
+4. DEFECT DETECTION STRATEGY - These tests aim to verify the accurate construction of the global namespace, ensuring that names are correctly identified, categorized (e.g., as functions, object literals), and have their references (sets, gets, aliasing) accurately recorded, especially around prototype properties and nested assignments.
+
+5. SUMMARY - 26 tests.
+
+6. LIMITATIONS - Mocking complex objects like `AbstractCompiler`, `Scope`, and `NodeTraversal` is challenging. Some tests manually create nodes and trigger `process()` to simulate traversal, which might not perfectly replicate all traversal edge cases. Tests focus on expected states derived from the reference code's logic rather than simulating actual runtime execution of faulty code.
+Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.
+```

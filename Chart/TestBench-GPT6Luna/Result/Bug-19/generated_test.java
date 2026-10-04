@@ -1,0 +1,348 @@
+package org.jfree.chart.plot;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.awt.AlphaComposite;
+import java.awt.BasicStroke;
+import java.awt.Color;
+import java.awt.Composite;
+import java.awt.Font;
+import java.awt.Graphics2D;
+import java.awt.Paint;
+import java.awt.Shape;
+import java.awt.Stroke;
+import java.awt.geom.Line2D;
+import java.awt.geom.Point2D;
+import java.awt.geom.Rectangle2D;
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.ResourceBundle;
+import java.util.Set;
+import org.jfree.chart.LegendItem;
+import org.jfree.chart.LegendItemCollection;
+import org.jfree.chart.annotations.CategoryAnnotation;
+import org.jfree.chart.axis.Axis;
+import org.jfree.chart.axis.AxisCollection;
+import org.jfree.chart.axis.AxisLocation;
+import org.jfree.chart.axis.AxisSpace;
+import org.jfree.chart.axis.AxisState;
+import org.jfree.chart.axis.CategoryAnchor;
+import org.jfree.chart.axis.CategoryAxis;
+import org.jfree.chart.axis.ValueAxis;
+import org.jfree.chart.axis.ValueTick;
+import org.jfree.chart.event.ChartChangeEventType;
+import org.jfree.chart.event.PlotChangeEvent;
+import org.jfree.chart.event.RendererChangeEvent;
+import org.jfree.chart.event.RendererChangeListener;
+import org.jfree.chart.renderer.category.CategoryItemRenderer;
+import org.jfree.chart.renderer.category.CategoryItemRendererState;
+import org.jfree.chart.util.Layer;
+import org.jfree.chart.util.ObjectList;
+import org.jfree.chart.util.ObjectUtilities;
+import org.jfree.chart.util.PaintUtilities;
+import org.jfree.chart.util.PublicCloneable;
+import org.jfree.chart.util.RectangleEdge;
+import org.jfree.chart.util.RectangleInsets;
+import org.jfree.chart.util.SerialUtilities;
+import org.jfree.chart.util.SortOrder;
+import org.jfree.data.Range;
+import org.jfree.data.category.CategoryDataset;
+import org.jfree.data.general.Dataset;
+import org.jfree.data.general.DatasetChangeEvent;
+import org.jfree.data.general.DatasetUtilities;
+
+public class CategoryPlotTest {
+    @Test
+    public void testDefaultOrientationAndAxisEdges() throws Exception {
+        CategoryPlot plot = new CategoryPlot();
+        assertEquals(PlotOrientation.VERTICAL, plot.getOrientation());
+        assertEquals(RectangleEdge.BOTTOM, plot.getDomainAxisEdge());
+        assertEquals(RectangleEdge.LEFT, plot.getRangeAxisEdge());
+    }
+
+    @Test
+    public void testSetOrientationUpdatesAxisEdges() throws Exception {
+        CategoryPlot plot = new CategoryPlot();
+        plot.setOrientation(PlotOrientation.HORIZONTAL);
+        assertEquals(PlotOrientation.HORIZONTAL, plot.getOrientation());
+        assertEquals(RectangleEdge.LEFT, plot.getDomainAxisEdge());
+        assertEquals(RectangleEdge.TOP, plot.getRangeAxisEdge());
+    }
+
+    @Test
+    public void testNullOrientationRejected() throws Exception {
+        CategoryPlot plot = new CategoryPlot();
+        try {
+            plot.setOrientation(null);
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) {
+        }
+        assertEquals(PlotOrientation.VERTICAL, plot.getOrientation());
+    }
+
+    @Test
+    public void testAxisOffsetSetterAndNullRejection() throws Exception {
+        CategoryPlot plot = new CategoryPlot();
+        RectangleInsets insets = new RectangleInsets(1.0, 2.0, 3.0, 4.0);
+        plot.setAxisOffset(insets);
+        assertSame(insets, plot.getAxisOffset());
+        try {
+            plot.setAxisOffset(null);
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) {
+        }
+        assertSame(insets, plot.getAxisOffset());
+    }
+
+    @Test
+    public void testDomainAxisSetAndIndex() throws Exception {
+        CategoryPlot plot = new CategoryPlot();
+        CategoryAxis axis = new CategoryAxis("domain");
+        plot.setDomainAxis(axis);
+        assertSame(axis, plot.getDomainAxis());
+        assertEquals(0, plot.getDomainAxisIndex(axis));
+        assertEquals(1, plot.getDomainAxisCount());
+    }
+
+    @Test
+    public void testDomainAxisArrayAndClear() throws Exception {
+        CategoryPlot plot = new CategoryPlot();
+        CategoryAxis first = new CategoryAxis("first");
+        CategoryAxis second = new CategoryAxis("second");
+        plot.setDomainAxes(new CategoryAxis[] {first, second});
+        assertSame(first, plot.getDomainAxis());
+        assertEquals(1, plot.getDomainAxisIndex(second));
+        assertEquals(2, plot.getDomainAxisCount());
+        plot.clearDomainAxes();
+        assertEquals(0, plot.getDomainAxisCount());
+        assertEquals(-1, plot.getDomainAxisIndex(first));
+    }
+
+    @Test
+    public void testDomainAxisLocationAndEdge() throws Exception {
+        CategoryPlot plot = new CategoryPlot();
+        plot.setDomainAxisLocation(AxisLocation.TOP_OR_RIGHT);
+        assertEquals(AxisLocation.TOP_OR_RIGHT, plot.getDomainAxisLocation());
+        assertEquals(RectangleEdge.TOP, plot.getDomainAxisEdge());
+    }
+
+    @Test
+    public void testNullPrimaryDomainAxisLocationRejected() throws Exception {
+        CategoryPlot plot = new CategoryPlot();
+        try {
+            plot.setDomainAxisLocation(null);
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) {
+        }
+        assertEquals(AxisLocation.BOTTOM_OR_LEFT, plot.getDomainAxisLocation());
+    }
+
+    @Test
+    public void testRangeAxisSetAndIndex() throws Exception {
+        CategoryPlot plot = new CategoryPlot();
+        ValueAxis axis = new org.jfree.chart.axis.NumberAxis("range");
+        plot.setRangeAxis(axis);
+        assertSame(axis, plot.getRangeAxis());
+        assertEquals(0, plot.getRangeAxisIndex(axis));
+        assertEquals(1, plot.getRangeAxisCount());
+    }
+
+    @Test
+    public void testRangeAxisArrayAndClear() throws Exception {
+        CategoryPlot plot = new CategoryPlot();
+        ValueAxis first = new org.jfree.chart.axis.NumberAxis("first");
+        ValueAxis second = new org.jfree.chart.axis.NumberAxis("second");
+        plot.setRangeAxes(new ValueAxis[] {first, second});
+        assertSame(first, plot.getRangeAxis());
+        assertEquals(1, plot.getRangeAxisIndex(second));
+        assertEquals(2, plot.getRangeAxisCount());
+        plot.clearRangeAxes();
+        assertEquals(0, plot.getRangeAxisCount());
+        assertEquals(-1, plot.getRangeAxisIndex(first));
+    }
+
+    @Test
+    public void testRangeAxisLocationAndEdge() throws Exception {
+        CategoryPlot plot = new CategoryPlot();
+        plot.setRangeAxisLocation(AxisLocation.BOTTOM_OR_RIGHT);
+        assertEquals(AxisLocation.BOTTOM_OR_RIGHT, plot.getRangeAxisLocation());
+        assertEquals(RectangleEdge.RIGHT, plot.getRangeAxisEdge());
+    }
+
+    @Test
+    public void testNullPrimaryRangeAxisLocationRejected() throws Exception {
+        CategoryPlot plot = new CategoryPlot();
+        try {
+            plot.setRangeAxisLocation(null);
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) {
+        }
+        assertEquals(AxisLocation.TOP_OR_LEFT, plot.getRangeAxisLocation());
+    }
+
+    @Test
+    public void testSetDatasetAndCount() throws Exception {
+        CategoryPlot plot = new CategoryPlot();
+        org.jfree.data.category.DefaultCategoryDataset dataset =
+                new org.jfree.data.category.DefaultCategoryDataset();
+        dataset.addValue(2.0, "series", "category");
+        plot.setDataset(dataset);
+        assertSame(dataset, plot.getDataset());
+        assertEquals(1, plot.getDatasetCount());
+    }
+
+    @Test
+    public void testDatasetAxisMappingsUseConfiguredAxes() throws Exception {
+        CategoryPlot plot = new CategoryPlot();
+        CategoryAxis firstDomain = new CategoryAxis("d0");
+        CategoryAxis secondDomain = new CategoryAxis("d1");
+        ValueAxis firstRange = new org.jfree.chart.axis.NumberAxis("r0");
+        ValueAxis secondRange = new org.jfree.chart.axis.NumberAxis("r1");
+        plot.setDomainAxes(new CategoryAxis[] {firstDomain, secondDomain});
+        plot.setRangeAxes(new ValueAxis[] {firstRange, secondRange});
+        plot.mapDatasetToDomainAxis(2, 1);
+        plot.mapDatasetToRangeAxis(2, 1);
+        assertSame(secondDomain, plot.getDomainAxisForDataset(2));
+        assertSame(secondRange, plot.getRangeAxisForDataset(2));
+    }
+
+    @Test
+    public void testRendererSetterAndLookup() throws Exception {
+        CategoryPlot plot = new CategoryPlot();
+        org.jfree.chart.renderer.category.BarRenderer renderer =
+                new org.jfree.chart.renderer.category.BarRenderer();
+        plot.setRenderer(renderer);
+        assertSame(renderer, plot.getRenderer());
+        assertSame(renderer, plot.getRendererForDataset(null));
+        assertEquals(0, plot.getIndexOf(renderer));
+    }
+
+    @Test
+    public void testRendererArrayAndDatasetIdentityLookup() throws Exception {
+        CategoryPlot plot = new CategoryPlot();
+        org.jfree.data.category.DefaultCategoryDataset dataset =
+                new org.jfree.data.category.DefaultCategoryDataset();
+        dataset.addValue(1.0, "series", "category");
+        plot.setDataset(1, dataset);
+        org.jfree.chart.renderer.category.BarRenderer renderer =
+                new org.jfree.chart.renderer.category.BarRenderer();
+        plot.setRenderers(new CategoryItemRenderer[] {null, renderer});
+        assertSame(renderer, plot.getRendererForDataset(dataset));
+        assertEquals(1, plot.getIndexOf(renderer));
+    }
+
+    @Test
+    public void testDatasetRenderingOrderSetter() throws Exception {
+        CategoryPlot plot = new CategoryPlot();
+        plot.setDatasetRenderingOrder(DatasetRenderingOrder.FORWARD);
+        assertEquals(DatasetRenderingOrder.FORWARD, plot.getDatasetRenderingOrder());
+        try {
+            plot.setDatasetRenderingOrder(null);
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) {
+        }
+        assertEquals(DatasetRenderingOrder.FORWARD, plot.getDatasetRenderingOrder());
+    }
+
+    @Test
+    public void testColumnAndRowRenderingOrders() throws Exception {
+        CategoryPlot plot = new CategoryPlot();
+        plot.setColumnRenderingOrder(SortOrder.DESCENDING);
+        plot.setRowRenderingOrder(SortOrder.DESCENDING);
+        assertEquals(SortOrder.DESCENDING, plot.getColumnRenderingOrder());
+        assertEquals(SortOrder.DESCENDING, plot.getRowRenderingOrder());
+    }
+
+    @Test
+    public void testGridlineVisibilityAndStyleSetters() throws Exception {
+        CategoryPlot plot = new CategoryPlot();
+        Stroke stroke = new BasicStroke(2.0f);
+        Paint paint = Color.RED;
+        plot.setDomainGridlinesVisible(true);
+        plot.setRangeGridlinesVisible(false);
+        plot.setDomainGridlineStroke(stroke);
+        plot.setRangeGridlineStroke(stroke);
+        plot.setDomainGridlinePaint(paint);
+        plot.setRangeGridlinePaint(paint);
+        assertTrue(plot.isDomainGridlinesVisible());
+        assertFalse(plot.isRangeGridlinesVisible());
+        assertSame(stroke, plot.getDomainGridlineStroke());
+        assertSame(stroke, plot.getRangeGridlineStroke());
+        assertSame(paint, plot.getDomainGridlinePaint());
+        assertSame(paint, plot.getRangeGridlinePaint());
+    }
+
+    @Test
+    public void testGridlinePositionSetterAndNullRejection() throws Exception {
+        CategoryPlot plot = new CategoryPlot();
+        plot.setDomainGridlinePosition(CategoryAnchor.START);
+        assertEquals(CategoryAnchor.START, plot.getDomainGridlinePosition());
+        try {
+            plot.setDomainGridlinePosition(null);
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) {
+        }
+        assertEquals(CategoryAnchor.START, plot.getDomainGridlinePosition());
+    }
+
+    @Test
+    public void testNullGridlinePaintAndStrokeRejected() throws Exception {
+        CategoryPlot plot = new CategoryPlot();
+        try {
+            plot.setDomainGridlinePaint(null);
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) {
+        }
+        try {
+            plot.setRangeGridlinePaint(null);
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) {
+        }
+        try {
+            plot.setDomainGridlineStroke(null);
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) {
+        }
+        try {
+            plot.setRangeGridlineStroke(null);
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) {
+        }
+        assertSame(CategoryPlot.DEFAULT_GRIDLINE_PAINT, plot.getDomainGridlinePaint());
+        assertSame(CategoryPlot.DEFAULT_GRIDLINE_PAINT, plot.getRangeGridlinePaint());
+    }
+
+    @Test
+    public void testFixedLegendItemsOverrideGeneratedItems() throws Exception {
+        CategoryPlot plot = new CategoryPlot();
+        LegendItemCollection items = new LegendItemCollection();
+        plot.setFixedLegendItems(items);
+        assertSame(items, plot.getFixedLegendItems());
+        assertSame(items, plot.getLegendItems());
+        plot.setFixedLegendItems(null);
+        assertNull(plot.getFixedLegendItems());
+        assertNotNull(plot.getLegendItems());
+    }
+
+    @Test
+    public void testGetCategoriesFromConfiguredDataset() throws Exception {
+        CategoryPlot plot = new CategoryPlot();
+        org.jfree.data.category.DefaultCategoryDataset dataset =
+                new org.jfree.data.category.DefaultCategoryDataset();
+        dataset.addValue(1.0, "series", "first");
+        dataset.addValue(2.0, "series", "second");
+        plot.setDataset(dataset);
+        assertEquals(2, plot.getCategories().size());
+        assertEquals("first", plot.getCategories().get(0));
+        assertEquals("second", plot.getCategories().get(1));
+    }
+}

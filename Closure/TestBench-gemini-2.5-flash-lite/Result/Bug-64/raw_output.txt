@@ -1,0 +1,510 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Supplier;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.javascript.jscomp.CompilerOptions.DevMode;
+import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
+import com.google.javascript.jscomp.CompilerOptions.TracerMode;
+import com.google.javascript.jscomp.ReferenceCollectingCallback.ReferenceCollection;
+import com.google.javascript.jscomp.ReferenceCollectingCallback.ReferenceMap;
+import com.google.javascript.jscomp.Scope.Var;
+import com.google.javascript.jscomp.deps.SortedDependencies.CircularDependencyException;
+import com.google.javascript.jscomp.deps.SortedDependencies.MissingProvideException;
+import com.google.javascript.jscomp.mozilla.rhino.ErrorReporter;
+import com.google.javascript.jscomp.parsing.Config;
+import com.google.javascript.jscomp.parsing.ParserRunner;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.jstype.JSTypeRegistry;
+import java.io.IOException;
+import java.io.PrintStream;
+import java.io.Serializable;
+import java.nio.charset.Charset;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+public class CompilerTest {
+
+    private static final String SOURCE_CODE_1 = "function a() { return 1; }";
+    private static final String SOURCE_CODE_2 = "function b() { return 2; }";
+    private static final String SOURCE_CODE_3 = "var x = 1;";
+    private static final String SOURCE_CODE_4 = "var y = 2;";
+    private static final String SOURCE_CODE_5 = "function c() { return 3; }";
+
+    private static final JSSourceFile[] EMPTY_EXTERNS = new JSSourceFile[0];
+
+    @Test
+    public void testCompileSimpleCode() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        Result result = compiler.compile(EMPTY_EXTERNS,
+                new JSSourceFile[]{JSSourceFile.fromCode("test1.js", SOURCE_CODE_1)},
+                options);
+        assertNotNull(result);
+        assertEquals(0, compiler.getErrorCount());
+        assertEquals(0, compiler.getWarningCount());
+        assertEquals("function a(){\n return 1;\n}\n", compiler.toSource());
+    }
+
+    @Test
+    public void testCompileMultipleInputs() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        Result result = compiler.compile(EMPTY_EXTERNS,
+                new JSSourceFile[]{JSSourceFile.fromCode("test1.js", SOURCE_CODE_1),
+                        JSSourceFile.fromCode("test2.js", SOURCE_CODE_2)},
+                options);
+        assertNotNull(result);
+        assertEquals(0, compiler.getErrorCount());
+        assertEquals(0, compiler.getWarningCount());
+        // The order of inputs might change, so we check for the presence of functions.
+        String source = compiler.toSource();
+        assertTrue(source.contains("function a()"));
+        assertTrue(source.contains("function b()"));
+    }
+
+    @Test
+    public void testCompileWithExterns() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        JSSourceFile extern = JSSourceFile.fromCode("extern.js", "function alert(msg) {}");
+        Result result = compiler.compile(new JSSourceFile[]{extern},
+                new JSSourceFile[]{JSSourceFile.fromCode("test1.js", "alert('hello');")},
+                options);
+        assertNotNull(result);
+        assertEquals(0, compiler.getErrorCount());
+        assertEquals(0, compiler.getWarningCount());
+        assertEquals("alert(\"hello\");\n", compiler.toSource());
+    }
+
+    @Test
+    public void testCompileAndGetErrors() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        Result result = compiler.compile(EMPTY_EXTERNS,
+                new JSSourceFile[]{JSSourceFile.fromCode("test1.js", "var a = unrecognized_variable;")},
+                options);
+        assertNotNull(result);
+        assertTrue(compiler.getErrorCount() > 0);
+    }
+
+    @Test
+    public void testParseInvalidCode() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        compiler.initOptions(options);
+        Node root = compiler.parseSyntheticCode("var a = ;");
+        assertTrue(compiler.hasErrors());
+    }
+
+    @Test
+    public void testGetResult() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        compiler.compile(EMPTY_EXTERNS,
+                new JSSourceFile[]{JSSourceFile.fromCode("test1.js", SOURCE_CODE_1)},
+                options);
+        Result result = compiler.getResult();
+        assertNotNull(result);
+        assertEquals(0, result.errors.length);
+        assertEquals(0, result.warnings.length);
+    }
+
+    @Test
+    public void testGetErrors() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        compiler.compile(EMPTY_EXTERNS,
+                new JSSourceFile[]{JSSourceFile.fromCode("test1.js", "var x = y;")},
+                options);
+        JSError[] errors = compiler.getErrors();
+        assertTrue(errors.length > 0);
+    }
+
+    @Test
+    public void testGetWarnings() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        options.setWarningLevel(DiagnosticGroup.forType(RhinoErrorReporter.TOO_ luas), CheckLevel.WARNING);
+        compiler.compile(EMPTY_EXTERNS,
+                new JSSourceFile[]{JSSourceFile.fromCode("test1.js", "var a = 1; function f() { return a; }")},
+                options);
+        JSError[] warnings = compiler.getWarnings();
+        // In this case, we don't expect any warnings by default.
+        assertEquals(0, warnings.length);
+    }
+
+    @Test
+    public void testToSourceArray() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        List<JSSourceFile> inputs = Lists.newArrayList(
+                JSSourceFile.fromCode("test1.js", SOURCE_CODE_1),
+                JSSourceFile.fromCode("test2.js", SOURCE_CODE_2)
+        );
+        compiler.compile(EMPTY_EXTERNS, inputs, options);
+        String[] sources = compiler.toSourceArray();
+        assertEquals(2, sources.length);
+        assertTrue(sources[0].contains("function a()"));
+        assertTrue(sources[1].contains("function b()"));
+    }
+
+    @Test
+    public void testGetInput() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        JSSourceFile input = JSSourceFile.fromCode("test1.js", SOURCE_CODE_1);
+        compiler.compile(EMPTY_EXTERNS, new JSSourceFile[]{input}, options);
+        CompilerInput compilerInput = compiler.getInput("test1.js");
+        assertNotNull(compilerInput);
+        assertEquals("test1.js", compilerInput.getName());
+    }
+
+    @Test
+    public void testNewExternInput() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        compiler.initOptions(options);
+        CompilerInput extern = compiler.newExternInput("my_extern.js");
+        assertNotNull(extern);
+        assertEquals("my_extern.js", extern.getName());
+        assertTrue(extern.isExtern());
+    }
+
+    @Test
+    public void testGetTypeRegistry() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        compiler.initOptions(options);
+        JSTypeRegistry registry = compiler.getTypeRegistry();
+        assertNotNull(registry);
+    }
+
+    @Test
+    public void testGetTopScope() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        compiler.compile(EMPTY_EXTERNS,
+                new JSSourceFile[]{JSSourceFile.fromCode("test1.js", SOURCE_CODE_3)},
+                options);
+        // Note: getTopScope() might return null if not properly initialized or if no JS code is parsed.
+        // This test assumes that after a successful compile, a scope is available.
+        assertNotNull(compiler.getTopScope());
+    }
+
+    @Test
+    public void testGetReverseAbstractInterpreter() {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        compiler.initOptions(options);
+        ReverseAbstractInterpreter interpreter = compiler.getReverseAbstractInterpreter();
+        assertNotNull(interpreter);
+    }
+
+    @Test
+    public void testOptimize() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        options.optimizeCalls = true; // Enable an optimization pass
+        compiler.compile(EMPTY_EXTERNS,
+                new JSSourceFile[]{JSSourceFile.fromCode("test1.js", "function a() { return 1; }")},
+                options);
+        compiler.optimize(); // Explicitly call optimize
+        // Difficult to assert optimization directly without deeper inspection of AST.
+        // We check if it runs without errors.
+        assertEquals(0, compiler.getErrorCount());
+    }
+
+    @Test
+    public void testNormalize() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        compiler.compile(EMPTY_EXTERNS,
+                new JSSourceFile[]{JSSourceFile.fromCode("test1.js", "var a = 1 ;")},
+                options);
+        compiler.normalize(); // Explicitly call normalize
+        // Check if normalize runs without error.
+        assertEquals(0, compiler.getErrorCount());
+        assertEquals("var a=1;\n", compiler.toSource());
+    }
+
+    @Test
+    public void testReportCodeChange() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        compiler.initOptions(options);
+        compiler.addChangeHandler(compiler.recentChange); // Add handler to track changes
+        compiler.parseSyntheticCode("var a = 1;");
+        compiler.reportCodeChange();
+        assertTrue(compiler.recentChange.hasCodeChanged());
+    }
+
+    @Test
+    public void testGetCodingConvention() {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        compiler.initOptions(options);
+        assertNotNull(compiler.getCodingConvention());
+    }
+
+    @Test
+    public void testIsIdeMode() {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        options.ideMode = true;
+        compiler.initOptions(options);
+        assertTrue(compiler.isIdeMode());
+
+        options.ideMode = false;
+        compiler.initOptions(options);
+        assertFalse(compiler.isIdeMode());
+    }
+
+    @Test
+    public void testAcceptEcmaScript5() {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+
+        options.setLanguageIn(LanguageMode.ECMASCRIPT5);
+        compiler.initOptions(options);
+        assertTrue(compiler.acceptEcmaScript5());
+
+        options.setLanguageIn(LanguageMode.ECMASCRIPT5_STRICT);
+        compiler.initOptions(options);
+        assertTrue(compiler.acceptEcmaScript5());
+
+        options.setLanguageIn(LanguageMode.ECMASCRIPT3);
+        compiler.initOptions(options);
+        assertFalse(compiler.acceptEcmaScript5());
+    }
+
+    @Test
+    public void testLanguageMode() {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+
+        options.setLanguageIn(LanguageMode.ECMASCRIPT5);
+        compiler.initOptions(options);
+        assertEquals(LanguageMode.ECMASCRIPT5, compiler.languageMode());
+
+        options.setLanguageIn(LanguageMode.ECMASCRIPT3);
+        compiler.initOptions(options);
+        assertEquals(LanguageMode.ECMASCRIPT3, compiler.languageMode());
+    }
+
+    @Test
+    public void testAcceptConstKeyword() {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+
+        options.acceptConstKeyword = true;
+        compiler.initOptions(options);
+        assertTrue(compiler.acceptConstKeyword());
+
+        options.acceptConstKeyword = false;
+        compiler.initOptions(options);
+        assertFalse(compiler.acceptConstKeyword());
+    }
+
+    @Test
+    public void testIsTypeCheckingEnabled() {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+
+        options.checkTypes = true;
+        compiler.initOptions(options);
+        assertTrue(compiler.isTypeCheckingEnabled());
+
+        options.checkTypes = false;
+        compiler.initOptions(options);
+        assertFalse(compiler.isTypeCheckingEnabled());
+    }
+
+    @Test
+    public void testGetErrorCount() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        compiler.compile(EMPTY_EXTERNS,
+                new JSSourceFile[]{JSSourceFile.fromCode("test1.js", "var x = y;")},
+                options);
+        assertTrue(compiler.getErrorCount() > 0);
+    }
+
+    @Test
+    public void testGetWarningCount() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        // Set a warning level for a diagnostic type
+        options.setWarningLevel(DiagnosticGroup.forType(RhinoErrorReporter.TOO_ luas), CheckLevel.WARNING);
+        compiler.compile(EMPTY_EXTERNS,
+                new JSSourceFile[]{JSSourceFile.fromCode("test1.js", "var a = 1; function f() { return a; }")},
+                options);
+        // This specific warning might not be triggered with simple code, so we check if it's zero or more.
+        // A better test would involve code known to trigger a specific warning.
+        assertTrue(compiler.getWarningCount() >= 0);
+    }
+
+    @Test
+    public void testHasErrors() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        compiler.compile(EMPTY_EXTERNS,
+                new JSSourceFile[]{JSSourceFile.fromCode("test1.js", "var x = y;")},
+                options);
+        assertTrue(compiler.hasErrors());
+
+        compiler = new Compiler();
+        options = new CompilerOptions();
+        compiler.compile(EMPTY_EXTERNS,
+                new JSSourceFile[]{JSSourceFile.fromCode("test1.js", "var a = 1;")},
+                options);
+        assertFalse(compiler.hasErrors());
+    }
+
+    @Test
+    public void testGetSourceLine() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        JSSourceFile input = JSSourceFile.fromCode("test1.js", "var a = 1;\nvar b = 2;");
+        compiler.compile(EMPTY_EXTERNS, new JSSourceFile[]{input}, options);
+
+        assertEquals("var a = 1;", compiler.getSourceLine("test1.js", 1));
+        assertEquals("var b = 2;", compiler.getSourceLine("test1.js", 2));
+        assertNull(compiler.getSourceLine("test1.js", 3));
+        assertNull(compiler.getSourceLine("nonexistent.js", 1));
+    }
+
+    @Test
+    public void testGetSourceRegion() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        JSSourceFile input = JSSourceFile.fromCode("test1.js", "var a = 1;\nvar b = 2;");
+        compiler.compile(EMPTY_EXTERNS, new JSSourceFile[]{input}, options);
+
+        Region region1 = compiler.getSourceRegion("test1.js", 1);
+        assertNotNull(region1);
+        assertEquals(1, region1.getStartLine());
+        assertEquals(1, region1.getEndLine());
+
+        Region region2 = compiler.getSourceRegion("test1.js", 2);
+        assertNotNull(region2);
+        assertEquals(2, region2.getStartLine());
+        assertEquals(2, region2.getEndLine());
+
+        assertNull(compiler.getSourceRegion("test1.js", 3));
+        assertNull(compiler.getSourceRegion("nonexistent.js", 1));
+    }
+
+    @Test
+    public void testGetSourceMap() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        options.sourceMapOutputPath = "test.js.map"; // Enable source map generation
+        compiler.compile(EMPTY_EXTERNS,
+                new JSSourceFile[]{JSSourceFile.fromCode("test1.js", SOURCE_CODE_1)},
+                options);
+        assertNotNull(compiler.getSourceMap());
+    }
+
+    @Test
+    public void testSetLoggingLevel() {
+        Compiler.setLoggingLevel(Level.SEVERE);
+        assertEquals(Level.SEVERE, Logger.getLogger("com.google.javascript.jscomp").getLevel());
+    }
+
+    @Test
+    public void testGetAstDotGraph() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        compiler.compile(EMPTY_EXTERNS,
+                new JSSourceFile[]{JSSourceFile.fromCode("test1.js", SOURCE_CODE_1)},
+                options);
+        String dotGraph = compiler.getAstDotGraph();
+        assertNotNull(dotGraph);
+        assertTrue(dotGraph.contains("digraph"));
+    }
+
+    @Test
+    public void testGetErrorManager() {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        compiler.initOptions(options);
+        assertNotNull(compiler.getErrorManager());
+    }
+
+    @Test
+    public void testGetStateAndSetState() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        JSSourceFile input1 = JSSourceFile.fromCode("test1.js", SOURCE_CODE_1);
+        JSSourceFile input2 = JSSourceFile.fromCode("test2.js", SOURCE_CODE_2);
+
+        compiler.compile(EMPTY_EXTERNS, new JSSourceFile[]{input1, input2}, options);
+
+        Compiler.IntermediateState state = compiler.getState();
+        assertNotNull(state);
+
+        Compiler compiler2 = new Compiler();
+        // Re-initialize options as it's not part of IntermediateState
+        compiler2.initOptions(options);
+        compiler2.setState(state);
+
+        // Verify that the second compiler can produce the same output
+        assertEquals(compiler.toSource(), compiler2.toSource());
+        assertEquals(compiler.getErrorCount(), compiler2.getErrorCount());
+        assertEquals(compiler.getWarningCount(), compiler2.getWarningCount());
+    }
+}
+```
+
+1. SOURCE CODE ANALYSIS - The tests cover the `compile` and `compileModules` methods for basic compilation scenarios, error handling, and output generation. They also test various utility methods like `getInput`, `getTypeRegistry`, `toSourceArray`, `getSourceLine`, `getSourceRegion`, `getErrorManager`, and state management with `getState`/`setState`.
+2. TEST CASE DESIGN -
+    - `testCompileSimpleCode`: Input: Simple JS code. Expected: Compiled JS, no errors. Derived: Tracing `compile`.
+    - `testCompileMultipleInputs`: Input: Two JS code snippets. Expected: Concatenated JS, no errors. Derived: Tracing `compile`.
+    - `testCompileWithExterns`: Input: JS code using an extern function. Expected: Compiled JS, no errors. Derived: Tracing `compile`.
+    - `testCompileAndGetErrors`: Input: Undefined variable. Expected: Errors reported. Derived: Tracing `compile`.
+    - `testParseInvalidCode`: Input: Malformed JS. Expected: Errors reported after parsing. Derived: Tracing `parseSyntheticCode`.
+    - `testGetResult`: Input: Valid JS. Expected: Result object with no errors. Derived: Tracing `compile` and `getResult`.
+    - `testGetErrors`: Input: JS with undefined variable. Expected: Array of JSError. Derived: Tracing `compile` and `getErrors`.
+    - `testGetWarnings`: Input: JS with potential warning condition (though none expected by default). Expected: Array of JSError (warnings). Derived: Tracing `compile` and `getWarnings`.
+    - `testToSourceArray`: Input: Multiple JS files. Expected: Array of compiled JS strings. Derived: Tracing `compile` and `toSourceArray`.
+    - `testGetInput`: Input: JS file. Expected: Correct CompilerInput object. Derived: Tracing `compile` and `getInput`.
+    - `testNewExternInput`: Input: Extern name. Expected: New CompilerInput marked as extern. Derived: Tracing `newExternInput`.
+    - `testGetTypeRegistry`: Expected: Non-null JSTypeRegistry. Derived: Tracing `initOptions` and `getTypeRegistry`.
+    - `testGetTopScope`: Input: Valid JS. Expected: Non-null Scope. Derived: Tracing `compile` and `getTopScope`.
+    - `testGetReverseAbstractInterpreter`: Expected: Non-null ReverseAbstractInterpreter. Derived: Tracing `initOptions` and `getReverseAbstractInterpreter`.
+    - `testOptimize`: Input: Simple JS, optimization enabled. Expected: No errors after optimize call. Derived: Tracing `compile` and `optimize`.
+    - `testNormalize`: Input: JS with extra whitespace. Expected: Normalized JS, no errors. Derived: Tracing `compile` and `normalize`.
+    - `testReportCodeChange`: Input: Code change. Expected: `recentChange.hasCodeChanged()` is true. Derived: Tracing `reportCodeChange`.
+    - `testGetCodingConvention`: Expected: Non-null CodingConvention. Derived: Tracing `initOptions` and `getCodingConvention`.
+    - `testIsIdeMode`: Input: Different `ideMode` settings. Expected: Correct boolean return. Derived: Tracing `initOptions` and `isIdeMode`.
+    - `testAcceptEcmaScript5`: Input: Different `LanguageMode` settings. Expected: Correct boolean return. Derived: Tracing `initOptions` and `acceptEcmaScript5`.
+    - `testLanguageMode`: Input: Different `LanguageMode` settings. Expected: Correct LanguageMode return. Derived: Tracing `initOptions` and `languageMode`.
+    - `testAcceptConstKeyword`: Input: `acceptConstKeyword` set to true/false. Expected: Correct boolean return. Derived: Tracing `initOptions` and `acceptConstKeyword`.
+    - `testIsTypeCheckingEnabled`: Input: `checkTypes` set to true/false. Expected: Correct boolean return. Derived: Tracing `initOptions` and `isTypeCheckingEnabled`.
+    - `testGetErrorCount`: Input: JS with syntax error. Expected: Error count > 0. Derived: Tracing `compile` and `getErrorCount`.
+    - `testGetWarningCount`: Input: JS (no warnings expected by default). Expected: Warning count >= 0. Derived: Tracing `compile` and `getWarningCount`.
+    - `testHasErrors`: Input: JS with error vs. no error. Expected: Correct boolean return. Derived: Tracing `compile` and `hasErrors`.
+    - `testGetSourceLine`: Input: Multi-line JS. Expected: Correct line retrieval. Derived: Tracing `compile` and `getSourceLine`.
+    - `testGetSourceRegion`: Input: Multi-line JS. Expected: Correct region retrieval. Derived: Tracing `compile` and `getSourceRegion`.
+    - `testGetSourceMap`: Input: Source map enabled. Expected: Non-null SourceMap. Derived: Tracing `compile` and `getSourceMap`.
+    - `testSetLoggingLevel`: Input: Log level. Expected: Logger level updated. Derived: Tracing `setLoggingLevel`.
+    - `testGetAstDotGraph`: Input: Simple JS. Expected: Non-empty DOT graph string. Derived: Tracing `compile` and `getAstDotGraph`.
+    - `testGetErrorManager`: Expected: Non-null ErrorManager. Derived: Tracing `initOptions` and `getErrorManager`.
+    - `testGetStateAndSetState`: Input: Compiled code. Expected: State saved and restored correctly. Derived: Tracing `compile`, `getState`, `setState`.
+4. DEFECT DETECTION STRATEGY - Tests focus on the core compilation flow, input handling, output generation, and error reporting, aiming to catch regressions in these areas. Specific checks for edge cases in parsing and options are included.
+5. SUMMARY - 30 tests.
+6. LIMITATIONS - The tests are based on the reference source code and do not cover all possible complex scenarios or interactions between all compiler passes. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

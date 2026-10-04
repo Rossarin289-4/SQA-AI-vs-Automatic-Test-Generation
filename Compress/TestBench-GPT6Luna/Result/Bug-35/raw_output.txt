@@ -1,0 +1,207 @@
+```java
+package org.apache.commons.compress.archivers.tar;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.io.IOException;
+import java.math.BigInteger;
+import java.nio.ByteBuffer;
+import org.apache.commons.compress.archivers.zip.ZipEncoding;
+import org.apache.commons.compress.archivers.zip.ZipEncodingHelper;
+
+public class TarUtilsTest {
+    @Test
+    public void testParseOctalWithPaddingAndOffset() throws Exception {
+        byte[] data = "x  17 \0z".getBytes("US-ASCII");
+        assertEquals(15L, TarUtils.parseOctal(data, 1, 6));
+    }
+
+    @Test
+    public void testParseOctalAllNulsAndLeadingNul() throws Exception {
+        assertEquals(0L, TarUtils.parseOctal(new byte[] {0, 0}, 0, 2));
+        assertEquals(0L, TarUtils.parseOctal(new byte[] {0, '7'}, 0, 2));
+    }
+
+    @Test
+    public void testParseOctalRejectsLengthBelowTwo() throws Exception {
+        try {
+            TarUtils.parseOctal(new byte[] {'0'}, 0, 1);
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) { }
+    }
+
+    @Test
+    public void testParseOctalRejectsInvalidDigit() throws Exception {
+        try {
+            TarUtils.parseOctal(new byte[] {'8', ' '}, 0, 2);
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) { }
+    }
+
+    @Test
+    public void testParseOctalOrBinaryOctalPath() throws Exception {
+        assertEquals(63L, TarUtils.parseOctalOrBinary(new byte[] {'7', '7', ' '}, 0, 3));
+    }
+
+    @Test
+    public void testParseOctalOrBinaryPositiveBinaryPath() throws Exception {
+        assertEquals(258L, TarUtils.parseOctalOrBinary(new byte[] {(byte) 0x80, 1, 2}, 0, 3));
+    }
+
+    @Test
+    public void testParseOctalOrBinaryNegativeBinaryPath() throws Exception {
+        assertEquals(-1L, TarUtils.parseOctalOrBinary(new byte[] {(byte) 0xff, (byte) 0xff}, 0, 2));
+    }
+
+    @Test
+    public void testParseOctalOrBinaryEightBytePositiveBoundary() throws Exception {
+        byte[] data = new byte[8];
+        data[0] = (byte) 0x80;
+        for (int i = 1; i < data.length; i++) {
+            data[i] = (byte) 0xff;
+        }
+        assertEquals(Long.MAX_VALUE, TarUtils.parseOctalOrBinary(data, 0, 8));
+    }
+
+    @Test
+    public void testParseBooleanUsesFirstByte() throws Exception {
+        assertTrue(TarUtils.parseBoolean(new byte[] {1, 0}, 0));
+        assertFalse(TarUtils.parseBoolean(new byte[] {0, 1}, 0));
+    }
+
+    @Test
+    public void testParseNameStopsAtNullAndHonorsSlice() throws Exception {
+        assertEquals("ab", TarUtils.parseName(new byte[] {'x', 'a', 'b', 0, 'z'}, 1, 4));
+    }
+
+    @Test
+    public void testParseNameAllNullsIsEmpty() throws Exception {
+        assertEquals("", TarUtils.parseName(new byte[] {0, 0}, 0, 2));
+    }
+
+    @Test
+    public void testFormatNameBytesTruncatesAndPads() throws Exception {
+        byte[] out = new byte[6];
+        assertEquals(5, TarUtils.formatNameBytes("hello", out, 1, 4));
+        assertArrayEquals(new byte[] {0, 'h', 'e', 'l', 'l', 0}, out);
+    }
+
+    @Test
+    public void testFormatUnsignedOctalStringZeroAndPadding() throws Exception {
+        byte[] out = new byte[5];
+        TarUtils.formatUnsignedOctalString(0, out, 1, 3);
+        assertArrayEquals(new byte[] {0, '0', '0', '0', 0}, out);
+    }
+
+    @Test
+    public void testFormatUnsignedOctalStringFitsExactCapacity() throws Exception {
+        byte[] out = new byte[3];
+        TarUtils.formatUnsignedOctalString(63, out, 0, 3);
+        assertArrayEquals(new byte[] {'0', '7', '7'}, out);
+    }
+
+    @Test
+    public void testFormatUnsignedOctalStringRejectsOneDigitTooLarge() throws Exception {
+        byte[] out = new byte[2];
+        try {
+            TarUtils.formatUnsignedOctalString(64, out, 0, 2);
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) { }
+    }
+
+    @Test
+    public void testFormatOctalBytesWritesSpaceAndNul() throws Exception {
+        byte[] out = new byte[6];
+        assertEquals(5, TarUtils.formatOctalBytes(8, out, 1, 4));
+        assertArrayEquals(new byte[] {0, '1', '0', ' ', 0, 0}, out);
+    }
+
+    @Test
+    public void testFormatLongOctalBytesWritesTrailingSpace() throws Exception {
+        byte[] out = new byte[5];
+        assertEquals(4, TarUtils.formatLongOctalBytes(7, out, 1, 3));
+        assertArrayEquals(new byte[] {0, '0', '7', ' ', 0}, out);
+    }
+
+    @Test
+    public void testFormatLongOctalOrBinaryUsesOctalAtMaximumSize() throws Exception {
+        byte[] out = new byte[12];
+        assertEquals(12, TarUtils.formatLongOctalOrBinaryBytes(TarConstants.MAXSIZE, out, 0, 12));
+        assertEquals(' ', out[11]);
+        assertEquals((byte) '0', out[0]);
+    }
+
+    @Test
+    public void testFormatLongOctalOrBinaryUsesBinaryAboveOctalMaximum() throws Exception {
+        byte[] out = new byte[12];
+        assertEquals(12, TarUtils.formatLongOctalOrBinaryBytes(TarConstants.MAXSIZE + 1, out, 0, 12));
+        assertEquals((byte) 0x80, out[0]);
+        assertEquals(1, out[11]);
+    }
+
+    @Test
+    public void testFormatLongOctalOrBinaryNegativeValue() throws Exception {
+        byte[] out = new byte[12];
+        assertEquals(12, TarUtils.formatLongOctalOrBinaryBytes(-1, out, 0, 12));
+        assertEquals((byte) 0xff, out[0]);
+        assertEquals((byte) 0xff, out[11]);
+    }
+
+    @Test
+    public void testFormatCheckSumOctalBytesWritesNulThenSpace() throws Exception {
+        byte[] out = new byte[6];
+        assertEquals(5, TarUtils.formatCheckSumOctalBytes(9, out, 1, 4));
+        assertArrayEquals(new byte[] {0, '0', '1', 0, ' ', 0}, out);
+    }
+
+    @Test
+    public void testComputeCheckSumTreatsBytesAsUnsigned() throws Exception {
+        assertEquals(255L, TarUtils.computeCheckSum(new byte[] {(byte) 0xff}));
+    }
+
+    @Test
+    public void testVerifyCheckSumAcceptsUnsignedSum() throws Exception {
+        byte[] header = new byte[512];
+        header[0] = 1;
+        TarUtils.formatCheckSumOctalBytes(1 + 32L * 8, header, TarConstants.CHKSUM_OFFSET, TarConstants.CHKSUMLEN);
+        assertTrue(TarUtils.verifyCheckSum(header));
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+Method selection is exploratory because no target method was specified. Tests cover parsing, name and octal formatting, binary encoding, checksums, and the key format boundaries visible in the source.
+
+### 2. TEST CASE DESIGN
+- `testParseOctalWithPaddingAndOffset`: slice containing spaces, octal digits and NUL; expected 15 from octal `17`.
+- `testParseOctalAllNulsAndLeadingNul`: all-NUL and leading-NUL fields; expected 0 from the explicit early return.
+- `testParseOctalRejectsLengthBelowTwo`: length 1; expected `IllegalArgumentException` from the minimum-length guard.
+- `testParseOctalRejectsInvalidDigit`: digit `8`; expected `IllegalArgumentException` from the octal digit check.
+- `testParseOctalOrBinaryOctalPath`: octal `77`; expected 63 from the octal parser.
+- `testParseOctalOrBinaryPositiveBinaryPath`: high-bit marker followed by bytes 1 and 2; expected 258 from unsigned accumulation.
+- `testParseOctalOrBinaryNegativeBinaryPath`: negative marker and `0xff`; expected -1 from the negative two’s-complement conversion.
+- `testParseOctalOrBinaryEightBytePositiveBoundary`: seven payload bytes of `0xff`; expected `Long.MAX_VALUE` from positive binary accumulation.
+- `testParseBooleanUsesFirstByte`: first byte 1 is true, while first byte 0 is false regardless of the second byte.
+- `testParseNameStopsAtNullAndHonorsSlice`: slice `ab\0z`; expected `ab` after trailing NUL removal.
+- `testParseNameAllNullsIsEmpty`: two NUL bytes; expected empty string after trimming the full slice.
+- `testFormatNameBytesTruncatesAndPads`: four-byte output for `hello`; expected `hell`, with return offset 5 and untouched surrounding bytes.
+- `testFormatUnsignedOctalStringZeroAndPadding`: value zero in a three-byte field; expected three ASCII zeroes.
+- `testFormatUnsignedOctalStringFitsExactCapacity`: 63 fits three octal digits; expected `077`.
+- `testFormatUnsignedOctalStringRejectsOneDigitTooLarge`: 64 exceeds two octal digits; expected `IllegalArgumentException`.
+- `testFormatOctalBytesWritesSpaceAndNul`: value 8 in a four-byte field; expected `010`, space, then NUL.
+- `testFormatLongOctalBytesWritesTrailingSpace`: value 7 in a three-byte field; expected `07` and a trailing space.
+- `testFormatLongOctalOrBinaryUsesOctalAtMaximumSize`: `MAXSIZE`; expected return 12 and octal-form field with a trailing space.
+- `testFormatLongOctalOrBinaryUsesBinaryAboveOctalMaximum`: `MAXSIZE + 1`; expected binary marker `0x80` and least-significant byte 1.
+- `testFormatLongOctalOrBinaryNegativeValue`: -1; expected negative marker and low byte `0xff`.
+- `testFormatCheckSumOctalBytesWritesNulThenSpace`: value 9; expected `001`, NUL, and space.
+- `testComputeCheckSumTreatsBytesAsUnsigned`: byte `0xff`; expected unsigned sum 255.
+- `testVerifyCheckSumAcceptsUnsignedSum`: header byte 1 and checksum-space contribution; expected true when stored checksum equals the unsigned sum.
+
+### 4. DEFECT DETECTION STRATEGY
+The tests pin exact parsing, encoded bytes, padding and trailer order, binary marker behavior, checksum arithmetic, and representative range boundaries. No detection outcome is claimed.
+
+### 5. SUMMARY
+23 independent tests.
+
+### 6. LIMITATIONS
+No target method was specified, so coverage is exploratory; `MAXSIZE` boundary assumptions follow the constant used by the implementation. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

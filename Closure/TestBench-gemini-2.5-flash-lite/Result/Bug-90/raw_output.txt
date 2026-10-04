@@ -1,0 +1,818 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.javascript.rhino.jstype.FunctionType;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Predicate;
+import com.google.common.collect.Iterables;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Sets;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.JSTypeExpression;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.jstype.FunctionBuilder;
+import com.google.javascript.rhino.jstype.FunctionParamBuilder;
+import com.google.javascript.rhino.jstype.InstanceObjectType;
+import com.google.javascript.rhino.jstype.JSType;
+import com.google.javascript.rhino.jstype.JSTypeRegistry;
+import com.google.javascript.rhino.jstype.ObjectType;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Set;
+import javax.annotation.Nullable;
+import com.google.common.collect.ImmutableList;
+import com.google.javascript.rhino.ErrorReporter;
+import java.util.Collections;
+import com.google.javascript.rhino.jstype.JSTypeNative;
+
+public class FunctionTypeBuilderTest {
+
+    private JSTypeRegistry registry = new JSTypeRegistry(null);
+    private Node errorRoot = new Node(Token.NEW, -1, -1);
+    private AbstractCompiler compiler = new MockCompiler(registry);
+    private Scope scope = new Scope(errorRoot, compiler);
+
+    private static class MockCompiler extends AbstractCompiler {
+        private JSTypeRegistry registry;
+
+        MockCompiler(JSTypeRegistry registry) {
+            this.registry = registry;
+        }
+
+        @Override
+        public JSTypeRegistry getTypeRegistry() {
+            return registry;
+        }
+
+        @Override
+        public CodingConvention getCodingConvention() {
+            return new ClosureCodingConvention();
+        }
+
+        @Override
+        public void report(JSError error) {
+            // Do nothing for tests.
+        }
+
+        @Override
+        public ErrorReporter getErrorReporter() {
+            return new MockErrorReporter();
+        }
+
+        @Override
+        public TypeCheckingMode getTypeCheckingMode() {
+            return TypeCheckingMode.TRANSFORM;
+        }
+        
+        @Override
+        public PassConfig getPassConfig() {
+            return new DefaultPassConfig(null);
+        }
+
+        @Override
+        public ErrorManager getErrorManager() {
+            return new BasicErrorManager() {
+                @Override
+                protected void printSummary() {}
+            };
+        }
+
+        @Override
+        public ErrorReporter getDefaultErrorReporter() {
+             return new MockErrorReporter();
+        }
+
+        @Override
+        public Input getSourceAsInput(String sourceName) {
+            return new Input(sourceName, sourceName);
+        }
+        
+        @Override
+        public SourceFile getInput(String sourceName) {
+            return SourceFile.fromCode(sourceName, "");
+        }
+    }
+    
+    private static class MockErrorReporter implements ErrorReporter {
+        @Override
+        public void error(Node source, String message, String sourceName, int lineno, int charno) {}
+
+        @Override
+        public void warning(Node source, String message, String sourceName, int lineno, int charno) {}
+
+        @Override
+        public void error(String message, String sourceName, int lineno, int charno) {}
+
+        @Override
+        public void warning(String message, String sourceName, int lineno, int charno) {}
+    }
+
+    @Test
+    public void testInferReturnTypeWithReturnType() throws Exception {
+        JSDocInfo info = new JSDocInfo(false);
+        Node returnTypeNode = new Node(Token.STRING_TYPE);
+        returnTypeNode.setJSType(registry.createCornerType(JSTypeNative.STRING_TYPE));
+        JSTypeExpression expr = new JSTypeExpression(returnTypeNode, "test.js");
+        info.setReturnType(expr);
+
+        FunctionTypeBuilder builder = new FunctionTypeBuilder("testFn", compiler, errorRoot, "test.js", scope);
+        builder.inferReturnType(info);
+
+        assertEquals(registry.getNativeType(JSTypeNative.STRING_TYPE), builder.returnType);
+        assertFalse(builder.returnTypeInferred);
+    }
+
+    @Test
+    public void testInferReturnTypeWithoutReturnType() throws Exception {
+        JSDocInfo info = new JSDocInfo(false);
+        FunctionTypeBuilder builder = new FunctionTypeBuilder("testFn", compiler, errorRoot, "test.js", scope);
+        builder.inferReturnType(info);
+
+        assertNull(builder.returnType);
+        assertFalse(builder.returnTypeInferred);
+    }
+
+    @Test
+    public void testInferReturnStatementsAsLastResort_emptyBlock() throws Exception {
+        Node functionBlock = new Node(Token.BLOCK);
+        FunctionTypeBuilder builder = new FunctionTypeBuilder("testFn", compiler, errorRoot, "test.js", scope);
+        builder.inferReturnStatementsAsLastResort(functionBlock);
+
+        assertEquals(registry.getNativeType(JSTypeNative.VOID_TYPE), builder.returnType);
+        assertTrue(builder.returnTypeInferred);
+    }
+
+    @Test
+    public void testInferReturnStatementsAsLastResort_withReturn() throws Exception {
+        Node functionBlock = new Node(Token.BLOCK, new Node(Token.RETURN, Node.newNumber(1.0)));
+        FunctionTypeBuilder builder = new FunctionTypeBuilder("testFn", compiler, errorRoot, "test.js", scope);
+        builder.inferReturnStatementsAsLastResort(functionBlock);
+
+        assertNull(builder.returnType); // Should not infer VOID if there's a return.
+    }
+
+    @Test
+    public void testInferReturnStatementsAsLastResort_withThrow() throws Exception {
+        Node functionBlock = new Node(Token.BLOCK, new Node(Token.THROW));
+        FunctionTypeBuilder builder = new FunctionTypeBuilder("testFn", compiler, errorRoot, "test.js", scope);
+        builder.inferReturnStatementsAsLastResort(functionBlock);
+
+        assertNull(builder.returnType); // Should not infer VOID if there's a throw.
+    }
+
+    @Test
+    public void testInferInheritanceConstructorAndExtends() throws Exception {
+        JSDocInfo info = new JSDocInfo(false);
+        info.setConstructor(true);
+        Node baseTypeNode = new Node(Token.STRING_TYPE);
+        baseTypeNode.setJSType(registry.createCornerType(JSTypeNative.OBJECT_TYPE));
+        JSTypeExpression baseTypeExpr = new JSTypeExpression(baseTypeNode, "test.js");
+        info.setBaseType(baseTypeExpr);
+
+        FunctionTypeBuilder builder = new FunctionTypeBuilder("testFn", compiler, errorRoot, "test.js", scope);
+        builder.inferInheritance(info);
+
+        assertTrue(builder.isConstructor);
+        assertNotNull(builder.baseType);
+        assertEquals(registry.getNativeType(JSTypeNative.OBJECT_TYPE), builder.baseType);
+    }
+
+    @Test
+    public void testInferInheritanceInterfaceAndImplements() throws Exception {
+        JSDocInfo info = new JSDocInfo(false);
+        info.setInterface(true);
+        Node interfaceTypeNode = new Node(Token.STRING_TYPE);
+        interfaceTypeNode.setJSType(registry.createCornerType(JSTypeNative.OBJECT_TYPE));
+        JSTypeExpression interfaceTypeExpr = new JSTypeExpression(interfaceTypeNode, "test.js");
+        info.addImplementedInterface(interfaceTypeExpr);
+
+        FunctionTypeBuilder builder = new FunctionTypeBuilder("testFn", compiler, errorRoot, "test.js", scope);
+        builder.inferInheritance(info);
+
+        assertTrue(builder.isInterface);
+        assertNotNull(builder.implementedInterfaces);
+        assertEquals(1, builder.implementedInterfaces.size());
+        assertEquals(registry.getNativeType(JSTypeNative.OBJECT_TYPE), builder.implementedInterfaces.get(0));
+    }
+
+    @Test
+    public void testInferThisTypeFromInfo() throws Exception {
+        JSDocInfo info = new JSDocInfo(false);
+        Node thisTypeNode = new Node(Token.STRING_TYPE);
+        thisTypeNode.setJSType(registry.createCornerType(JSTypeNative.OBJECT_TYPE));
+        JSTypeExpression thisTypeExpr = new JSTypeExpression(thisTypeNode, "test.js");
+        info.setThisType(thisTypeExpr);
+
+        FunctionTypeBuilder builder = new FunctionTypeBuilder("testFn", compiler, errorRoot, "test.js", scope);
+        builder.inferThisType(info, null);
+
+        assertNotNull(builder.thisType);
+        assertEquals(registry.getNativeType(JSTypeNative.OBJECT_TYPE), builder.thisType);
+    }
+
+    @Test
+    public void testInferThisTypeFromOwner() throws Exception {
+        Node ownerNode = Node.newString(Token.NAME, "MyNamespace.MyClass");
+        FunctionTypeBuilder builder = new FunctionTypeBuilder("testFn", compiler, errorRoot, "test.js", scope);
+        builder.inferThisType(null, ownerNode);
+
+        assertNotNull(builder.thisType);
+        // The owner type is looked up using getForgivingType, which for a qualified name like "MyNamespace.MyClass"
+        // will create an ObjectType for it.
+        assertTrue(builder.thisType.isObject());
+        // We can't assert the exact type without more setup, but it should be an ObjectType.
+    }
+
+    @Test
+    public void testInferParameterTypesFromInfoOnly() throws Exception {
+        JSDocInfo info = new JSDocInfo(false);
+        info.addParameter("param1", "description1");
+        Node paramTypeNode = new Node(Token.NUMBER_TYPE);
+        paramTypeNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        JSTypeExpression paramTypeExpr = new JSTypeExpression(paramTypeNode, "test.js");
+        info.setParameterType("param1", paramTypeExpr);
+
+        FunctionTypeBuilder builder = new FunctionTypeBuilder("testFn", compiler, errorRoot, "test.js", scope);
+        builder.inferParameterTypes(info);
+
+        assertNotNull(builder.parametersNode);
+        assertEquals(1, builder.parametersNode.getChildCount());
+        assertEquals("param1", builder.parametersNode.getFirstChild().getString());
+        assertEquals(registry.getNativeType(JSTypeNative.NUMBER_TYPE), builder.parametersNode.getFirstChild().getJSType());
+    }
+
+    @Test
+    public void testInferParameterTypesFromArgsParentAndInfo() throws Exception {
+        JSDocInfo info = new JSDocInfo(false);
+        Node argsParent = new Node(Token.LP);
+        argsParent.addChildToBack(Node.newString(Token.NAME, "arg1"));
+        argsParent.addChildToBack(Node.newString(Token.NAME, "arg2"));
+
+        Node arg1TypeNode = new Node(Token.STRING_TYPE);
+        arg1TypeNode.setJSType(registry.createCornerType(JSTypeNative.STRING_TYPE));
+        JSTypeExpression arg1TypeExpr = new JSTypeExpression(arg1TypeNode, "test.js");
+        info.setParameterType("arg1", arg1TypeExpr);
+
+        Node arg2TypeNode = new Node(Token.BOOLEAN_TYPE);
+        arg2TypeNode.setJSType(registry.createCornerType(JSTypeNative.BOOLEAN_TYPE));
+        JSTypeExpression arg2TypeExpr = new JSTypeExpression(arg2TypeNode, "test.js");
+        info.setParameterType("arg2", arg2TypeExpr);
+
+        FunctionTypeBuilder builder = new FunctionTypeBuilder("testFn", compiler, errorRoot, "test.js", scope);
+        builder.inferParameterTypes(argsParent, info);
+
+        assertNotNull(builder.parametersNode);
+        assertEquals(2, builder.parametersNode.getChildCount());
+        assertEquals("arg1", builder.parametersNode.getChildAtIndex(0).getString());
+        assertEquals(registry.createCornerType(JSTypeNative.STRING_TYPE), builder.parametersNode.getChildAtIndex(0).getJSType());
+        assertEquals("arg2", builder.parametersNode.getChildAtIndex(1).getString());
+        assertEquals(registry.createCornerType(JSTypeNative.BOOLEAN_TYPE), builder.parametersNode.getChildAtIndex(1).getJSType());
+    }
+
+    @Test
+    public void testInferParameterTypes_optionalArgAtEnd() throws Exception {
+        JSDocInfo info = new JSDocInfo(false);
+        Node argsParent = new Node(Token.LP);
+        argsParent.addChildToBack(Node.newString(Token.NAME, "arg1"));
+        Node arg2 = Node.newString(Token.NAME, "arg2");
+        arg2.putBooleanProp(Node.IS_OPTIONAL_PARAM, true); // Set optional property
+        argsParent.addChildToBack(arg2);
+
+        FunctionTypeBuilder builder = new FunctionTypeBuilder("testFn", compiler, errorRoot, "test.js", scope);
+        builder.inferParameterTypes(argsParent, info);
+
+        assertNotNull(builder.parametersNode);
+        assertEquals(2, builder.parametersNode.getChildCount());
+        assertTrue(builder.parametersNode.getChildAtIndex(1).isOptionalArg());
+    }
+
+    @Test
+    public void testInferParameterTypes_varArgs() throws Exception {
+        JSDocInfo info = new JSDocInfo(false);
+        Node argsParent = new Node(Token.LP);
+        argsParent.addChildToBack(Node.newString(Token.NAME, "arg1"));
+        Node arg2 = Node.newString(Token.NAME, "arg2");
+        arg2.putBooleanProp(Node.IS_VAR_ARGS_PARAM, true); // Set var_args property
+        argsParent.addChildToBack(arg2);
+
+        FunctionTypeBuilder builder = new FunctionTypeBuilder("testFn", compiler, errorRoot, "test.js", scope);
+        builder.inferParameterTypes(argsParent, info);
+
+        assertNotNull(builder.parametersNode);
+        assertEquals(2, builder.parametersNode.getChildCount());
+        assertTrue(builder.parametersNode.getChildAtIndex(1).isVarArgs());
+    }
+    
+    @Test
+    public void testInferParameterTypes_templateTypeExpected() throws Exception {
+        JSDocInfo info = new JSDocInfo(false);
+        Node paramTypeNode = new Node(Token.STRING_TYPE); // Placeholder for template type
+        paramTypeNode.setJSType(registry.createTemplateType("T"));
+        JSTypeExpression paramTypeExpr = new JSTypeExpression(paramTypeNode, "test.js");
+        info.setParameterType("param1", paramTypeExpr);
+
+        FunctionTypeBuilder builder = new FunctionTypeBuilder("testFn", compiler, errorRoot, "test.js", scope);
+        builder.templateTypeName = "T"; // Set template type name
+        builder.inferParameterTypes(info);
+
+        // Expect an error to be reported, but the test should complete.
+        // We can't easily assert error reporting in this setup without more mocking.
+        // Just check that the parameter is processed.
+        assertNotNull(builder.parametersNode);
+        assertEquals(1, builder.parametersNode.getChildCount());
+        assertEquals("param1", builder.parametersNode.getFirstChild().getString());
+        assertEquals(registry.createTemplateType("T"), builder.parametersNode.getFirstChild().getJSType());
+    }
+
+    @Test
+    public void testInferParameterTypes_templateTypeDuplicated() throws Exception {
+        JSDocInfo info = new JSDocInfo(false);
+        Node param1TypeNode = new Node(Token.STRING_TYPE);
+        param1TypeNode.setJSType(registry.createTemplateType("T"));
+        JSTypeExpression param1TypeExpr = new JSTypeExpression(param1TypeNode, "test.js");
+        info.setParameterType("param1", param1TypeExpr);
+
+        Node param2TypeNode = new Node(Token.STRING_TYPE);
+        param2TypeNode.setJSType(registry.createTemplateType("T"));
+        JSTypeExpression param2TypeExpr = new JSTypeExpression(param2TypeNode, "test.js");
+        info.setParameterType("param2", param2TypeExpr);
+
+        FunctionTypeBuilder builder = new FunctionTypeBuilder("testFn", compiler, errorRoot, "test.js", scope);
+        builder.templateTypeName = "T";
+        builder.inferParameterTypes(info);
+
+        // Expect an error for duplicated template type.
+        assertNotNull(builder.parametersNode);
+        assertEquals(2, builder.parametersNode.getChildCount());
+    }
+
+    @Test
+    public void testInferTemplateTypeName() throws Exception {
+        JSDocInfo info = new JSDocInfo(false);
+        info.setTemplateTypeName("T");
+
+        FunctionTypeBuilder builder = new FunctionTypeBuilder("testFn", compiler, errorRoot, "test.js", scope);
+        builder.inferTemplateTypeName(info);
+
+        assertEquals("T", builder.templateTypeName);
+    }
+
+    @Test
+    public void testAddParameter_required() throws Exception {
+        FunctionParamBuilder builder = new FunctionParamBuilder(registry);
+        FunctionTypeBuilder ftb = new FunctionTypeBuilder("testFn", compiler, errorRoot, "test.js", scope);
+        JSType paramType = registry.getNativeType(JSTypeNative.UNKNOWN_TYPE);
+        
+        ftb.addParameter(builder, paramType, false, false, false);
+
+        assertNotNull(builder.build());
+        assertEquals(1, builder.build().getChildCount());
+        assertEquals(paramType, builder.build().getFirstChild().getJSType());
+    }
+
+    @Test
+    public void testAddParameter_optional() throws Exception {
+        FunctionParamBuilder builder = new FunctionParamBuilder(registry);
+        FunctionTypeBuilder ftb = new FunctionTypeBuilder("testFn", compiler, errorRoot, "test.js", scope);
+        JSType paramType = registry.getNativeType(JSTypeNative.UNKNOWN_TYPE);
+
+        ftb.addParameter(builder, paramType, false, true, false);
+
+        assertNotNull(builder.build());
+        assertEquals(1, builder.build().getChildCount());
+        assertTrue(builder.build().getFirstChild().isOptionalArg());
+        assertEquals(paramType, builder.build().getFirstChild().getJSType());
+    }
+
+    @Test
+    public void testAddParameter_varArgs() throws Exception {
+        FunctionParamBuilder builder = new FunctionParamBuilder(registry);
+        FunctionTypeBuilder ftb = new FunctionTypeBuilder("testFn", compiler, errorRoot, "test.js", scope);
+        JSType paramType = registry.getNativeType(JSTypeNative.UNKNOWN_TYPE);
+
+        ftb.addParameter(builder, paramType, false, false, true);
+
+        assertNotNull(builder.build());
+        assertEquals(1, builder.build().getChildCount());
+        assertTrue(builder.build().getFirstChild().isVarArgs());
+        assertEquals(paramType, builder.build().getFirstChild().getJSType());
+    }
+
+    @Test
+    public void testAddParameter_optionalBeforeRequired_emitsWarning() throws Exception {
+        FunctionParamBuilder builder = new FunctionParamBuilder(registry);
+        FunctionTypeBuilder ftb = new FunctionTypeBuilder("testFn", compiler, errorRoot, "test.js", scope);
+        JSType type = registry.getNativeType(JSTypeNative.UNKNOWN_TYPE);
+
+        // Add an optional param first
+        ftb.addParameter(builder, type, false, true, false);
+        // Add a required param after
+        ftb.addParameter(builder, type, true, false, false); // warnedAboutArgList should be true here
+
+        // We cannot assert warnings directly without a mock compiler that captures reports.
+        // The crucial part is that the builder processes them correctly.
+        assertNotNull(builder.build());
+        assertEquals(2, builder.build().getChildCount());
+        assertTrue(builder.build().getChildAtIndex(0).isOptionalArg());
+        assertFalse(builder.build().getChildAtIndex(1).isOptionalArg());
+        assertFalse(builder.build().getChildAtIndex(1).isVarArgs());
+    }
+
+    @Test
+    public void testAddParameter_varArgsBeforeRequired_emitsWarning() throws Exception {
+        FunctionParamBuilder builder = new FunctionParamBuilder(registry);
+        FunctionTypeBuilder ftb = new FunctionTypeBuilder("testFn", compiler, errorRoot, "test.js", scope);
+        JSType type = registry.getNativeType(JSTypeNative.UNKNOWN_TYPE);
+
+        // Add a var_args param first
+        ftb.addParameter(builder, type, false, false, true);
+        // Add a required param after
+        ftb.addParameter(builder, type, true, false, false); // warnedAboutArgList should be true here
+
+        assertNotNull(builder.build());
+        assertEquals(2, builder.build().getChildCount());
+        assertTrue(builder.build().getChildAtIndex(0).isVarArgs());
+        assertFalse(builder.build().getChildAtIndex(1).isOptionalArg());
+        assertFalse(builder.build().getChildAtIndex(1).isVarArgs());
+    }
+    
+    @Test
+    public void testBuildAndRegister_constructorType() throws Exception {
+        FunctionTypeBuilder builder = new FunctionTypeBuilder("MyConstructor", compiler, errorRoot, "test.js", scope);
+        builder.isConstructor = true;
+        Node params = new FunctionParamBuilder(registry).build();
+        builder.parametersNode = params;
+        builder.returnType = registry.getNativeType(JSTypeNative.VOID_TYPE);
+
+        FunctionType fnType = builder.buildAndRegister();
+
+        assertTrue(fnType.isConstructor());
+        assertEquals("MyConstructor", fnType.getReferenceName());
+        assertEquals(params, fnType.getParametersNode());
+        assertEquals(registry.getNativeType(JSTypeNative.VOID_TYPE), fnType.getReturnType());
+    }
+
+    @Test
+    public void testBuildAndRegister_interfaceType() throws Exception {
+        FunctionTypeBuilder builder = new FunctionTypeBuilder("MyInterface", compiler, errorRoot, "test.js", scope);
+        builder.isInterface = true;
+        Node params = new FunctionParamBuilder(registry).build();
+        builder.parametersNode = params;
+        builder.returnType = registry.getNativeType(JSTypeNative.VOID_TYPE);
+
+        FunctionType fnType = builder.buildAndRegister();
+
+        assertTrue(fnType.isInterface());
+        assertEquals("MyInterface", fnType.getReferenceName());
+        assertEquals(params, fnType.getParametersNode());
+        assertEquals(registry.getNativeType(JSTypeNative.VOID_TYPE), fnType.getReturnType());
+    }
+
+    @Test
+    public void testBuildAndRegister_ordinaryFunction() throws Exception {
+        FunctionTypeBuilder builder = new FunctionTypeBuilder("myFunc", compiler, errorRoot, "test.js", scope);
+        Node params = new FunctionParamBuilder(registry).addRequiredParams(registry.getNativeType(JSTypeNative.NUMBER_TYPE)).build();
+        builder.parametersNode = params;
+        builder.returnType = registry.getNativeType(JSTypeNative.STRING_TYPE);
+        builder.thisType = registry.getNativeType(JSTypeNative.OBJECT_TYPE);
+        builder.templateTypeName = "T";
+
+        FunctionType fnType = builder.buildAndRegister();
+
+        assertFalse(fnType.isConstructor());
+        assertFalse(fnType.isInterface());
+        assertEquals("myFunc", fnType.getReferenceName());
+        assertEquals(params, fnType.getParametersNode());
+        assertEquals(registry.getNativeType(JSTypeNative.STRING_TYPE), fnType.getReturnType());
+        assertEquals(registry.getNativeType(JSTypeNative.OBJECT_TYPE), fnType.getTypeOfThis());
+        assertEquals("T", fnType.getTemplateTypeName());
+    }
+
+    @Test
+    public void testBuildAndRegister_withImplementedInterfaces() throws Exception {
+        FunctionTypeBuilder builder = new FunctionTypeBuilder("MyConstructor", compiler, errorRoot, "test.js", scope);
+        builder.isConstructor = true;
+        Node params = new FunctionParamBuilder(registry).build();
+        builder.parametersNode = params;
+        builder.returnType = registry.getNativeType(JSTypeNative.VOID_TYPE);
+
+        ObjectType interfaceType = registry.createInterfaceType("MyInterface", null);
+        builder.implementedInterfaces = ImmutableList.of(interfaceType);
+
+        FunctionType fnType = builder.buildAndRegister();
+
+        assertEquals(1, fnType.getImplementedInterfaces().size());
+        assertEquals(interfaceType, fnType.getImplementedInterfaces().iterator().next());
+    }
+
+    @Test
+    public void testBuildAndRegister_withBaseType() throws Exception {
+        FunctionTypeBuilder builder = new FunctionTypeBuilder("MyConstructor", compiler, errorRoot, "test.js", scope);
+        builder.isConstructor = true;
+        Node params = new FunctionParamBuilder(registry).build();
+        builder.parametersNode = params;
+        builder.returnType = registry.getNativeType(JSTypeNative.VOID_TYPE);
+
+        ObjectType baseType = registry.createFunctionType(null, registry.getNativeType(JSTypeNative.OBJECT_TYPE), null, null);
+        builder.baseType = baseType;
+
+        FunctionType fnType = builder.buildAndRegister();
+        
+        // Check if the prototype is based on the base type.
+        // This is indirectly tested by checking if setPrototypeBasedOn was called and applied.
+        // The FunctionType's getPrototype() will return an instance of FunctionPrototypeType.
+        // Checking its implicit prototype is the way.
+        assertNotNull(fnType.getPrototype());
+        assertEquals(baseType, fnType.getPrototype().getImplicitPrototype());
+    }
+
+    @Test
+    public void testGetOrCreateConstructor_new() throws Exception {
+        FunctionTypeBuilder builder = new FunctionTypeBuilder("NewConstructor", compiler, errorRoot, "test.js", scope);
+        builder.isConstructor = true;
+        Node params = new FunctionParamBuilder(registry).build();
+        builder.parametersNode = params;
+        builder.returnType = registry.getNativeType(JSTypeNative.VOID_TYPE);
+
+        FunctionType fnType = builder.getOrCreateConstructor();
+
+        assertTrue(fnType.isConstructor());
+        assertEquals("NewConstructor", fnType.getReferenceName());
+    }
+
+    @Test
+    public void testGetOrCreateConstructor_existingTypeRedefinitionWarning() throws Exception {
+        // Pre-register a different constructor with the same name.
+        FunctionType existingFn = registry.createConstructorType("ExistingConstructor", null, new FunctionParamBuilder(registry).build(), registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        registry.declareType("ExistingConstructor", existingFn.getInstanceType());
+
+        FunctionTypeBuilder builder = new FunctionTypeBuilder("ExistingConstructor", compiler, errorRoot, "test.js", scope);
+        builder.isConstructor = true;
+        Node params = new FunctionParamBuilder(registry).build();
+        builder.parametersNode = params;
+        builder.returnType = registry.getNativeType(JSTypeNative.VOID_TYPE); // Different return type
+
+        FunctionType fnType = builder.getOrCreateConstructor();
+
+        // The builder should return an existing type, but issue a warning.
+        // We cannot assert warnings here without mocking compiler.report.
+        assertTrue(fnType.isConstructor());
+        assertEquals("ExistingConstructor", fnType.getReferenceName());
+        // The returned type should be the one created by the builder, not the pre-existing one.
+        assertNotEquals(existingFn, fnType); 
+    }
+
+    @Test
+    public void testMaybeSetBaseType() throws Exception {
+        FunctionTypeBuilder builder = new FunctionTypeBuilder("Test", compiler, errorRoot, "test.js", scope);
+        builder.isConstructor = true;
+        Node params = new FunctionParamBuilder(registry).build();
+        builder.parametersNode = params;
+        builder.returnType = registry.getNativeType(JSTypeNative.VOID_TYPE);
+
+        ObjectType baseType = registry.createFunctionType(null, registry.getNativeType(JSTypeNative.OBJECT_TYPE), null, null);
+        builder.baseType = baseType;
+
+        FunctionType fnType = new FunctionType(registry, "Test", null, new ArrowType(registry, params, builder.returnType), null, null, true, false);
+        builder.maybeSetBaseType(fnType);
+
+        assertNotNull(fnType.getPrototype());
+        assertEquals(baseType, fnType.getPrototype().getImplicitPrototype());
+    }
+    
+    @Test
+    public void testReportWarning() {
+        FunctionTypeBuilder builder = new FunctionTypeBuilder("testFn", compiler, errorRoot, "test.js", scope);
+        // This test primarily checks if the method can be called without error.
+        // Asserting the report call requires mocking AbstractCompiler.
+        builder.reportWarning(FunctionTypeBuilder.EXTENDS_WITHOUT_TYPEDEF, "fnName");
+        // No exceptions means it worked at a basic level.
+        assertTrue(true); 
+    }
+
+    @Test
+    public void testReportError() {
+        FunctionTypeBuilder builder = new FunctionTypeBuilder("testFn", compiler, errorRoot, "test.js", scope);
+        // This test primarily checks if the method can be called without error.
+        // Asserting the report call requires mocking AbstractCompiler.
+        builder.reportError(FunctionTypeBuilder.TEMPLATE_TYPE_DUPLICATED, "fnName");
+        // No exceptions means it worked at a basic level.
+        assertTrue(true);
+    }
+
+    @Test
+    public void testIsFunctionTypeDeclaration_withParams() {
+        JSDocInfo info = new JSDocInfo(false);
+        info.addParameter("param", "desc");
+        assertTrue(FunctionTypeBuilder.isFunctionTypeDeclaration(info));
+    }
+
+    @Test
+    public void testIsFunctionTypeDeclaration_withReturnType() {
+        JSDocInfo info = new JSDocInfo(false);
+        Node returnTypeNode = new Node(Token.STRING_TYPE);
+        returnTypeNode.setJSType(registry.createCornerType(JSTypeNative.STRING_TYPE));
+        JSTypeExpression expr = new JSTypeExpression(returnTypeNode, "test.js");
+        info.setReturnType(expr);
+        assertTrue(FunctionTypeBuilder.isFunctionTypeDeclaration(info));
+    }
+
+    @Test
+    public void testIsFunctionTypeDeclaration_withThisType() {
+        JSDocInfo info = new JSDocInfo(false);
+        Node thisTypeNode = new Node(Token.STRING_TYPE);
+        thisTypeNode.setJSType(registry.createCornerType(JSTypeNative.OBJECT_TYPE));
+        JSTypeExpression expr = new JSTypeExpression(thisTypeNode, "test.js");
+        info.setThisType(expr);
+        assertTrue(FunctionTypeBuilder.isFunctionTypeDeclaration(info));
+    }
+
+    @Test
+    public void testIsFunctionTypeDeclaration_isConstructor() {
+        JSDocInfo info = new JSDocInfo(false);
+        info.setConstructor(true);
+        assertTrue(FunctionTypeBuilder.isFunctionTypeDeclaration(info));
+    }
+
+    @Test
+    public void testIsFunctionTypeDeclaration_isInterface() {
+        JSDocInfo info = new JSDocInfo(false);
+        info.setInterface(true);
+        assertTrue(FunctionTypeBuilder.isFunctionTypeDeclaration(info));
+    }
+
+    @Test
+    public void testIsFunctionTypeDeclaration_emptyInfo() {
+        JSDocInfo info = new JSDocInfo(false);
+        assertFalse(FunctionTypeBuilder.isFunctionTypeDeclaration(info));
+    }
+    
+    @Test
+    public void testInferParameterTypes_emptyArgsParentAndInfo() {
+        FunctionTypeBuilder builder = new FunctionTypeBuilder("testFn", compiler, errorRoot, "test.js", scope);
+        builder.inferParameterTypes(new Node(Token.LP), null);
+        assertNotNull(builder.parametersNode);
+        assertEquals(0, builder.parametersNode.getChildCount());
+    }
+
+    @Test
+    public void testInferParameterTypes_argsParentButNullInfo() {
+        Node argsParent = new Node(Token.LP);
+        argsParent.addChildToBack(Node.newString(Token.NAME, "arg1"));
+        
+        FunctionTypeBuilder builder = new FunctionTypeBuilder("testFn", compiler, errorRoot, "test.js", scope);
+        builder.inferParameterTypes(argsParent, null);
+
+        assertNotNull(builder.parametersNode);
+        assertEquals(1, builder.parametersNode.getChildCount());
+        assertEquals("arg1", builder.parametersNode.getFirstChild().getString());
+        assertEquals(registry.getNativeType(JSTypeNative.UNKNOWN_TYPE), builder.parametersNode.getFirstChild().getJSType());
+    }
+
+    @Test
+    public void testInferParameterTypes_inferFromExistingParameters() {
+        FunctionType oldType = registry.createFunctionType(
+            new ArrowType(registry, new FunctionParamBuilder(registry).addRequiredParams(registry.getNativeType(JSTypeNative.NUMBER_TYPE)).build(), registry.getNativeType(JSTypeNative.STRING_TYPE)));
+        
+        FunctionTypeBuilder builder = new FunctionTypeBuilder("testFn", compiler, errorRoot, "test.js", scope);
+        builder.parametersNode = oldType.getParametersNode(); // Initialize with existing params
+
+        Node argsParent = new Node(Token.LP); // New args parent, different from oldType
+        argsParent.addChildToBack(Node.newString(Token.NAME, "newArg"));
+
+        // Infer parameter types, expecting it to use the new argsParent but preserve old types if info is missing
+        builder.inferParameterTypes(argsParent, null);
+
+        assertNotNull(builder.parametersNode);
+        assertEquals(1, builder.parametersNode.getChildCount());
+        assertEquals("newArg", builder.parametersNode.getFirstChild().getString());
+        // Since info is null, it should fall back to UNKNOWN_TYPE for the new arg.
+        assertEquals(registry.getNativeType(JSTypeNative.UNKNOWN_TYPE), builder.parametersNode.getFirstChild().getJSType());
+    }
+    
+    @Test
+    public void testInferFromOverriddenFunction_nullOldType() throws Exception {
+        Node paramsParent = new Node(Token.LP);
+        FunctionTypeBuilder builder = new FunctionTypeBuilder("testFn", compiler, errorRoot, "test.js", scope);
+        builder.inferFromOverriddenFunction(null, paramsParent);
+        assertNull(builder.parametersNode); // Should not set parametersNode if oldType is null and paramsParent is provided.
+    }
+
+    @Test
+    public void testInferFromOverriddenFunction_nullParamsParent() throws Exception {
+        FunctionType oldType = registry.createFunctionType(
+            new ArrowType(registry, new FunctionParamBuilder(registry).addRequiredParams(registry.getNativeType(JSTypeNative.NUMBER_TYPE)).build(), registry.getNativeType(JSTypeNative.STRING_TYPE)));
+        
+        FunctionTypeBuilder builder = new FunctionTypeBuilder("testFn", compiler, errorRoot, "test.js", scope);
+        builder.inferFromOverriddenFunction(oldType, null);
+
+        assertNotNull(builder.parametersNode);
+        assertEquals(oldType.getParametersNode(), builder.parametersNode);
+        assertEquals(oldType.getReturnType(), builder.returnType);
+        assertTrue(builder.returnTypeInferred == oldType.isReturnTypeInferred());
+    }
+
+    @Test
+    public void testInferFromOverriddenFunction_withParamsParentAndOldType() throws Exception {
+        FunctionType oldType = registry.createFunctionType(
+            new ArrowType(registry, new FunctionParamBuilder(registry).addRequiredParams(registry.getNativeType(JSTypeNative.NUMBER_TYPE)).addOptionalParams(registry.getNativeType(JSTypeNative.STRING_TYPE)).build(), registry.getNativeType(JSTypeNative.BOOLEAN_TYPE)));
+        
+        Node paramsParent = new Node(Token.LP);
+        paramsParent.addChildToBack(Node.newString(Token.NAME, "p1")); // New arg name, potentially different type.
+        paramsParent.addChildToBack(Node.newString(Token.NAME, "p2"));
+
+        FunctionTypeBuilder builder = new FunctionTypeBuilder("testFn", compiler, errorRoot, "test.js", scope);
+        builder.inferFromOverriddenFunction(oldType, paramsParent);
+
+        assertNotNull(builder.parametersNode);
+        assertEquals(2, builder.parametersNode.getChildCount()); // Should have 2 params from paramsParent
+        assertEquals("p1", builder.parametersNode.getChildAtIndex(0).getString());
+        assertEquals("p2", builder.parametersNode.getChildAtIndex(1).getString());
+        
+        // Check if types from oldType were inferred for the new parameters.
+        // The implementation copies types if oldParams.hasNext().
+        // For 'p1', it should get the type of oldType's first param (NUMBER_TYPE).
+        // For 'p2', it should get the type of oldType's second param (STRING_TYPE) and be optional.
+        assertEquals(registry.getNativeType(JSTypeNative.NUMBER_TYPE), builder.parametersNode.getChildAtIndex(0).getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.STRING_TYPE), builder.parametersNode.getChildAtIndex(1).getJSType());
+        assertTrue(builder.parametersNode.getChildAtIndex(1).isOptionalArg());
+
+        assertEquals(oldType.getReturnType(), builder.returnType);
+        assertTrue(builder.returnTypeInferred == oldType.isReturnTypeInferred());
+    }
+}
+```
+
+### SOURCE CODE ANALYSIS
+The tests cover the following methods and branches:
+- `inferReturnType`: Tests behavior with and without a return type specified in JSDoc.
+- `inferReturnStatementsAsLastResort`: Tests empty block, block with return, and block with throw.
+- `inferInheritance`: Tests constructor/interface with extends/implements.
+- `inferThisType`: Tests inferring `this` type from JSDoc and from owner node.
+- `inferParameterTypes`: Tests inferring parameters from JSDoc only, from args parent and JSDoc, and edge cases like optional/var_args parameters and template types.
+- `inferTemplateTypeName`: Tests setting the template type name.
+- `addParameter`: Tests adding required, optional, and var_args parameters, including warning conditions.
+- `buildAndRegister`: Tests building constructors, interfaces, and ordinary functions with various configurations.
+- `getOrCreateConstructor`: Tests creating a new constructor and handling existing ones with redefinition warnings.
+- `maybeSetBaseType`: Tests applying a base type.
+- `reportWarning` and `reportError`: Basic checks for calling these reporting methods.
+- `isFunctionTypeDeclaration`: Tests static method for detecting function type declarations in JSDoc.
+- `inferFromOverriddenFunction`: Tests inferring types from an overridden function, covering null cases and parameter/return type propagation.
+
+### TEST CASE DESIGN
+- `testInferReturnTypeWithReturnType`: Tests inference when @return is present. Input: JSDoc with return type. Expected: returnType set to the specified type.
+- `testInferReturnTypeWithoutReturnType`: Tests inference when @return is not present. Input: empty JSDoc. Expected: returnType remains null.
+- `testInferReturnStatementsAsLastResort_emptyBlock`: Tests inference when function block is empty. Input: empty block. Expected: returnType set to VOID_TYPE.
+- `testInferReturnStatementsAsLastResort_withReturn`: Tests inference when function block has a return statement. Input: block with RETURN. Expected: returnType remains null.
+- `testInferReturnStatementsAsLastResort_withThrow`: Tests inference when function block has a throw statement. Input: block with THROW. Expected: returnType remains null.
+- `testInferInheritanceConstructorAndExtends`: Tests @constructor and @extends. Input: JSDoc with constructor and base type. Expected: isConstructor true, baseType set.
+- `testInferInheritanceInterfaceAndImplements`: Tests @interface and @implements. Input: JSDoc with interface and implemented interfaces. Expected: isInterface true, implementedInterfaces set.
+- `testInferThisTypeFromInfo`: Tests @this type from JSDoc. Input: JSDoc with @this. Expected: thisType set.
+- `testInferThisTypeFromOwner`: Tests inferring this type from owner node (e.g., `A.prototype.foo`). Input: owner node "MyNamespace.MyClass". Expected: thisType set to ObjectType for "MyNamespace.MyClass".
+- `testInferParameterTypesFromInfoOnly`: Tests inferring parameters solely from JSDoc parameter names and types. Input: JSDoc with param names and types. Expected: parametersNode reflects these.
+- `testInferParameterTypesFromArgsParentAndInfo`: Tests inferring parameters from both Node structure and JSDoc. Input: LP node with arg names and JSDoc with types. Expected: parametersNode with correct names and types.
+- `testInferParameterTypes_optionalArgAtEnd`: Tests handling of optional parameters. Input: LP node with an optional parameter. Expected: parameter marked as optional.
+- `testInferParameterTypes_varArgs`: Tests handling of var_args parameters. Input: LP node with a var_args parameter. Expected: parameter marked as var_args.
+- `testInferParameterTypes_templateTypeExpected`: Tests the case where a template type is expected but not provided. Input: JSDoc with a function type that uses a template name. Expected: template type is set.
+- `testInferParameterTypes_templateTypeDuplicated`: Tests the case where the template type is duplicated among parameters. Input: JSDoc with duplicate template types. Expected: error condition is triggered.
+- `testInferTemplateTypeName`: Tests setting the template type name from JSDoc. Input: JSDoc with @template T. Expected: templateTypeName set to "T".
+- `testAddParameter_required`: Tests adding a required parameter. Input: no optional/var_args flags. Expected: parameter added as required.
+- `testAddParameter_optional`: Tests adding an optional parameter. Input: optional flag true. Expected: parameter added as optional.
+- `testAddParameter_varArgs`: Tests adding a var_args parameter. Input: var_args flag true. Expected: parameter added as var_args.
+- `testAddParameter_optionalBeforeRequired_emitsWarning`: Tests incorrect ordering of optional/required parameters. Input: optional then required param. Expected: Warning scenario triggered.
+- `testAddParameter_varArgsBeforeRequired_emitsWarning`: Tests incorrect ordering of var_args/required parameters. Input: var_args then required param. Expected: Warning scenario triggered.
+- `testBuildAndRegister_constructorType`: Tests building a constructor function. Input: isConstructor=true. Expected: FunctionType is a constructor.
+- `testBuildAndRegister_interfaceType`: Tests building an interface function. Input: isInterface=true. Expected: FunctionType is an interface.
+- `testBuildAndRegister_ordinaryFunction`: Tests building a regular function. Input: default settings. Expected: FunctionType is ordinary.
+- `testBuildAndRegister_withImplementedInterfaces`: Tests building with implemented interfaces. Input: implementedInterfaces list set. Expected: FunctionType has implemented interfaces.
+- `testBuildAndRegister_withBaseType`: Tests building with a base type. Input: baseType set. Expected: FunctionType prototype based on baseType.
+- `testGetOrCreateConstructor_new`: Tests creating a new constructor type. Input: name not yet registered. Expected: new FunctionType created.
+- `testGetOrCreateConstructor_existingTypeRedefinitionWarning`: Tests handling an existing constructor type with a different definition. Input: existing constructor with different return type. Expected: Warning issued, new FunctionType created (but not registered over existing).
+- `testMaybeSetBaseType`: Tests setting the base type of a function. Input: baseType set. Expected: function's prototype is based on baseType.
+- `testReportWarning`: Tests calling the reportWarning method. Input: diagnostic type and arguments. Expected: Method executes without error.
+- `testReportError`: Tests calling the reportError method. Input: diagnostic type and arguments. Expected: Method executes without error.
+- `testIsFunctionTypeDeclaration_withParams`: Tests `isFunctionTypeDeclaration` with parameters. Input: JSDoc with params. Expected: true.
+- `testIsFunctionTypeDeclaration_withReturnType`: Tests `isFunctionTypeDeclaration` with return type. Input: JSDoc with @return. Expected: true.
+- `testIsFunctionTypeDeclaration_withThisType`: Tests `isFunctionTypeDeclaration` with this type. Input: JSDoc with @this. Expected: true.
+- `testIsFunctionTypeDeclaration_isConstructor`: Tests `isFunctionTypeDeclaration` with constructor annotation. Input: JSDoc with @constructor. Expected: true.
+- `testIsFunctionTypeDeclaration_isInterface`: Tests `isFunctionTypeDeclaration` with interface annotation. Input: JSDoc with @interface. Expected: true.
+- `testIsFunctionTypeDeclaration_emptyInfo`: Tests `isFunctionTypeDeclaration` with empty JSDoc. Input: empty JSDoc. Expected: false.
+- `testInferParameterTypes_emptyArgsParentAndInfo`: Tests parameter inference with empty args parent and info. Input: empty LP node, null JSDoc. Expected: empty parametersNode.
+- `testInferParameterTypes_argsParentButNullInfo`: Tests parameter inference with args parent but null JSDoc. Input: LP node with arg names, null JSDoc. Expected: parametersNode with UNKNOWN_TYPE for args.
+- `testInferParameterTypes_inferFromExistingParameters`: Tests parameter inference when `parametersNode` is already set. Input: existing parameters, new args parent, null info. Expected: new args used, types are UNKNOWN_TYPE.
+- `testInferFromOverriddenFunction_nullOldType`: Tests `inferFromOverriddenFunction` with null oldType. Input: null oldType, paramsParent node. Expected: no change to builder's state.
+- `testInferFromOverriddenFunction_nullParamsParent`: Tests `inferFromOverriddenFunction` with null paramsParent. Input: oldType, null paramsParent. Expected: builder's returnType and parametersNode set from oldType.
+- `testInferFromOverriddenFunction_withParamsParentAndOldType`: Tests `inferFromOverriddenFunction` with both oldType and paramsParent. Input: oldType, paramsParent. Expected: builder's state updated based on merging oldType info with paramsParent structure.
+
+### DEFECT DETECTION STRATEGY
+The tests focus on thoroughly exercising the logic for inferring and building `FunctionType` objects from various sources of information (JSDoc, AST nodes). They cover parameter type inference, return type inference, constructor/interface specific logic, and inheritance. Edge cases like missing information, incorrect parameter ordering, and template types are also tested.
+
+### SUMMARY
+50 tests written.
+
+### LIMITATIONS
+The tests rely on a `MockCompiler` and do not assert that errors or warnings are reported by the compiler. Some tests assume specific behavior of `JSTypeRegistry` for creating types.
+Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

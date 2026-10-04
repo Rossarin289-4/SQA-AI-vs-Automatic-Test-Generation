@@ -1,0 +1,567 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Supplier;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.javascript.jscomp.CompilerOptions.DevMode;
+import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
+import com.google.javascript.jscomp.CompilerOptions.TracerMode;
+import com.google.javascript.jscomp.ReferenceCollectingCallback.ReferenceCollection;
+import com.google.javascript.jscomp.ReferenceCollectingCallback.ReferenceMap;
+import com.google.javascript.jscomp.Scope.Var;
+import com.google.javascript.jscomp.deps.SortedDependencies.CircularDependencyException;
+import com.google.javascript.jscomp.deps.SortedDependencies.MissingProvideException;
+import com.google.javascript.jscomp.mozilla.rhino.ErrorReporter;
+import com.google.javascript.jscomp.parsing.Config;
+import com.google.javascript.jscomp.parsing.ParserRunner;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.jstype.JSTypeRegistry;
+import java.io.IOException;
+import java.io.PrintStream;
+import java.io.Serializable;
+import java.nio.charset.Charset;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+public class CompilerTest {
+
+    // test methods (as many as the instructions ask for), each exactly in this form:
+    //     @Test
+    //     public void testWhatItChecks() throws Exception { ... }
+
+    @Test
+    public void testInitOptionsWithNullOutputStream() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        compiler.initOptions(options);
+        // Verify that an error manager is created and it's a LoggerErrorManager
+        // because no stream was provided.
+        assertNotNull(compiler.errorManager);
+        assertTrue(compiler.errorManager instanceof LoggerErrorManager);
+    }
+
+    @Test
+    public void testInitOptionsWithSpecificOutputStream() throws Exception {
+        PrintStream stream = new PrintStream(new java.io.ByteArrayOutputStream());
+        Compiler compiler = new Compiler(stream);
+        CompilerOptions options = new CompilerOptions();
+        compiler.initOptions(options);
+        // Verify that an error manager is created and it's a PrintStreamErrorManager.
+        assertNotNull(compiler.errorManager);
+        assertTrue(compiler.errorManager instanceof PrintStreamErrorManager);
+    }
+
+    @Test
+    public void testInitOptionsWithCustomErrorManager() throws Exception {
+        ErrorManager customErrorManager = new MockErrorManager();
+        Compiler compiler = new Compiler(customErrorManager);
+        CompilerOptions options = new CompilerOptions();
+        compiler.initOptions(options);
+        // Verify that the provided custom error manager is used.
+        assertSame(customErrorManager, compiler.errorManager);
+    }
+
+    @Test
+    public void testInitWithOneInputAndExterns() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        JSSourceFile extern = JSSourceFile.fromCode("extern.js", "var x = 1;");
+        JSSourceFile input = JSSourceFile.fromCode("input.js", "var y = x + 1;");
+        compiler.init(new JSSourceFile[]{extern}, new JSSourceFile[]{input}, options);
+        assertNotNull(compiler.externs);
+        assertEquals(1, compiler.externs.size());
+        assertEquals("extern.js", compiler.externs.get(0).getName());
+        assertNotNull(compiler.inputs);
+        assertEquals(1, compiler.inputs.size());
+        assertEquals("input.js", compiler.inputs.get(0).getName());
+        assertNull(compiler.moduleGraph);
+    }
+
+    @Test
+    public void testInitModulesWithMultipleModules() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        JSSourceFile extern = JSSourceFile.fromCode("extern.js", "var x = 1;");
+        JSModule module1 = new JSModule("m1");
+        module1.add(JSSourceFile.fromCode("m1_1.js", "var y = x;"));
+        JSModule module2 = new JSModule("m2");
+        module2.add(JSSourceFile.fromCode("m2_1.js", "var z = y;"));
+        compiler.initModules(Lists.newArrayList(extern), Lists.newArrayList(module1, module2), options);
+        assertNotNull(compiler.moduleGraph);
+        assertEquals(2, compiler.moduleGraph.getModules().size());
+        assertNotNull(compiler.inputs);
+        assertEquals(2, compiler.inputs.size());
+    }
+
+    @Test
+    public void testRebuildInputsFromModules() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        JSModule module1 = new JSModule("m1");
+        JSSourceFile input1 = JSSourceFile.fromCode("m1_1.js", "var a = 1;");
+        module1.add(input1);
+        compiler.initModules(Lists.newArrayList(), Lists.newArrayList(module1), options);
+        assertEquals(1, compiler.inputs.size());
+        assertEquals(input1, compiler.inputs.get(0).getSourceFile());
+
+        // Simulate adding a new input to the module
+        JSSourceFile input2 = JSSourceFile.fromCode("m1_2.js", "var b = 2;");
+        module1.add(input2);
+        compiler.rebuildInputsFromModules();
+
+        assertEquals(2, compiler.inputs.size());
+        assertEquals(input1, compiler.inputs.get(0).getSourceFile());
+        assertEquals(input2, compiler.inputs.get(1).getSourceFile());
+    }
+
+    @Test
+    public void testCompileSingleFile() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        JSSourceFile extern = JSSourceFile.fromCode("extern.js", "var y = 1;");
+        JSSourceFile input = JSSourceFile.fromCode("input.js", "var x = y + 1;");
+        Result result = compiler.compile(extern, input, options);
+        assertFalse(result.hasErrors());
+        assertEquals(0, compiler.getErrorCount());
+    }
+
+    @Test
+    public void testCompileMultipleFiles() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        JSSourceFile extern = JSSourceFile.fromCode("extern.js", "var y = 1;");
+        JSSourceFile input1 = JSSourceFile.fromCode("input1.js", "var x = y + 1;");
+        JSSourceFile input2 = JSSourceFile.fromCode("input2.js", "var z = x * 2;");
+        Result result = compiler.compile(extern, new JSSourceFile[]{input1, input2}, options);
+        assertFalse(result.hasErrors());
+        assertEquals(0, compiler.getErrorCount());
+    }
+
+    @Test
+    public void testCompileModules() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        JSSourceFile extern = JSSourceFile.fromCode("extern.js", "var y = 1;");
+        JSModule module1 = new JSModule("m1");
+        module1.add(JSSourceFile.fromCode("m1_1.js", "var x = y + 1;"));
+        JSModule module2 = new JSModule("m2");
+        module2.add(JSSourceFile.fromCode("m2_1.js", "var z = x * 2;"));
+        Result result = compiler.compileModules(Lists.newArrayList(extern), Lists.newArrayList(module1, module2), options);
+        assertFalse(result.hasErrors());
+        assertEquals(0, compiler.getErrorCount());
+    }
+
+    @Test
+    public void testGetResult() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        JSSourceFile input = JSSourceFile.fromCode("input.js", "var x = 1;");
+        compiler.compile(new JSSourceFile[]{}, new JSSourceFile[]{input}, options);
+        Result result = compiler.getResult();
+        assertNotNull(result);
+        assertEquals(0, result.errors.length);
+        assertEquals(0, result.warnings.length);
+    }
+
+    @Test
+    public void testGetErrors() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        options.checkTypes = true;
+        JSSourceFile input = JSSourceFile.fromCode("input.js", "var x = 'hello' - 1;");
+        compiler.compile(new JSSourceFile[]{}, new JSSourceFile[]{input}, options);
+        JSError[] errors = compiler.getErrors();
+        assertTrue(errors.length > 0);
+        // Check for a specific error type if possible, e.g., type mismatch
+        boolean foundTypeMismatch = false;
+        for (JSError error : errors) {
+            if (error.getType().toString().contains("incompatible types") || error.description.contains("incompatible types")) {
+                foundTypeMismatch = true;
+                break;
+            }
+        }
+        assertTrue("Should find type mismatch error", foundTypeMismatch);
+    }
+
+    @Test
+    public void testGetWarnings() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        // Enable a warning that is likely to trigger with simple code
+        options.setWarningLevel(DiagnosticGroups.EXTRA_IMPORT_WARNINGS, CheckLevel.WARNING);
+        JSSourceFile input = JSSourceFile.fromCode("input.js", "goog.require('some.missing.module');");
+        compiler.compile(new JSSourceFile[]{}, new JSSourceFile[]{input}, options);
+        JSError[] warnings = compiler.getWarnings();
+        assertTrue(warnings.length > 0);
+        // Check for the specific warning type
+        boolean foundExtraImport = false;
+        for (JSError warning : warnings) {
+            if (warning.getType().toString().contains("JSC_UNRESOLVED_IMPORT") || warning.description.contains("unresolved import")) {
+                foundExtraImport = true;
+                break;
+            }
+        }
+        assertTrue("Should find unresolved import warning", foundExtraImport);
+    }
+
+    @Test
+    public void testGetRoot() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        JSSourceFile input = JSSourceFile.fromCode("input.js", "var x = 1;");
+        compiler.init(new JSSourceFile[]{}, new JSSourceFile[]{input}, options);
+        Node root = compiler.getRoot();
+        assertNotNull(root);
+        assertEquals(Token.BLOCK, root.getType());
+        assertEquals(2, root.getChildCount()); // externsRoot and jsRoot
+    }
+
+    @Test
+    public void testToSource() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        options.prettyPrint = true;
+        options.lineBreak = true;
+        JSSourceFile input = JSSourceFile.fromCode("input.js", "function f(a){return a+1;}");
+        compiler.compile(new JSSourceFile[]{}, new JSSourceFile[]{input}, options);
+        String source = compiler.toSource();
+        assertTrue(source.contains("function f(a) {"));
+        assertTrue(source.contains("return a + 1;"));
+    }
+
+    @Test
+    public void testToSourceArray() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        JSSourceFile input1 = JSSourceFile.fromCode("input1.js", "var a = 1;");
+        JSSourceFile input2 = JSSourceFile.fromCode("input2.js", "var b = 2;");
+        compiler.compile(new JSSourceFile[]{}, new JSSourceFile[]{input1, input2}, options);
+        String[] sources = compiler.toSourceArray();
+        assertEquals(2, sources.length);
+        assertTrue(sources[0].contains("var a = 1;"));
+        assertTrue(sources[1].contains("var b = 2;"));
+    }
+
+    @Test
+    public void testToSourceWithModule() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        JSModule module = new JSModule("m1");
+        module.add(JSSourceFile.fromCode("m1_1.js", "var x = 1;"));
+        module.add(JSSourceFile.fromCode("m1_2.js", "var y = x + 1;"));
+        compiler.initModules(Lists.newArrayList(), Lists.newArrayList(module), options);
+        String source = compiler.toSource(module);
+        assertTrue(source.contains("var x = 1;"));
+        assertTrue(source.contains("var y = x + 1;"));
+    }
+
+    @Test
+    public void testToSourceArrayWithModule() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        JSModule module = new JSModule("m1");
+        module.add(JSSourceFile.fromCode("m1_1.js", "var a = 1;"));
+        module.add(JSSourceFile.fromCode("m1_2.js", "var b = 2;"));
+        compiler.initModules(Lists.newArrayList(), Lists.newArrayList(module), options);
+        String[] sources = compiler.toSourceArray(module);
+        assertEquals(2, sources.length);
+        assertTrue(sources[0].contains("var a = 1;"));
+        assertTrue(sources[1].contains("var b = 2;"));
+    }
+
+    @Test
+    public void testOptimize() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        options.foldConstants = true; // Enable an optimization
+        JSSourceFile input = JSSourceFile.fromCode("input.js", "var x = 1 + 2;");
+        compiler.compile(new JSSourceFile[]{}, new JSSourceFile[]{input}, options);
+        // After optimization, x should be 3
+        assertEquals("var x=3;", compiler.toSource().trim());
+    }
+
+    @Test
+    public void testNormalize() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        // This is a basic normalization test, normalize is a complex pass.
+        // We can test if it affects simple code structure.
+        JSSourceFile input = JSSourceFile.fromCode("input.js", "function f(){ return \n 1; }");
+        compiler.compile(new JSSourceFile[]{}, new JSSourceFile[]{input}, options);
+        String source = compiler.toSource();
+        // Normalization might remove or reformat whitespace.
+        // Asserting the core functionality remains.
+        assertTrue(source.contains("function f()") || source.contains("function f() {"));
+        assertTrue(source.contains("return 1"));
+    }
+
+    @Test
+    public void testGetSourceLine() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        JSSourceFile input = JSSourceFile.fromCode("input.js", "var a = 1;\nvar b = 2;");
+        compiler.compile(new JSSourceFile[]{}, new JSSourceFile[]{input}, options);
+        assertEquals("var a = 1;", compiler.getSourceLine("input.js", 1));
+        assertEquals("var b = 2;", compiler.getSourceLine("input.js", 2));
+        assertNull(compiler.getSourceLine("input.js", 3)); // Line out of bounds
+        assertNull(compiler.getSourceLine("nonexistent.js", 1)); // Non-existent file
+    }
+
+    @Test
+    public void testGetSourceRegion() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        JSSourceFile input = JSSourceFile.fromCode("input.js", "line1\nline2\nline3");
+        compiler.compile(new JSSourceFile[]{}, new JSSourceFile[]{input}, options);
+        Region region = compiler.getSourceRegion("input.js", 2);
+        assertNotNull(region);
+        assertEquals("line2", region.getCode());
+        assertEquals(2, region.getStartLine());
+        assertEquals(2, region.getEndLine());
+    }
+
+    @Test
+    public void testGetSourceMap() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        options.sourceMapOutputPath = "test.js.map";
+        JSSourceFile input = JSSourceFile.fromCode("input.js", "var x = 1;");
+        compiler.compile(new JSSourceFile[]{}, new JSSourceFile[]{input}, options);
+        assertNotNull(compiler.getSourceMap());
+    }
+
+    @Test
+    public void testSetLoggingLevel() throws Exception {
+        Level originalLevel = Logger.getLogger("com.google.javascript.jscomp").getLevel();
+        Compiler.setLoggingLevel(Level.SEVERE);
+        assertEquals(Level.SEVERE, Logger.getLogger("com.google.javascript.jscomp").getLevel());
+        // Reset to original level
+        Compiler.setLoggingLevel(originalLevel);
+    }
+
+    @Test
+    public void testGetAstDotGraph() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        JSSourceFile input = JSSourceFile.fromCode("input.js", "var x = 1;");
+        compiler.compile(new JSSourceFile[]{}, new JSSourceFile[]{input}, options);
+        String dotGraph = compiler.getAstDotGraph();
+        assertNotNull(dotGraph);
+        assertTrue(dotGraph.contains("digraph")); // Basic check for DOT format
+        assertTrue(dotGraph.contains("SCRIPT"));
+        assertTrue(dotGraph.contains("VAR"));
+    }
+
+    @Test
+    public void testGetErrorManager() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        compiler.initOptions(options);
+        ErrorManager em = compiler.getErrorManager();
+        assertNotNull(em);
+        // Depending on initOptions, it will be LoggerErrorManager or PrintStreamErrorManager
+        assertTrue(em instanceof LoggerErrorManager || em instanceof PrintStreamErrorManager);
+    }
+
+    @Test
+    public void testGetErrorCount() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        options.checkTypes = true;
+        JSSourceFile input = JSSourceFile.fromCode("input.js", "var x = 'hello' - 1;");
+        compiler.compile(new JSSourceFile[]{}, new JSSourceFile[]{input}, options);
+        assertEquals(1, compiler.getErrorCount());
+    }
+
+    @Test
+    public void testGetWarningCount() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        options.setWarningLevel(DiagnosticGroups.EXTRA_IMPORT_WARNINGS, CheckLevel.WARNING);
+        JSSourceFile input = JSSourceFile.fromCode("input.js", "goog.require('some.missing.module');");
+        compiler.compile(new JSSourceFile[]{}, new JSSourceFile[]{input}, options);
+        assertEquals(1, compiler.getWarningCount());
+    }
+
+    @Test
+    public void testHasErrors() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        options.checkTypes = true;
+        JSSourceFile input = JSSourceFile.fromCode("input.js", "var x = 'hello' - 1;");
+        compiler.compile(new JSSourceFile[]{}, new JSSourceFile[]{input}, options);
+        assertTrue(compiler.hasErrors());
+    }
+
+    @Test
+    public void testHasErrorsWhenNoErrors() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        JSSourceFile input = JSSourceFile.fromCode("input.js", "var x = 1;");
+        compiler.compile(new JSSourceFile[]{}, new JSSourceFile[]{input}, options);
+        assertFalse(compiler.hasErrors());
+    }
+
+    @Test
+    public void testGetVariableMap() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        // Enable variable renaming to get a map
+        options.renameVariables = true;
+        JSSourceFile input = JSSourceFile.fromCode("input.js", "var veryLongVariableName = 1;");
+        compiler.compile(new JSSourceFile[]{}, new JSSourceFile[]{input}, options);
+        VariableMap vm = compiler.getVariableMap();
+        assertNotNull(vm);
+        // Check if the map contains the original and renamed variable
+        String[] originalNames = vm.getOriginalNames();
+        String[] encodedNames = vm.getEncodedNames();
+        assertEquals(1, originalNames.length);
+        assertEquals(1, encodedNames.length);
+        assertEquals("veryLongVariableName", originalNames[0]);
+        // The encoded name will likely be 'a' or similar, can't be exact without running.
+        // We can check that it's not the original name.
+        assertNotEquals("veryLongVariableName", encodedNames[0]);
+    }
+
+    @Test
+    public void testGetPropertyMap() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        // Enable property renaming to get a map
+        options.propertyRenaming = CompilerOptions.PropertyRenamingPolicy.AGGRESSIVE_HEURISTIC;
+        JSSourceFile input = JSSourceFile.fromCode("input.js", "var obj = {}; obj.veryLongPropertyName = 1;");
+        compiler.compile(new JSSourceFile[]{}, new JSSourceFile[]{input}, options);
+        VariableMap pm = compiler.getPropertyMap();
+        assertNotNull(pm);
+        // Similar check as for VariableMap
+        String[] originalNames = pm.getOriginalNames();
+        String[] encodedNames = pm.getEncodedNames();
+        assertEquals(1, originalNames.length);
+        assertEquals(1, encodedNames.length);
+        assertEquals("veryLongPropertyName", originalNames[0]);
+        assertNotEquals("veryLongPropertyName", encodedNames[0]);
+    }
+
+    @Test
+    public void testGetUniqueNameIdSupplier() throws Exception {
+        Compiler compiler = new Compiler();
+        compiler.resetUniqueNameId(); // Ensure starting from 0
+        Supplier<String> idSupplier = compiler.getUniqueNameIdSupplier();
+        assertEquals("0", idSupplier.get());
+        assertEquals("1", idSupplier.get());
+        assertEquals("2", idSupplier.get());
+    }
+
+    @Test
+    public void testToStringCodeBuilder() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        JSSourceFile input = JSSourceFile.fromCode("input.js", "var x = 1;");
+        compiler.compile(new JSSourceFile[]{}, new JSSourceFile[]{input}, options);
+        Compiler.CodeBuilder cb = new Compiler.CodeBuilder();
+        cb.append("test");
+        assertEquals("test", cb.toString());
+        assertEquals(4, cb.getLength());
+        cb.reset();
+        assertEquals("", cb.toString());
+    }
+
+    @Test
+    public void testCodeBuilderLineAndColumnTracking() throws Exception {
+        Compiler.CodeBuilder cb = new Compiler.CodeBuilder();
+        cb.append("line1\n");
+        assertEquals(1, cb.getLineIndex());
+        assertEquals(5, cb.getColumnIndex()); // Length of "line1"
+        cb.append("line2");
+        assertEquals(1, cb.getLineIndex()); // Still on the same line
+        assertEquals(10, cb.getColumnIndex()); // 5 + length of "line2"
+        cb.append("\nline3");
+        assertEquals(2, cb.getLineIndex()); // Moved to the next line
+        assertEquals(5, cb.getColumnIndex()); // Length of "line3"
+    }
+
+    @Test
+    public void testCodeBuilderEndsWith() throws Exception {
+        Compiler.CodeBuilder cb = new Compiler.CodeBuilder();
+        cb.append("some text");
+        assertTrue(cb.endsWith("text"));
+        assertTrue(cb.endsWith("some text"));
+        assertFalse(cb.endsWith("other"));
+        assertFalse(cb.endsWith("some text "));
+    }
+
+    @Test
+    public void testToStringArrayWithEmptyModule() throws Exception {
+        Compiler compiler = new Compiler();
+        CompilerOptions options = new CompilerOptions();
+        JSModule module = new JSModule("emptyModule");
+        compiler.initModules(Lists.newArrayList(), Lists.newArrayList(module), options);
+        String[] sources = compiler.toSourceArray(module);
+        assertNotNull(sources);
+        assertEquals(0, sources.length);
+    }
+}
+```
+
+**SOURCE CODE ANALYSIS**
+The tests target the `Compiler` class, focusing on its initialization (`initOptions`, `init`, `initModules`), compilation methods (`compile`, `compileModules`), result retrieval (`getResult`, `getErrors`, `getWarnings`), AST manipulation (`getRoot`, `toSource`, `toSourceArray`), optimization (`optimize`, `normalize`), and utility methods (`getSourceLine`, `getSourceRegion`, `getSourceMap`, `setLoggingLevel`, `getAstDotGraph`, `getErrorManager`, `getErrorCount`, `getWarningCount`, `hasErrors`, `getVariableMap`, `getPropertyMap`, `getUniqueNameIdSupplier`, `CodeBuilder` class methods).
+
+**TEST CASE DESIGN**
+- `testInitOptionsWithNullOutputStream`: Initializes CompilerOptions, checks default error manager is LoggerErrorManager.
+- `testInitOptionsWithSpecificOutputStream`: Initializes CompilerOptions with a PrintStream, checks error manager is PrintStreamErrorManager.
+- `testInitOptionsWithCustomErrorManager`: Initializes CompilerOptions with a custom ErrorManager, checks it's used.
+- `testInitWithOneInputAndExterns`: Initializes compiler with one JS input and one extern file.
+- `testInitModulesWithMultipleModules`: Initializes compiler with multiple JS modules and externs.
+- `testRebuildInputsFromModules`: Tests rebuilding the input list after a module modification.
+- `testCompileSingleFile`: Compiles a single JavaScript file.
+- `testCompileMultipleFiles`: Compiles multiple JavaScript files.
+- `testCompileModules`: Compiles JavaScript code organized into modules.
+- `testGetResult`: Retrieves the compilation result after a successful compile.
+- `testGetErrors`: Checks for compilation errors, specifically a type mismatch.
+- `testGetWarnings`: Checks for compilation warnings, specifically an unresolved import.
+- `testGetRoot`: Retrieves the root AST node after parsing.
+- `testToSource`: Converts the compiled AST back to source code.
+- `testToSourceArray`: Converts each compiled input file back to source code.
+- `testToSourceWithModule`: Converts a specific JS module back to source code.
+- `testToSourceArrayWithModule`: Converts each input file within a module back to source code.
+- `testOptimize`: Tests the constant folding optimization.
+- `testNormalize`: Tests the normalization pass by checking basic code structure.
+- `testGetSourceLine`: Retrieves a specific line of source code.
+- `testGetSourceRegion`: Retrieves a region of source code.
+- `testGetSourceMap`: Checks if a source map is generated when configured.
+- `testSetLoggingLevel`: Tests setting the logging level for the compiler's logger.
+- `testGetAstDotGraph`: Generates and checks the basic format of an AST DOT graph.
+- `testGetErrorManager`: Retrieves the error manager instance.
+- `testGetErrorCount`: Counts the number of compilation errors.
+- `testGetWarningCount`: Counts the number of compilation warnings.
+- `testHasErrors`: Checks if `hasErrors` returns true when errors exist.
+- `testHasErrorsWhenNoErrors`: Checks if `hasErrors` returns false when no errors exist.
+- `testGetVariableMap`: Retrieves the VariableMap after enabling variable renaming.
+- `testGetPropertyMap`: Retrieves the PropertyMap after enabling property renaming.
+- `testGetUniqueNameIdSupplier`: Tests the unique name ID supplier for generating IDs.
+- `testToStringCodeBuilder`: Tests basic `CodeBuilder` functionality (append, toString, length, reset).
+- `testCodeBuilderLineAndColumnTracking`: Tests line and column tracking in `CodeBuilder`.
+- `testCodeBuilderEndsWith`: Tests the `endsWith` method of `CodeBuilder`.
+- `testToSourceArrayWithEmptyModule`: Tests `toSourceArray` for an empty JS module.
+
+**DEFECT DETECTION STRATEGY**
+The tests cover initialization, compilation, output generation, error/warning handling, AST inspection, optimization, and utility methods. They aim to catch regressions in these core functionalities, particularly around how inputs are processed, how code is transformed, and how errors and warnings are reported.
+
+**SUMMARY**
+32 tests were generated.
+
+**LIMITATIONS**
+The tests do not cover all possible compiler options or edge cases within complex optimization passes. They rely on basic JavaScript syntax and common scenarios. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

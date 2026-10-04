@@ -1,0 +1,582 @@
+```java
+package org.apache.commons.compress.archivers.tar;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Map.Entry;
+import org.apache.commons.compress.archivers.ArchiveEntry;
+import org.apache.commons.compress.archivers.ArchiveInputStream;
+import org.apache.commons.compress.archivers.zip.ZipEncoding;
+import org.apache.commons.compress.archivers.zip.ZipEncodingHelper;
+import org.apache.commons.compress.utils.ArchiveUtils;
+import org.apache.commons.compress.utils.CharsetNames;
+import org.apache.commons.compress.utils.IOUtils;
+
+public class TarArchiveInputStreamTest {
+    /**
+     * Test constructor with default block and record size.
+     */
+    @Test
+    public void testConstructorDefault() throws Exception {
+        InputStream is = new ByteArrayInputStream(new byte[0]);
+        TarArchiveInputStream tar = new TarArchiveInputStream(is);
+        assertNotNull(tar);
+        assertEquals(TarConstants.DEFAULT_BLKSIZE, tar.getRecordSize());
+    }
+
+    /**
+     * Test constructor with specified block size.
+     */
+    @Test
+    public void testConstructorBlockSize() throws Exception {
+        InputStream is = new ByteArrayInputStream(new byte[0]);
+        TarArchiveInputStream tar = new TarArchiveInputStream(is, 1024);
+        assertNotNull(tar);
+        assertEquals(1024, tar.getRecordSize());
+    }
+
+    /**
+     * Test constructor with specified block and record size.
+     */
+    @Test
+    public void testConstructorBlockRecordSize() throws Exception {
+        InputStream is = new ByteArrayInputStream(new byte[0]);
+        TarArchiveInputStream tar = new TarArchiveInputStream(is, 1024, 512);
+        assertNotNull(tar);
+        assertEquals(512, tar.getRecordSize());
+    }
+
+    /**
+     * Test constructor with specified encoding.
+     */
+    @Test
+    public void testConstructorEncoding() throws Exception {
+        InputStream is = new ByteArrayInputStream(new byte[0]);
+        TarArchiveInputStream tar = new TarArchiveInputStream(is, TarConstants.DEFAULT_BLKSIZE, "UTF-8");
+        assertNotNull(tar);
+    }
+
+    /**
+     * Test getNextTarEntry when the stream is empty.
+     */
+    @Test
+    public void testGetNextTarEntryEmptyStream() throws Exception {
+        InputStream is = new ByteArrayInputStream(new byte[0]);
+        TarArchiveInputStream tar = new TarArchiveInputStream(is);
+        assertNull(tar.getNextTarEntry());
+    }
+
+    /**
+     * Test getNextTarEntry when the stream contains only EOF record.
+     */
+    @Test
+    public void testGetNextTarEntryEOFRecord() throws Exception {
+        byte[] eofRecord = new byte[TarConstants.DEFAULT_RCDSIZE]; // All zeros
+        InputStream is = new ByteArrayInputStream(eofRecord);
+        TarArchiveInputStream tar = new TarArchiveInputStream(is);
+        assertNull(tar.getNextTarEntry());
+    }
+
+    /**
+     * Test getNextTarEntry with a simple valid tar entry.
+     */
+    @Test
+    public void testGetNextTarEntrySimple() throws Exception {
+        // A minimal valid tar header for a file of size 0
+        byte[] header = new byte[TarConstants.DEFAULT_RCDSIZE];
+        // Name
+        ArchiveUtils.matchAsciiBuffer("test.txt", header, 0, "test.txt".length());
+        // Mode
+        header[100] = (byte) 0x00; // Permissions
+        header[101] = (byte) 0x00; // Permissions
+        header[104] = (byte) 0x00; // Size
+        header[105] = (byte) 0x00; // Size
+        header[108] = (byte) 0x00; // Size
+        header[109] = (byte) 0x00; // Size
+        // Type flag (0 for regular file)
+        header[156] = (byte) 0x00;
+        // Checksum (all zeros for empty header)
+        header[148] = (byte) 0x00;
+
+        InputStream is = new ByteArrayInputStream(header);
+        TarArchiveInputStream tar = new TarArchiveInputStream(is);
+        TarArchiveEntry entry = tar.getNextTarEntry();
+        assertNotNull(entry);
+        assertEquals("test.txt", entry.getName());
+        assertEquals(0, entry.getSize());
+        assertEquals(0, entry.getMode());
+        assertFalse(entry.isDirectory());
+    }
+
+    /**
+     * Test skip with a valid entry.
+     */
+    @Test
+    public void testSkipValidEntry() throws Exception {
+        // Minimal header for a file of size 10
+        byte[] header = new byte[TarConstants.DEFAULT_RCDSIZE];
+        header[104] = (byte) 0x00; header[105] = (byte) 0x00; header[106] = (byte) 0x00; header[107] = (byte) 0x0A; // size = 10
+        header[156] = (byte) 0x00; // Type = regular file
+        // Checksum = 0
+        header[148] = (byte) 0x00;
+
+        byte[] content = new byte[10];
+        byte[] padding = new byte[TarConstants.DEFAULT_RCDSIZE - (10 % TarConstants.DEFAULT_RCDSIZE)]; // Pad to record size if needed
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        baos.write(header);
+        baos.write(content);
+        baos.write(padding); // write padding to simulate end of record
+
+        InputStream is = new ByteArrayInputStream(baos.toByteArray());
+        TarArchiveInputStream tar = new TarArchiveInputStream(is);
+
+        tar.getNextTarEntry(); // consume header
+        long skipped = tar.skip(5);
+        assertEquals(5, skipped);
+        assertEquals(5, tar.entryOffset);
+    }
+
+    /**
+     * Test skip beyond the end of the entry.
+     */
+    @Test
+    public void testSkipBeyondEntry() throws Exception {
+        // Minimal header for a file of size 5
+        byte[] header = new byte[TarConstants.DEFAULT_RCDSIZE];
+        header[104] = (byte) 0x00; header[105] = (byte) 0x00; header[106] = (byte) 0x00; header[107] = (byte) 0x05; // size = 5
+        header[156] = (byte) 0x00; // Type = regular file
+        // Checksum = 0
+
+        byte[] content = new byte[5];
+        byte[] padding = new byte[TarConstants.DEFAULT_RCDSIZE - 5]; // Pad to record size
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        baos.write(header);
+        baos.write(content);
+        baos.write(padding); // write padding to simulate end of record
+
+        InputStream is = new ByteArrayInputStream(baos.toByteArray());
+        TarArchiveInputStream tar = new TarArchiveInputStream(is);
+
+        tar.getNextTarEntry(); // consume header
+        long skipped = tar.skip(10); // Try to skip more than available
+        assertEquals(5, skipped);
+        assertEquals(5, tar.entryOffset);
+        assertEquals(5, tar.entrySize); // entry size remains 5
+    }
+
+    /**
+     * Test read with a simple entry.
+     */
+    @Test
+    public void testReadSimpleEntry() throws Exception {
+        // Minimal header for a file of size 10
+        byte[] header = new byte[TarConstants.DEFAULT_RCDSIZE];
+        header[104] = (byte) 0x00; header[105] = (byte) 0x00; header[106] = (byte) 0x00; header[107] = (byte) 0x0A; // size = 10
+        header[156] = (byte) 0x00; // Type = regular file
+        // Checksum = 0
+
+        byte[] content = new byte[10];
+        for (int i = 0; i < content.length; i++) {
+            content[i] = (byte) i;
+        }
+        byte[] padding = new byte[TarConstants.DEFAULT_RCDSIZE - 10]; // Pad to record size
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        baos.write(header);
+        baos.write(content);
+        baos.write(padding); // write padding to simulate end of record
+
+        InputStream is = new ByteArrayInputStream(baos.toByteArray());
+        TarArchiveInputStream tar = new TarArchiveInputStream(is);
+
+        tar.getNextTarEntry(); // consume header
+
+        byte[] buf = new byte[5];
+        int bytesRead = tar.read(buf, 0, 5);
+        assertEquals(5, bytesRead);
+        for (int i = 0; i < 5; i++) {
+            assertEquals((byte) i, buf[i]);
+        }
+        assertEquals(5, tar.entryOffset);
+    }
+
+    /**
+     * Test read beyond the end of the entry.
+     */
+    @Test
+    public void testReadBeyondEntry() throws Exception {
+        // Minimal header for a file of size 5
+        byte[] header = new byte[TarConstants.DEFAULT_RCDSIZE];
+        header[104] = (byte) 0x00; header[105] = (byte) 0x00; header[106] = (byte) 0x00; header[107] = (byte) 0x05; // size = 5
+        header[156] = (byte) 0x00; // Type = regular file
+        // Checksum = 0
+
+        byte[] content = new byte[5];
+        byte[] padding = new byte[TarConstants.DEFAULT_RCDSIZE - 5]; // Pad to record size
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        baos.write(header);
+        baos.write(content);
+        baos.write(padding); // write padding to simulate end of record
+
+        InputStream is = new ByteArrayInputStream(baos.toByteArray());
+        TarArchiveInputStream tar = new TarArchiveInputStream(is);
+
+        tar.getNextTarEntry(); // consume header
+
+        byte[] buf = new byte[10];
+        int bytesRead = tar.read(buf, 0, 10);
+        assertEquals(5, bytesRead);
+        assertEquals(5, tar.entryOffset);
+        assertEquals(5, tar.entrySize); // entry size remains 5
+
+        // Read again to get EOF (-1)
+        bytesRead = tar.read(buf, 0, 10);
+        assertEquals(-1, bytesRead);
+    }
+
+    /**
+     * Test canReadEntryData for a TarArchiveEntry that is not sparse.
+     */
+    @Test
+    public void testCanReadEntryDataNonSparse() throws Exception {
+        TarArchiveEntry entry = new TarArchiveEntry("test.txt");
+        assertTrue(new TarArchiveInputStream(new ByteArrayInputStream(new byte[0])).canReadEntryData(entry));
+    }
+
+    /**
+     * Test canReadEntryData for a TarArchiveEntry that is sparse.
+     */
+    @Test
+    public void testCanReadEntryDataSparse() throws Exception {
+        TarArchiveEntry entry = new TarArchiveEntry("test.txt");
+        entry.setSparse(true); // Simulate a sparse entry
+        assertFalse(new TarArchiveInputStream(new ByteArrayInputStream(new byte[0])).canReadEntryData(entry));
+    }
+
+    /**
+     * Test canReadEntryData for a non-TarArchiveEntry.
+     */
+    @Test
+    public void testCanReadEntryDataNonTarEntry() throws Exception {
+        ArchiveEntry entry = new ArchiveEntry() {
+            @Override
+            public String getName() { return "test"; }
+            @Override
+            public long getSize() { return 0; }
+            @Override
+            public Date getLastModifiedDate() { return null; }
+            @Override
+            public boolean isDirectory() { return false; }
+        };
+        assertFalse(new TarArchiveInputStream(new ByteArrayInputStream(new byte[0])).canReadEntryData(entry));
+    }
+
+    /**
+     * Test getCurrentEntry after getNextTarEntry.
+     */
+    @Test
+    public void testGetCurrentEntry() throws Exception {
+        byte[] header = new byte[TarConstants.DEFAULT_RCDSIZE];
+        ArchiveUtils.matchAsciiBuffer("test.txt", header, 0, "test.txt".length());
+        header[156] = (byte) 0x00; // Type = regular file
+
+        InputStream is = new ByteArrayInputStream(header);
+        TarArchiveInputStream tar = new TarArchiveInputStream(is);
+
+        assertNull(tar.getCurrentEntry());
+        tar.getNextTarEntry();
+        assertNotNull(tar.getCurrentEntry());
+        assertEquals("test.txt", tar.getCurrentEntry().getName());
+    }
+
+    /**
+     * Test matches with a valid POSIX tar signature.
+     */
+    @Test
+    public void testMatchesPosix() {
+        byte[] signature = new byte[TarConstants.MAGIC_OFFSET + TarConstants.MAGICLEN + TarConstants.VERSION_OFFSET + TarConstants.VERSIONLEN];
+        System.arraycopy(ArchiveUtils.toAsciiBytes(TarConstants.MAGIC_POSIX), 0, signature, TarConstants.MAGIC_OFFSET, TarConstants.MAGICLEN);
+        System.arraycopy(ArchiveUtils.toAsciiBytes(TarConstants.VERSION_POSIX), 0, signature, TarConstants.VERSION_OFFSET, TarConstants.VERSIONLEN);
+        assertTrue(TarArchiveInputStream.matches(signature, signature.length));
+    }
+
+    /**
+     * Test matches with a valid GNU tar signature.
+     */
+    @Test
+    public void testMatchesGnu() {
+        byte[] signature = new byte[TarConstants.MAGIC_OFFSET + TarConstants.MAGICLEN + TarConstants.VERSION_OFFSET + TarConstants.VERSIONLEN];
+        System.arraycopy(ArchiveUtils.toAsciiBytes(TarConstants.MAGIC_GNU), 0, signature, TarConstants.MAGIC_OFFSET, TarConstants.MAGICLEN);
+        System.arraycopy(ArchiveUtils.toAsciiBytes(TarConstants.VERSION_GNU_SPACE), 0, signature, TarConstants.VERSION_OFFSET, TarConstants.VERSIONLEN);
+        assertTrue(TarArchiveInputStream.matches(signature, signature.length));
+
+        System.arraycopy(ArchiveUtils.toAsciiBytes(TarConstants.VERSION_GNU_ZERO), 0, signature, TarConstants.VERSION_OFFSET, TarConstants.VERSIONLEN);
+        assertTrue(TarArchiveInputStream.matches(signature, signature.length));
+    }
+
+    /**
+     * Test matches with an Ant tar signature.
+     */
+    @Test
+    public void testMatchesAnt() {
+        byte[] signature = new byte[TarConstants.MAGIC_OFFSET + TarConstants.MAGICLEN + TarConstants.VERSION_OFFSET + TarConstants.VERSIONLEN];
+        System.arraycopy(ArchiveUtils.toAsciiBytes(TarConstants.MAGIC_ANT), 0, signature, TarConstants.MAGIC_OFFSET, TarConstants.MAGICLEN);
+        System.arraycopy(ArchiveUtils.toAsciiBytes(TarConstants.VERSION_ANT), 0, signature, TarConstants.VERSION_OFFSET, TarConstants.VERSIONLEN);
+        assertTrue(TarArchiveInputStream.matches(signature, signature.length));
+    }
+
+    /**
+     * Test matches with an invalid signature.
+     */
+    @Test
+    public void testMatchesInvalid() {
+        byte[] signature = new byte[TarConstants.MAGIC_OFFSET + TarConstants.MAGICLEN + TarConstants.VERSION_OFFSET + TarConstants.VERSIONLEN];
+        ArchiveUtils.matchAsciiBuffer("INVALID", signature, TarConstants.MAGIC_OFFSET, TarConstants.MAGICLEN);
+        assertFalse(TarArchiveInputStream.matches(signature, signature.length));
+    }
+
+    /**
+     * Test with a tar file containing a long filename entry.
+     */
+    @Test
+    public void testGetNextTarEntryLongName() throws Exception {
+        // Header for long name entry
+        byte[] longNameHeader = new byte[TarConstants.DEFAULT_RCDSIZE];
+        longNameHeader[TarConstants.FILENAME_OFFSET] = (byte) 0; // placeholder for name
+        longNameHeader[156] = (byte) 0x30; // Type '0' for regular file
+        // Size of the long name data (which is the actual name)
+        longNameHeader[104] = (byte) 0x00; longNameHeader[105] = (byte) 0x00; longNameHeader[106] = (byte) 0x00; longNameHeader[107] = (byte) 0x0C; // size of "longname\0\0\0"
+
+        // The actual long name data
+        byte[] longNameData = "longname\0\0\0".getBytes(CharsetNames.UTF_8); // "longname" followed by nulls
+
+        // Header for the actual file entry
+        byte[] fileHeader = new byte[TarConstants.DEFAULT_RCDSIZE];
+        ArchiveUtils.matchAsciiBuffer("actual.txt", fileHeader, 0, "actual.txt".length());
+        fileHeader[104] = (byte) 0x00; fileHeader[105] = (byte) 0x00; fileHeader[106] = (byte) 0x00; fileHeader[107] = (byte) 0x00; // size = 0
+        fileHeader[156] = (byte) 0x00; // Type = regular file
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        // Write long name header, then the long name data, then the actual file entry header
+        baos.write(longNameHeader);
+        baos.write(longNameData);
+        baos.write(fileHeader);
+
+        InputStream is = new ByteArrayInputStream(baos.toByteArray());
+        TarArchiveInputStream tar = new TarArchiveInputStream(is, TarConstants.DEFAULT_BLKSIZE, TarConstants.DEFAULT_RCDSIZE, CharsetNames.UTF_8);
+
+        TarArchiveEntry entry = tar.getNextTarEntry();
+        assertNotNull(entry);
+        assertEquals("longname", entry.getName()); // Should get the name from the long name entry
+    }
+
+    /**
+     * Test the Pax header parsing for path.
+     */
+    @Test
+    public void testPaxHeaderPath() throws Exception {
+        // Header for Pax header entry
+        byte[] paxHeader = new byte[TarConstants.DEFAULT_RCDSIZE];
+        paxHeader[TarConstants.FILENAME_OFFSET] = (byte) 0; // placeholder for name
+        paxHeader[156] = (byte) 0x78; // Type 'x' for extended header
+
+        // Pax header data: "17 path=newname.txt\n"
+        byte[] paxData = "17 path=newname.txt\n".getBytes(CharsetNames.UTF_8);
+
+        // Header for the actual file entry
+        byte[] fileHeader = new byte[TarConstants.DEFAULT_RCDSIZE];
+        ArchiveUtils.matchAsciiBuffer("oldname.txt", fileHeader, 0, "oldname.txt".length());
+        fileHeader[104] = (byte) 0x00; fileHeader[105] = (byte) 0x00; fileHeader[106] = (byte) 0x00; fileHeader[107] = (byte) 0x00; // size = 0
+        fileHeader[156] = (byte) 0x00; // Type = regular file
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        baos.write(paxHeader);
+        baos.write(paxData);
+        baos.write(fileHeader);
+
+        InputStream is = new ByteArrayInputStream(baos.toByteArray());
+        TarArchiveInputStream tar = new TarArchiveInputStream(is, TarConstants.DEFAULT_BLKSIZE, TarConstants.DEFAULT_RCDSIZE, CharsetNames.UTF_8);
+
+        TarArchiveEntry entry = tar.getNextTarEntry();
+        assertNotNull(entry);
+        assertEquals("newname.txt", entry.getName()); // Name should be updated by Pax header
+    }
+
+    /**
+     * Test the Pax header parsing for size.
+     */
+    @Test
+    public void testPaxHeaderSize() throws Exception {
+        // Header for Pax header entry
+        byte[] paxHeader = new byte[TarConstants.DEFAULT_RCDSIZE];
+        paxHeader[TarConstants.FILENAME_OFFSET] = (byte) 0; // placeholder for name
+        paxHeader[156] = (byte) 0x78; // Type 'x' for extended header
+
+        // Pax header data: "11 size=100\n"
+        byte[] paxData = "11 size=100\n".getBytes(CharsetNames.UTF_8);
+
+        // Header for the actual file entry with a different initial size
+        byte[] fileHeader = new byte[TarConstants.DEFAULT_RCDSIZE];
+        ArchiveUtils.matchAsciiBuffer("file.txt", fileHeader, 0, "file.txt".length());
+        fileHeader[104] = (byte) 0x00; fileHeader[105] = (byte) 0x00; fileHeader[106] = (byte) 0x00; fileHeader[107] = (byte) 0x10; // size = 16
+        fileHeader[156] = (byte) 0x00; // Type = regular file
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        baos.write(paxHeader);
+        baos.write(paxData);
+        baos.write(fileHeader);
+
+        InputStream is = new ByteArrayInputStream(baos.toByteArray());
+        TarArchiveInputStream tar = new TarArchiveInputStream(is, TarConstants.DEFAULT_BLKSIZE, TarConstants.DEFAULT_RCDSIZE, CharsetNames.UTF_8);
+
+        TarArchiveEntry entry = tar.getNextTarEntry();
+        assertNotNull(entry);
+        assertEquals(100L, entry.getSize()); // Size should be updated by Pax header
+    }
+
+    /**
+     * Test available() when entry size is smaller than Integer.MAX_VALUE.
+     */
+    @Test
+    public void testAvailableSmallerThanMaxInt() throws Exception {
+        byte[] header = new byte[TarConstants.DEFAULT_RCDSIZE];
+        header[104] = (byte) 0x00; header[105] = (byte) 0x00; header[106] = (byte) 0x00; header[107] = (byte) 0x0A; // size = 10
+        header[156] = (byte) 0x00; // Type = regular file
+
+        byte[] content = new byte[10];
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        baos.write(header);
+        baos.write(content);
+
+        InputStream is = new ByteArrayInputStream(baos.toByteArray());
+        TarArchiveInputStream tar = new TarArchiveInputStream(is);
+        tar.getNextTarEntry();
+
+        assertEquals(10, tar.available());
+        tar.skip(5);
+        assertEquals(5, tar.available());
+    }
+
+    /**
+     * Test available() when entry size is larger than Integer.MAX_VALUE.
+     */
+    @Test
+    public void testAvailableLargerThanMaxInt() throws Exception {
+        byte[] header = new byte[TarConstants.DEFAULT_RCDSIZE];
+        header[104] = (byte) 0x7F; header[105] = (byte) 0xFF; header[106] = (byte) 0xFF; header[107] = (byte) 0xFF; // size close to max int
+        header[156] = (byte) 0x00; // Type = regular file
+
+        byte[] content = new byte[TarConstants.DEFAULT_RCDSIZE]; // Fill up a record
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        baos.write(header);
+        for (int i = 0; i < (Integer.MAX_VALUE - TarConstants.DEFAULT_RCDSIZE); i++) {
+            baos.write(content[i % content.length]); // Write enough to exceed max int
+        }
+
+        InputStream is = new ByteArrayInputStream(baos.toByteArray());
+        TarArchiveInputStream tar = new TarArchiveInputStream(is);
+        tar.getNextTarEntry();
+
+        assertEquals(Integer.MAX_VALUE, tar.available());
+    }
+
+    /**
+     * Test that close() calls the underlying stream's close().
+     */
+    @Test
+    public void testCloseCallsUnderlyingClose() throws Exception {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        InputStream is = new ByteArrayInputStream(new byte[0]) {
+            @Override
+            public void close() throws IOException {
+                baos.write("closed".getBytes());
+            }
+        };
+        TarArchiveInputStream tar = new TarArchiveInputStream(is);
+        tar.close();
+        assertTrue(new String(baos.toByteArray()).contains("closed"));
+    }
+
+    /**
+     * Test that getNextEntry delegates to getNextTarEntry.
+     */
+    @Test
+    public void testGetNextEntryDelegates() throws Exception {
+        byte[] header = new byte[TarConstants.DEFAULT_RCDSIZE];
+        header[156] = (byte) 0x00; // Type = regular file
+
+        InputStream is = new ByteArrayInputStream(header);
+        TarArchiveInputStream tar = new TarArchiveInputStream(is);
+        ArchiveEntry entry = tar.getNextEntry();
+        assertNotNull(entry);
+        assertTrue(entry instanceof TarArchiveEntry);
+    }
+
+    // Helper method to create a minimal tar entry
+    private byte[] createTarHeader(String name, long size, byte type) {
+        byte[] header = new byte[TarConstants.DEFAULT_RCDSIZE];
+        ArchiveUtils.matchAsciiBuffer(name, header, TarConstants.FILENAME_OFFSET, name.length());
+        header[TarConstants.MODE_OFFSET] = (byte) 0x00; // default mode
+        header[TarConstants.MODE_OFFSET + 1] = (byte) 0x00;
+        header[TarConstants.SIZE_OFFSET] = (byte) ((size >> 24) & 0xFF);
+        header[TarConstants.SIZE_OFFSET + 1] = (byte) ((size >> 16) & 0xFF);
+        header[TarConstants.SIZE_OFFSET + 2] = (byte) ((size >> 8) & 0xFF);
+        header[TarConstants.SIZE_OFFSET + 3] = (byte) (size & 0xFF);
+        header[TarConstants.TYPEFLAG_OFFSET] = type;
+        // Checksum is 0 for this minimal header
+        return header;
+    }
+
+    // Helper class for ByteArrayInputStream with close override
+    private static class ByteArrayInputStream extends java.io.ByteArrayInputStream {
+        public ByteArrayInputStream(byte[] buf) {
+            super(buf);
+        }
+
+        @Override
+        public void close() throws IOException {
+            // Do nothing to allow testing calls to it
+        }
+    }
+}
+```
+
+1. SOURCE CODE ANALYSIS - The tests cover `getNextTarEntry`, `skip`, `read`, `available`, `canReadEntryData`, `getCurrentEntry`, `matches`, `close`, and the constructors. They also test parsing of long names and Pax headers.
+2. TEST CASE DESIGN -
+    - `testConstructorDefault`: Default constructor. Expected: `tar` object is not null, record size is default. Derived from constructor logic.
+    - `testConstructorBlockSize`: Constructor with block size. Expected: `tar` object is not null, record size matches input. Derived from constructor logic.
+    - `testConstructorBlockRecordSize`: Constructor with block and record size. Expected: `tar` object is not null, record size matches input. Derived from constructor logic.
+    - `testConstructorEncoding`: Constructor with encoding. Expected: `tar` object is not null. Derived from constructor logic.
+    - `testGetNextTarEntryEmptyStream`: Empty stream. Expected: `null`. Derived from `isEOFRecord` and stream reading logic.
+    - `testGetNextTarEntryEOFRecord`: Stream with only EOF record. Expected: `null`. Derived from `isEOFRecord`.
+    - `testGetNextTarEntrySimple`: Simple tar entry. Expected: `TarArchiveEntry` with correct name and size. Derived from header parsing.
+    - `testSkipValidEntry`: Skip within entry. Expected: correct number of bytes skipped. Derived from `skip` logic.
+    - `testSkipBeyondEntry`: Skip more than available. Expected: all available bytes skipped. Derived from `Math.min` in `skip`.
+    - `testReadSimpleEntry`: Read from entry. Expected: correct bytes read. Derived from `is.read` and `entryOffset` updates.
+    - `testReadBeyondEntry`: Read beyond entry. Expected: correct bytes read then -1. Derived from `available()` and `is.read` return value.
+    - `testCanReadEntryDataNonSparse`: Non-sparse entry. Expected: `true`. Derived from `canReadEntryData` logic.
+    - `testCanReadEntryDataSparse`: Sparse entry. Expected: `false`. Derived from `canReadEntryData` logic.
+    - `testCanReadEntryDataNonTarEntry`: Non-TarArchiveEntry. Expected: `false`. Derived from type check in `canReadEntryData`.
+    - `testGetCurrentEntry`: Get current entry. Expected: correct `TarArchiveEntry` instance. Derived from `currEntry` field.
+    - `testMatchesPosix`: Valid POSIX signature. Expected: `true`. Derived from `matches` logic.
+    - `testMatchesGnu`: Valid GNU signature. Expected: `true`. Derived from `matches` logic.
+    - `testMatchesAnt`: Valid Ant signature. Expected: `true`. Derived from `matches` logic.
+    - `testMatchesInvalid`: Invalid signature. Expected: `false`. Derived from `matches` logic.
+    - `testGetNextTarEntryLongName`: Long name entry. Expected: entry name from long name data. Derived from `isGNULongNameEntry` and `getLongNameData` logic.
+    - `testPaxHeaderPath`: Pax header for path. Expected: entry name updated. Derived from `paxHeaders` and `applyPaxHeadersToCurrentEntry`.
+    - `testPaxHeaderSize`: Pax header for size. Expected: entry size updated. Derived from `paxHeaders` and `applyPaxHeadersToCurrentEntry`.
+    - `testAvailableSmallerThanMaxInt`: Available when entry size < max int. Expected: correct available bytes. Derived from `entrySize - entryOffset`.
+    - `testAvailableLargerThanMaxInt`: Available when entry size > max int. Expected: `Integer.MAX_VALUE`. Derived from `available()` logic.
+    - `testCloseCallsUnderlyingClose`: Close method. Expected: underlying stream's close is called. Derived from `close()` implementation.
+    - `testGetNextEntryDelegates`: `getNextEntry` delegation. Expected: delegates to `getNextTarEntry`. Derived from `getNextEntry` implementation.
+4. DEFECT DETECTION STRATEGY - Tests cover various entry types, header parsing (including extended formats like GNU long names and Pax headers), stream operations (read, skip, available), and matching logic. This aims to detect defects in data handling, size calculations, and parsing logic.
+5. SUMMARY - 26 tests.
+6. LIMITATIONS - The tests rely on manually constructing tar headers, which is complex. Some edge cases of Pax and GNU sparse headers are not fully tested due to complexity. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.
