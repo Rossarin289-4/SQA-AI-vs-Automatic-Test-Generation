@@ -1,5 +1,13 @@
 # TestBench — AI vs Search-based Test Generation on Defects4J
 
+### สมาชิกกลุ่ม
+
+| ลำดับ | ชื่อ-นามสกุล | รหัสนักศึกษา |
+|:---:|---|:---:|
+| 1 | นางสาวกัญญาวี ศรีเหรา | 673380026-6 |
+| 2 | นางสาวรสริน เมืองหงษ์ | 673380289-4 |
+| 3 | นางสาวสโรชา เสาทอง | 673380296-7 |
+
 เครื่องมือเปรียบเทียบการสร้าง unit test ด้วย **AI (LLM)** กับ **algorithm ค้นหา (Simulated Annealing / Binary PSO)** บนชุดข้อมูล **Defects4J 3.0.1** — วัดว่า test ที่สร้างได้ตรวจพบ bug จริงหรือไม่ (FAIL บนเวอร์ชัน buggy และ PASS บนเวอร์ชัน fixed) พร้อม line coverage, เวลา และค่าใช้จ่าย AI
 
 โค้ดทั้งหมดอยู่ใน [`testbench/`](testbench/) · คู่มือฉบับเต็ม: [`testbench/README.md`](testbench/README.md) · แผนภาพการทำงาน: [`testbench/docs/ARCHITECTURE.md`](testbench/docs/ARCHITECTURE.md)
