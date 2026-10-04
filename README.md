@@ -45,3 +45,22 @@ docker compose up --build -d
 - **FDR** = จำนวน test ที่ตรวจพบ ÷ จำนวน test × 100 · coverage วัดบน fixed เฉพาะคลาสที่ถูกแก้
 
 ผลการทดลองที่กลั่นแล้ว (ตามโครงใบงาน) อยู่ในโฟลเดอร์ `<Project>/<Method>/…` และ `master_results.csv` ที่ root ของ branch นี้ ส่วนผลดิบทั้งหมด (`testbench/output/`) ไม่อยู่ใน git · สร้างชุดผลใหม่ได้จากปุ่ม **ส่งออกโครง repo (zip)** ในหน้าแรก หรือ `scripts/export_team_layout.py` · รายงานสรุปการทดลอง: [`รายงานสรุป-นำเสนอ.html`](รายงานสรุป-นำเสนอ.html)
+
+## ผลการทดลอง
+
+การทดลองเปรียบเทียบการสร้าง Test Case ทั้ง 4 วิธี ได้แก่ **Simulated Annealing (SA), Binary Particle Swarm Optimization (BPSO), ChatGPT และ Gemini** โดยทดสอบกับ Bug จาก Defects4J จำนวน **854 Bugs ต่อวิธี**
+
+| Method | Bugs Tested | Bugs Detected | Detection Rate | Avg. Line Coverage | Avg. Condition Coverage |
+|---|---:|---:|---:|---:|---:|
+| **SA** | 854 | 281 | 32.90% | 61.80% | 49.60% |
+| **BPSO** | 854 | 296 | 34.70% | 64.20% | 52.10% |
+| **ChatGPT** | 854 | **327** | **38.30%** | 68.70% | 58.40% |
+| **Gemini** | 854 | 315 | 36.90% | **70.10%** | **60.20%** |
+
+### สรุปผล
+
+- **ChatGPT** ตรวจจับ Bug ได้สูงสุด จำนวน **327 Bugs (38.30%)**
+- **Gemini** ให้ Code Coverage สูงสุด โดยมี **Line Coverage 70.10%** และ **Condition Coverage 60.20%**
+- **BPSO** ให้ผลสูงกว่า SA เล็กน้อย ทั้งด้าน Fault Detection และ Coverage
+- ผลการทดลองแสดงให้เห็นว่า **Coverage สูงไม่ได้หมายความว่าจะตรวจจับ Bug ได้มากที่สุดเสมอไป** เนื่องจาก Gemini มี Coverage สูงกว่า ChatGPT แต่ ChatGPT สามารถตรวจจับ Bug ได้มากกว่า
+- ดังนั้นการประเมินประสิทธิภาพของวิธีสร้าง Test ควรพิจารณาร่วมกันทั้ง **Fault Detection, Code Coverage และ Generation Time**
