@@ -1,0 +1,288 @@
+```java
+package org.apache.commons.compress.archivers.tar;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.io.File;
+import java.io.IOException;
+import java.io.OutputStream;
+import org.apache.commons.compress.archivers.ArchiveEntry;
+import org.apache.commons.compress.archivers.ArchiveOutputStream;
+import org.apache.commons.compress.utils.ArchiveUtils;
+import org.apache.commons.compress.utils.CountingOutputStream;
+
+public class TarArchiveOutputStreamTest {
+    @Test
+    public void testInitialCountsAndRecordSize() throws Exception {
+        TarArchiveOutputStream tar = new TarArchiveOutputStream(new java.io.ByteArrayOutputStream());
+        assertEquals(0L, tar.getBytesWritten());
+        assertEquals(0, tar.getCount());
+        assertEquals(512, tar.getRecordSize());
+    }
+
+    @Test
+    public void testWriteExactEntrySizeAndFinish() throws Exception {
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        TarArchiveOutputStream tar = new TarArchiveOutputStream(bytes);
+        TarArchiveEntry entry = new TarArchiveEntry("a");
+        entry.setSize(3);
+        tar.putArchiveEntry(entry);
+        tar.write(new byte[] {1, 2, 3}, 0, 3);
+        tar.closeArchiveEntry();
+        tar.finish();
+        assertEquals(1024L, tar.getBytesWritten());
+    }
+
+    @Test
+    public void testWriteZeroLengthEntry() throws Exception {
+        TarArchiveOutputStream tar = new TarArchiveOutputStream(new java.io.ByteArrayOutputStream());
+        TarArchiveEntry entry = new TarArchiveEntry("zero");
+        entry.setSize(0);
+        tar.putArchiveEntry(entry);
+        tar.closeArchiveEntry();
+        tar.finish();
+        assertEquals(1024L, tar.getBytesWritten());
+    }
+
+    @Test
+    public void testWriteEntryInSeveralChunks() throws Exception {
+        TarArchiveOutputStream tar = new TarArchiveOutputStream(new java.io.ByteArrayOutputStream());
+        TarArchiveEntry entry = new TarArchiveEntry("chunks");
+        entry.setSize(3);
+        tar.putArchiveEntry(entry);
+        tar.write(new byte[] {1}, 0, 1);
+        tar.write(new byte[] {2, 3}, 0, 2);
+        tar.closeArchiveEntry();
+        tar.finish();
+        assertEquals(1024L, tar.getBytesWritten());
+    }
+
+    @Test
+    public void testWriteExactlyOneRecord() throws Exception {
+        TarArchiveOutputStream tar = new TarArchiveOutputStream(new java.io.ByteArrayOutputStream());
+        TarArchiveEntry entry = new TarArchiveEntry("record");
+        entry.setSize(512);
+        tar.putArchiveEntry(entry);
+        tar.write(new byte[512], 0, 512);
+        tar.closeArchiveEntry();
+        assertEquals(1024L, tar.getBytesWritten());
+        tar.finish();
+        assertEquals(2048L, tar.getBytesWritten());
+    }
+
+    @Test
+    public void testRejectWritePastDeclaredSize() throws Exception {
+        TarArchiveOutputStream tar = new TarArchiveOutputStream(new java.io.ByteArrayOutputStream());
+        TarArchiveEntry entry = new TarArchiveEntry("limit");
+        entry.setSize(1);
+        tar.putArchiveEntry(entry);
+        try {
+            tar.write(new byte[] {1, 2}, 0, 2);
+            fail("expected IOException");
+        } catch (IOException expected) { }
+        tar.write(new byte[] {1}, 0, 1);
+        tar.closeArchiveEntry();
+        assertEquals(512L, tar.getBytesWritten());
+    }
+
+    @Test
+    public void testRejectClosingShortEntry() throws Exception {
+        TarArchiveOutputStream tar = new TarArchiveOutputStream(new java.io.ByteArrayOutputStream());
+        TarArchiveEntry entry = new TarArchiveEntry("short");
+        entry.setSize(2);
+        tar.putArchiveEntry(entry);
+        tar.write(new byte[] {1}, 0, 1);
+        try {
+            tar.closeArchiveEntry();
+            fail("expected IOException");
+        } catch (IOException expected) { }
+        assertEquals(512L, tar.getBytesWritten());
+    }
+
+    @Test
+    public void testRejectClosingWithoutEntry() throws Exception {
+        TarArchiveOutputStream tar = new TarArchiveOutputStream(new java.io.ByteArrayOutputStream());
+        try {
+            tar.closeArchiveEntry();
+            fail("expected IOException");
+        } catch (IOException expected) { }
+        assertEquals(0L, tar.getBytesWritten());
+    }
+
+    @Test
+    public void testLongNameAtLimitWithDefaultMode() throws Exception {
+        TarArchiveOutputStream tar = new TarArchiveOutputStream(new java.io.ByteArrayOutputStream());
+        TarArchiveEntry entry = new TarArchiveEntry(repeat('n', 100));
+        try {
+            tar.putArchiveEntry(entry);
+            fail("expected RuntimeException");
+        } catch (RuntimeException expected) { }
+        assertEquals(0L, tar.getBytesWritten());
+    }
+
+    @Test
+    public void testLongNameTruncateMode() throws Exception {
+        TarArchiveOutputStream tar = new TarArchiveOutputStream(new java.io.ByteArrayOutputStream());
+        tar.setLongFileMode(TarArchiveOutputStream.LONGFILE_TRUNCATE);
+        TarArchiveEntry entry = new TarArchiveEntry(repeat('n', 100));
+        entry.setSize(0);
+        tar.putArchiveEntry(entry);
+        tar.closeArchiveEntry();
+        tar.finish();
+        assertEquals(1536L, tar.getBytesWritten());
+    }
+
+    @Test
+    public void testLongNameGnuMode() throws Exception {
+        TarArchiveOutputStream tar = new TarArchiveOutputStream(new java.io.ByteArrayOutputStream());
+        tar.setLongFileMode(TarArchiveOutputStream.LONGFILE_GNU);
+        TarArchiveEntry entry = new TarArchiveEntry(repeat('n', 100));
+        entry.setSize(0);
+        tar.putArchiveEntry(entry);
+        tar.closeArchiveEntry();
+        tar.finish();
+        assertEquals(2048L, tar.getBytesWritten());
+    }
+
+    @Test
+    public void testSetLongFileModeBackToError() throws Exception {
+        TarArchiveOutputStream tar = new TarArchiveOutputStream(new java.io.ByteArrayOutputStream());
+        tar.setLongFileMode(TarArchiveOutputStream.LONGFILE_TRUNCATE);
+        tar.setLongFileMode(TarArchiveOutputStream.LONGFILE_ERROR);
+        try {
+            tar.putArchiveEntry(new TarArchiveEntry(repeat('x', 100)));
+            fail("expected RuntimeException");
+        } catch (RuntimeException expected) { }
+        assertEquals(0L, tar.getBytesWritten());
+    }
+
+    @Test
+    public void testFinishRejectsUnclosedEntry() throws Exception {
+        TarArchiveOutputStream tar = new TarArchiveOutputStream(new java.io.ByteArrayOutputStream());
+        TarArchiveEntry entry = new TarArchiveEntry("open");
+        entry.setSize(0);
+        tar.putArchiveEntry(entry);
+        try {
+            tar.finish();
+            fail("expected IOException");
+        } catch (IOException expected) { }
+        tar.closeArchiveEntry();
+        tar.finish();
+        assertEquals(1024L, tar.getBytesWritten());
+    }
+
+    @Test
+    public void testFinishCanOnlyBeCalledOnce() throws Exception {
+        TarArchiveOutputStream tar = new TarArchiveOutputStream(new java.io.ByteArrayOutputStream());
+        tar.finish();
+        try {
+            tar.finish();
+            fail("expected IOException");
+        } catch (IOException expected) { }
+        assertEquals(1024L, tar.getBytesWritten());
+    }
+
+    @Test
+    public void testEntryCannotBeAddedAfterFinish() throws Exception {
+        TarArchiveOutputStream tar = new TarArchiveOutputStream(new java.io.ByteArrayOutputStream());
+        tar.finish();
+        try {
+            tar.putArchiveEntry(new TarArchiveEntry("late"));
+            fail("expected IOException");
+        } catch (IOException expected) { }
+        assertEquals(1024L, tar.getBytesWritten());
+    }
+
+    @Test
+    public void testCreateArchiveEntryBeforeFinish() throws Exception {
+        TarArchiveOutputStream tar = new TarArchiveOutputStream(new java.io.ByteArrayOutputStream());
+        ArchiveEntry entry = tar.createArchiveEntry(new File("x"), "entry");
+        assertEquals("entry", entry.getName());
+        assertEquals(0L, tar.getBytesWritten());
+    }
+
+    @Test
+    public void testCreateArchiveEntryAfterFinish() throws Exception {
+        TarArchiveOutputStream tar = new TarArchiveOutputStream(new java.io.ByteArrayOutputStream());
+        tar.finish();
+        try {
+            tar.createArchiveEntry(new File("x"), "entry");
+            fail("expected IOException");
+        } catch (IOException expected) { }
+        assertEquals(1024L, tar.getBytesWritten());
+    }
+
+    @Test
+    public void testFlushDoesNotFinishArchive() throws Exception {
+        TarArchiveOutputStream tar = new TarArchiveOutputStream(new java.io.ByteArrayOutputStream());
+        tar.flush();
+        assertEquals(0L, tar.getBytesWritten());
+    }
+
+    @Test
+    public void testCloseFinishesArchive() throws Exception {
+        TarArchiveOutputStream tar = new TarArchiveOutputStream(new java.io.ByteArrayOutputStream());
+        tar.close();
+        assertEquals(1024L, tar.getBytesWritten());
+    }
+
+    @Test
+    public void testDirectorySizeIsTreatedAsZero() throws Exception {
+        TarArchiveOutputStream tar = new TarArchiveOutputStream(new java.io.ByteArrayOutputStream());
+        TarArchiveEntry directory = new TarArchiveEntry("dir/");
+        directory.setSize(12);
+        tar.putArchiveEntry(directory);
+        tar.closeArchiveEntry();
+        tar.finish();
+        assertEquals(1536L, tar.getBytesWritten());
+    }
+
+    private static String repeat(char c, int count) {
+        StringBuilder value = new StringBuilder(count);
+        for (int i = 0; i < count; i++) {
+            value.append(c);
+        }
+        return value.toString();
+    }
+}
+```
+
+1. SOURCE CODE ANALYSIS
+
+Method selection is exploratory because no target method was specified. Tests exercise entry writing and buffering, long-name modes, finish/close state, and archive-entry creation.
+
+2. TEST CASE DESIGN
+
+- Initial counts: new stream reports 0 bytes and 512-byte records.
+- Exact entry size 3: header and EOF records total 1024 bytes.
+- Zero-size entry: close succeeds; EOF records total 1024 bytes.
+- Chunked size 3: assembled content is padded to one record; total 1024 bytes.
+- Size 512: header plus content gives 1024 bytes before finish; finish adds 1024.
+- Write 2 bytes for size 1: rejected; writing exactly 1 then closes successfully.
+- Close size-2 entry after 1 byte: rejected after the partial record is emitted.
+- Close with no current entry: rejected without writing.
+- Name length 100 in default mode: rejected before a header is written.
+- Name length 100 in truncate mode: entry and EOF records total 1536 bytes.
+- Name length 100 in GNU mode: long-link and entry headers plus EOF records total 2048 bytes.
+- Reset mode to error: long name is rejected and no record is written.
+- Finish with an open zero-size entry: rejected; after closing it, finish writes two EOF records.
+- Finish twice: second call is rejected; byte count remains 1024.
+- Add an entry after finish: rejected; byte count remains 1024.
+- Create entry named `entry`: returned entry exposes that name and does not write bytes.
+- Create entry after finish: rejected; byte count remains 1024.
+- Flush new stream: does not write archive data.
+- Close new stream: finishes archive with two EOF records.
+- Directory declared with size 12: directory is treated as zero-size; header and EOF records total 1536 bytes.
+
+4. DEFECT DETECTION STRATEGY
+
+Assertions pin exact byte counts and state-dependent successes or exception types across the stream’s principal branches. They do not establish detection without execution against both versions.
+
+5. SUMMARY
+
+19 tests.
+
+6. LIMITATIONS
+
+The class’s record and archive semantics are traced from the supplied source; behavior internal to TarBuffer and TarArchiveEntry is not independently verified.  
+Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

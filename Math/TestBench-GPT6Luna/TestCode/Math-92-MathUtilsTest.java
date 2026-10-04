@@ -1,0 +1,187 @@
+package org.apache.commons.math.util;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.math.BigDecimal;
+import java.util.Arrays;
+
+public class MathUtilsTest {
+    @Test
+    public void testCheckedIntegerAdditionAtBounds() throws Exception {
+        assertEquals(Integer.MAX_VALUE, MathUtils.addAndCheck(Integer.MAX_VALUE - 1, 1));
+        assertEquals(Integer.MIN_VALUE, MathUtils.addAndCheck(Integer.MIN_VALUE + 1, -1));
+        try { MathUtils.addAndCheck(Integer.MAX_VALUE, 1); fail("expected ArithmeticException"); }
+        catch (ArithmeticException expected) { }
+        try { MathUtils.addAndCheck(Integer.MIN_VALUE, -1); fail("expected ArithmeticException"); }
+        catch (ArithmeticException expected) { }
+    }
+
+    @Test
+    public void testBinomialCoefficientSpecialCasesAndSymmetry() throws Exception {
+        assertEquals(1L, MathUtils.binomialCoefficient(0, 0));
+        assertEquals(12L, MathUtils.binomialCoefficient(12, 1));
+        assertEquals(495L, MathUtils.binomialCoefficient(12, 4));
+        assertEquals(495L, MathUtils.binomialCoefficient(12, 8));
+    }
+
+    @Test
+    public void testBinomialCoefficientCheckedOverflowAndInputBounds() throws Exception {
+        assertEquals(7219428434016265740L, MathUtils.binomialCoefficient(66, 33));
+        try { MathUtils.binomialCoefficient(67, 33); fail("expected ArithmeticException"); }
+        catch (ArithmeticException expected) { }
+        try { MathUtils.binomialCoefficient(3, 4); fail("expected IllegalArgumentException"); }
+        catch (IllegalArgumentException expected) { }
+        try { MathUtils.binomialCoefficient(-1, 0); fail("expected IllegalArgumentException"); }
+        catch (IllegalArgumentException expected) { }
+    }
+
+    @Test
+    public void testBinomialCoefficientDoubleBranches() throws Exception {
+        assertEquals(1.0, MathUtils.binomialCoefficientDouble(0, 0), 0.0);
+        assertEquals(66.0, MathUtils.binomialCoefficientDouble(66, 1), 0.0);
+        assertEquals(2211.0, MathUtils.binomialCoefficientDouble(67, 2), 0.0);
+        assertEquals(1.0, MathUtils.binomialCoefficientDouble(12, 12), 0.0);
+    }
+
+    @Test
+    public void testBinomialCoefficientLogBranches() throws Exception {
+        assertEquals(0.0, MathUtils.binomialCoefficientLog(5, 0), 0.0);
+        assertEquals(Math.log(12.0), MathUtils.binomialCoefficientLog(12, 1), 0.0);
+        assertEquals(Math.log(495.0), MathUtils.binomialCoefficientLog(12, 4), 1e-14);
+        assertEquals(Math.log(MathUtils.binomialCoefficientDouble(100, 3)),
+                     MathUtils.binomialCoefficientLog(100, 3), 1e-14);
+    }
+
+    @Test
+    public void testHyperbolicFunctions() throws Exception {
+        assertEquals(1.0, MathUtils.cosh(0.0), 0.0);
+        assertEquals(0.0, MathUtils.sinh(0.0), 0.0);
+        assertEquals(MathUtils.cosh(-1.0), MathUtils.cosh(1.0), 0.0);
+        assertEquals(-MathUtils.sinh(1.0), MathUtils.sinh(-1.0), 0.0);
+    }
+
+    @Test
+    public void testDoubleEqualityIncludingNaN() throws Exception {
+        assertTrue(MathUtils.equals(Double.NaN, Double.NaN));
+        assertTrue(MathUtils.equals(0.0, -0.0));
+        assertFalse(MathUtils.equals(Double.NaN, 0.0));
+        assertFalse(MathUtils.equals(1.0, Math.nextUp(1.0)));
+    }
+
+    @Test
+    public void testFactorialIntegerBoundaries() throws Exception {
+        assertEquals(1L, MathUtils.factorial(0));
+        assertEquals(2432902008176640000L, MathUtils.factorial(20));
+        try { MathUtils.factorial(21); fail("expected ArithmeticException"); }
+        catch (ArithmeticException expected) { }
+        try { MathUtils.factorial(-1); fail("expected IllegalArgumentException"); }
+        catch (IllegalArgumentException expected) { }
+    }
+
+    @Test
+    public void testFactorialDoubleAndLog() throws Exception {
+        assertEquals(1.0, MathUtils.factorialDouble(0), 0.0);
+        assertEquals(2432902008176640000.0, MathUtils.factorialDouble(20), 0.0);
+        assertEquals(Math.floor(Math.exp(MathUtils.factorialLog(21)) + 0.5),
+                     MathUtils.factorialDouble(21), 0.0);
+        assertEquals(Math.log(120.0), MathUtils.factorialLog(5), 1e-14);
+        assertEquals(0.0, MathUtils.factorialLog(0), 0.0);
+    }
+
+    @Test
+    public void testGcdZeroAndNegativeInputs() throws Exception {
+        assertEquals(12, MathUtils.gcd(0, 12));
+        assertEquals(6, MathUtils.gcd(-54, 24));
+        assertEquals(1, MathUtils.gcd(17, 12));
+        assertEquals(Integer.MIN_VALUE, MathUtils.gcd(Integer.MIN_VALUE, 0));
+    }
+
+    @Test
+    public void testDoubleHashMatchesJdkDefinition() throws Exception {
+        assertEquals(Double.valueOf(3.5).hashCode(), MathUtils.hash(3.5));
+        assertEquals(Double.valueOf(Double.NaN).hashCode(), MathUtils.hash(Double.NaN));
+        assertEquals(Double.valueOf(0.0).hashCode(), MathUtils.hash(0.0));
+    }
+
+    @Test
+    public void testByteIndicator() throws Exception {
+        assertEquals((byte) 1, MathUtils.indicator((byte) 0));
+        assertEquals((byte) 1, MathUtils.indicator(Byte.MAX_VALUE));
+        assertEquals((byte) -1, MathUtils.indicator(Byte.MIN_VALUE));
+    }
+
+    @Test
+    public void testLcmIncludingZeroAndSigns() throws Exception {
+        assertEquals(0, MathUtils.lcm(0, 7));
+        assertEquals(42, MathUtils.lcm(-21, 6));
+        assertEquals(24, MathUtils.lcm(8, 12));
+        assertEquals(Integer.MIN_VALUE, MathUtils.lcm(Integer.MIN_VALUE, 1));
+    }
+
+    @Test
+    public void testLogarithmSpecialValuesAndOrdinaryValue() throws Exception {
+        assertEquals(3.0, MathUtils.log(2.0, 8.0), 1e-14);
+        assertEquals(Double.NEGATIVE_INFINITY, MathUtils.log(2.0, 0.0), 0.0);
+        assertTrue(Double.isNaN(MathUtils.log(2.0, -1.0)));
+    }
+
+    @Test
+    public void testCheckedIntegerMultiplicationBounds() throws Exception {
+        assertEquals(Integer.MAX_VALUE, MathUtils.mulAndCheck(Integer.MAX_VALUE, 1));
+        assertEquals(Integer.MIN_VALUE, MathUtils.mulAndCheck(Integer.MIN_VALUE, 1));
+        assertEquals(0, MathUtils.mulAndCheck(Integer.MIN_VALUE, 0));
+        try { MathUtils.mulAndCheck(Integer.MAX_VALUE, 2); fail("expected ArithmeticException"); }
+        catch (ArithmeticException expected) { }
+    }
+
+    @Test
+    public void testNextAfterAdjacentNumbersAndSpecialCases() throws Exception {
+        assertEquals(Math.nextUp(1.0), MathUtils.nextAfter(1.0, 2.0), 0.0);
+        assertEquals(Math.nextDown(1.0), MathUtils.nextAfter(1.0, 0.0), 0.0);
+        assertEquals(Double.MIN_VALUE, MathUtils.nextAfter(0.0, 0.0), 0.0);
+        assertEquals(-Double.MIN_VALUE, MathUtils.nextAfter(0.0, -1.0), 0.0);
+        assertEquals(Double.POSITIVE_INFINITY,
+                     MathUtils.nextAfter(Double.POSITIVE_INFINITY, 0.0), 0.0);
+    }
+
+    @Test
+    public void testScalbExponentAndSpecialCases() throws Exception {
+        assertEquals(12.0, MathUtils.scalb(3.0, 2), 0.0);
+        assertEquals(0.0, MathUtils.scalb(0.0, 100), 0.0);
+        assertEquals(Double.POSITIVE_INFINITY,
+                     MathUtils.scalb(Double.POSITIVE_INFINITY, -10), 0.0);
+        assertTrue(Double.isNaN(MathUtils.scalb(Double.NaN, 3)));
+    }
+
+    @Test
+    public void testNormalizeAngleAcrossInterval() throws Exception {
+        assertEquals(-Math.PI, MathUtils.normalizeAngle(Math.PI, 0.0), 0.0);
+        assertEquals(0.0, MathUtils.normalizeAngle(2.0 * Math.PI, 0.0), 1e-15);
+        assertEquals(Math.PI, MathUtils.normalizeAngle(0.0, Math.PI), 0.0);
+        assertEquals(-Math.PI, MathUtils.normalizeAngle(-Math.PI, 0.0), 0.0);
+    }
+
+    @Test
+    public void testRoundHalfUpAtPositiveAndNegativeTies() throws Exception {
+        assertEquals(2.0, MathUtils.round(1.5, 0), 0.0);
+        assertEquals(-2.0, MathUtils.round(-1.5, 0), 0.0);
+        assertEquals(1.24, MathUtils.round(1.235, 2), 1e-14);
+    }
+
+    @Test
+    public void testSignedIntegerAtThreeSignRegions() throws Exception {
+        assertEquals((byte) -1, MathUtils.sign(Byte.MIN_VALUE));
+        assertEquals((byte) 0, MathUtils.sign((byte) 0));
+        assertEquals((byte) 1, MathUtils.sign(Byte.MAX_VALUE));
+    }
+
+    @Test
+    public void testSubtractionOverflowBoundaries() throws Exception {
+        assertEquals(Integer.MAX_VALUE, MathUtils.subAndCheck(Integer.MAX_VALUE - 1, -1));
+        assertEquals(Integer.MIN_VALUE, MathUtils.subAndCheck(Integer.MIN_VALUE + 1, 1));
+        try { MathUtils.subAndCheck(Integer.MAX_VALUE, -1); fail("expected ArithmeticException"); }
+        catch (ArithmeticException expected) { }
+        try { MathUtils.subAndCheck(Integer.MIN_VALUE, 1); fail("expected ArithmeticException"); }
+        catch (ArithmeticException expected) { }
+    }
+}

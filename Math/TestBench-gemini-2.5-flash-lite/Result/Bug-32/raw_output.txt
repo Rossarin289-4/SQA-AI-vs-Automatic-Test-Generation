@@ -1,0 +1,511 @@
+```java
+package org.apache.commons.math3.geometry.euclidean.twod;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+import org.apache.commons.math3.exception.MathInternalError;
+import org.apache.commons.math3.geometry.euclidean.oned.Euclidean1D;
+import org.apache.commons.math3.geometry.euclidean.oned.Interval;
+import org.apache.commons.math3.geometry.euclidean.oned.IntervalsSet;
+import org.apache.commons.math3.geometry.euclidean.oned.Vector1D;
+import org.apache.commons.math3.geometry.partitioning.AbstractSubHyperplane;
+import org.apache.commons.math3.geometry.partitioning.BSPTree;
+import org.apache.commons.math3.geometry.partitioning.BSPTreeVisitor;
+import org.apache.commons.math3.geometry.partitioning.BoundaryAttribute;
+import org.apache.commons.math3.geometry.partitioning.SubHyperplane;
+import org.apache.commons.math3.geometry.partitioning.AbstractRegion;
+import org.apache.commons.math3.geometry.partitioning.utilities.AVLTree;
+import org.apache.commons.math3.geometry.partitioning.utilities.OrderedTuple;
+import org.apache.commons.math3.util.FastMath;
+
+public class PolygonsSetTest {
+
+    @Test
+    public void testConstructorEmpty() {
+        PolygonsSet ps = new PolygonsSet();
+        assertNotNull(ps);
+        assertEquals(0.0, ps.getSize(), 1.0e-9);
+        assertTrue(ps.isEmpty());
+    }
+
+    @Test
+    public void testConstructorWithTreeFullSpace() {
+        BSPTree<Euclidean2D> tree = new BSPTree<>(true);
+        PolygonsSet ps = new PolygonsSet(tree);
+        assertNotNull(ps);
+        assertEquals(Double.POSITIVE_INFINITY, ps.getSize(), 1.0e-9);
+        assertFalse(ps.isEmpty());
+    }
+
+    @Test
+    public void testConstructorWithTreeEmptySpace() {
+        BSPTree<Euclidean2D> tree = new BSPTree<>(false);
+        PolygonsSet ps = new PolygonsSet(tree);
+        assertNotNull(ps);
+        assertEquals(0.0, ps.getSize(), 1.0e-9);
+        assertTrue(ps.isEmpty());
+    }
+
+    @Test
+    public void testConstructorWithBoundaryEmpty() {
+        Collection<SubHyperplane<Euclidean2D>> boundary = new ArrayList<>();
+        PolygonsSet ps = new PolygonsSet(boundary);
+        assertNotNull(ps);
+        assertEquals(Double.POSITIVE_INFINITY, ps.getSize(), 1.0e-9); // Whole space if boundary is empty
+        assertFalse(ps.isEmpty());
+    }
+
+    @Test
+    public void testConstructorWithBox() {
+        PolygonsSet ps = new PolygonsSet(0.0, 1.0, 2.0, 3.0);
+        assertNotNull(ps);
+        assertEquals(1.0, ps.getSize(), 1.0e-9);
+        assertFalse(ps.isEmpty());
+    }
+
+    @Test
+    public void testBuildNew() {
+        BSPTree<Euclidean2D> tree = new BSPTree<>(true);
+        PolygonsSet ps1 = new PolygonsSet(tree);
+        PolygonsSet ps2 = ps1.buildNew(tree);
+        assertNotNull(ps2);
+        assertEquals(ps1.getSize(), ps2.getSize(), 1.0e-9);
+    }
+
+    @Test
+    public void testComputeGeometricalPropertiesFullSpace() {
+        BSPTree<Euclidean2D> tree = new BSPTree<>(true);
+        PolygonsSet ps = new PolygonsSet(tree);
+        ps.computeGeometricalProperties();
+        assertEquals(Double.POSITIVE_INFINITY, ps.getSize(), 1.0e-9);
+        assertTrue(ps.getBarycenter().isNaN());
+    }
+
+    @Test
+    public void testComputeGeometricalPropertiesEmptySpace() {
+        BSPTree<Euclidean2D> tree = new BSPTree<>(false);
+        PolygonsSet ps = new PolygonsSet(tree);
+        ps.computeGeometricalProperties();
+        assertEquals(0.0, ps.getSize(), 1.0e-9);
+        assertEquals(new Vector2D(0, 0), ps.getBarycenter());
+    }
+
+    @Test
+    public void testComputeGeometricalPropertiesInfinitePolygon() {
+        // Create a polygon with an open loop, which represents an infinite region
+        Line line = new Line(new Vector2D(0, 0), new Vector2D(1, 0));
+        Vector2D[] points = new Vector2D[] {
+            null,
+            line.toSpace(new Vector1D(-Float.MAX_VALUE)),
+            line.toSpace(new Vector1D(+Float.MAX_VALUE))
+        };
+        Vector2D[][] vertices = new Vector2D[][] { points };
+        PolygonsSet ps = new PolygonsSet();
+        // Manually set vertices to trigger infinite polygon calculation
+        ps.vertices = vertices;
+        ps.computeGeometricalProperties();
+        assertEquals(Double.POSITIVE_INFINITY, ps.getSize(), 1.0e-9);
+        assertTrue(ps.getBarycenter().isNaN());
+    }
+
+    @Test
+    public void testComputeGeometricalPropertiesFinitePolygon() {
+        // A simple square
+        Vector2D p1 = new Vector2D(0, 0);
+        Vector2D p2 = new Vector2D(1, 0);
+        Vector2D p3 = new Vector2D(1, 1);
+        Vector2D p4 = new Vector2D(0, 1);
+        Vector2D[] loop = new Vector2D[] {p1, p2, p3, p4};
+        Vector2D[][] vertices = new Vector2D[][] {loop};
+        PolygonsSet ps = new PolygonsSet();
+        ps.vertices = vertices;
+        ps.computeGeometricalProperties();
+        assertEquals(1.0, ps.getSize(), 1.0e-9);
+        assertEquals(new Vector2D(0.5, 0.5), ps.getBarycenter());
+    }
+
+    @Test
+    public void testComputeGeometricalPropertiesNegativeAreaPolygon() {
+        // A square with vertices in clockwise order, resulting in negative area
+        Vector2D p1 = new Vector2D(0, 0);
+        Vector2D p2 = new Vector2D(0, 1);
+        Vector2D p3 = new Vector2D(1, 1);
+        Vector2D p4 = new Vector2D(1, 0);
+        Vector2D[] loop = new Vector2D[] {p1, p2, p3, p4};
+        Vector2D[][] vertices = new Vector2D[][] {loop};
+        PolygonsSet ps = new PolygonsSet();
+        ps.vertices = vertices;
+        ps.computeGeometricalProperties();
+        assertEquals(Double.POSITIVE_INFINITY, ps.getSize(), 1.0e-9); // Negative area means infinite
+        assertTrue(ps.getBarycenter().isNaN());
+    }
+
+    @Test
+    public void testGetVerticesEmpty() {
+        PolygonsSet ps = new PolygonsSet();
+        Vector2D[][] verts = ps.getVertices();
+        assertNotNull(verts);
+        assertEquals(0, verts.length);
+    }
+
+    @Test
+    public void testGetVerticesFullSpace() {
+        BSPTree<Euclidean2D> tree = new BSPTree<>(true);
+        PolygonsSet ps = new PolygonsSet(tree);
+        Vector2D[][] verts = ps.getVertices();
+        assertNotNull(verts);
+        assertEquals(0, verts.length);
+    }
+
+    @Test
+    public void testGetVerticesBox() {
+        PolygonsSet ps = new PolygonsSet(0.0, 1.0, 0.0, 1.0);
+        Vector2D[][] verts = ps.getVertices();
+        assertNotNull(verts);
+        assertEquals(1, verts.length); // One loop for a box
+        assertEquals(4, verts[0].length); // 4 vertices for a square
+        assertEquals(new Vector2D(0.0, 0.0), verts[0][0]);
+        assertEquals(new Vector2D(1.0, 0.0), verts[0][1]);
+        assertEquals(new Vector2D(1.0, 1.0), verts[0][2]);
+        assertEquals(new Vector2D(0.0, 1.0), verts[0][3]);
+    }
+
+    @Test
+    public void testFollowLoopSingleInfiniteLine() {
+        Line line = new Line(new Vector2D(0, 0), new Vector2D(1, 0));
+        ComparableSegment segment = new ComparableSegment(null, null, line);
+        AVLTree<ComparableSegment> sorted = new AVLTree<>();
+        sorted.insert(segment);
+
+        PolygonsSet ps = new PolygonsSet();
+        List<ComparableSegment> loop = ps.followLoop(sorted.getSmallest(), sorted);
+
+        assertNotNull(loop);
+        assertEquals(1, loop.size());
+        // This case should be handled by getVertices, but we test followLoop directly
+        // It should result in a Vector2D[][] of size 1x3.
+    }
+
+    @Test
+    public void testFollowLoopOpenLoop() {
+        Line line1 = new Line(new Vector2D(0, 0), new Vector2D(1, 0));
+        Vector2D start1 = line1.toSpace(new Vector1D(-10));
+        Vector2D end1 = line1.toSpace(new Vector1D(-5));
+        ComparableSegment segment1 = new ComparableSegment(start1, end1, line1);
+
+        Line line2 = new Line(new Vector2D(1, 0), new Vector2D(1, 1));
+        Vector2D start2 = line2.toSpace(new Vector1D(0));
+        Vector2D end2 = line2.toSpace(new Vector1D(1));
+        ComparableSegment segment2 = new ComparableSegment(start2, end2, line2);
+
+        AVLTree<ComparableSegment> sorted = new AVLTree<>();
+        sorted.insert(segment1);
+        sorted.insert(segment2);
+
+        PolygonsSet ps = new PolygonsSet();
+        List<ComparableSegment> loop = ps.followLoop(sorted.getSmallest(), sorted);
+
+        assertNotNull(loop);
+        assertEquals(2, loop.size());
+        assertTrue(loop.contains(segment1));
+        assertTrue(loop.contains(segment2));
+    }
+
+    @Test
+    public void testFollowLoopClosedLoop() {
+        Line line1 = new Line(new Vector2D(0, 0), new Vector2D(1, 0));
+        Vector2D start1 = line1.toSpace(new Vector1D(0));
+        Vector2D end1 = line1.toSpace(new Vector1D(1));
+        ComparableSegment segment1 = new ComparableSegment(start1, end1, line1);
+
+        Line line2 = new Line(new Vector2D(1, 0), new Vector2D(1, 1));
+        Vector2D start2 = line2.toSpace(new Vector1D(0));
+        Vector2D end2 = line2.toSpace(new Vector1D(1));
+        ComparableSegment segment2 = new ComparableSegment(start2, end2, line2);
+
+        Line line3 = new Line(new Vector2D(1, 1), new Vector2D(0, 1));
+        Vector2D start3 = line3.toSpace(new Vector1D(1));
+        Vector2D end3 = line3.toSpace(new Vector1D(0));
+        ComparableSegment segment3 = new ComparableSegment(start3, end3, line3);
+
+        Line line4 = new Line(new Vector2D(0, 1), new Vector2D(0, 0));
+        Vector2D start4 = line4.toSpace(new Vector1D(1));
+        Vector2D end4 = line4.toSpace(new Vector1D(0));
+        ComparableSegment segment4 = new ComparableSegment(start4, end4, line4);
+
+        AVLTree<ComparableSegment> sorted = new AVLTree<>();
+        sorted.insert(segment1);
+        sorted.insert(segment2);
+        sorted.insert(segment3);
+        sorted.insert(segment4);
+
+        PolygonsSet ps = new PolygonsSet();
+        List<ComparableSegment> loop = ps.followLoop(sorted.getSmallest(), sorted);
+
+        assertNotNull(loop);
+        assertEquals(4, loop.size());
+        assertTrue(loop.contains(segment1));
+        assertTrue(loop.contains(segment2));
+        assertTrue(loop.contains(segment3));
+        assertTrue(loop.contains(segment4));
+    }
+
+    @Test
+    public void testComparableSegmentConstructor() {
+        Vector2D v = new Vector2D(1, 2);
+        Line l = new Line(v, new Vector2D(3, 4));
+        ComparableSegment cs = new ComparableSegment(v, v, l);
+        assertNotNull(cs);
+        assertEquals(v.getX(), cs.getStart().getX(), 1.0e-9);
+        assertEquals(v.getY(), cs.getStart().getY(), 1.0e-9);
+    }
+
+    @Test
+    public void testComparableSegmentConstructorNullStart() {
+        Line l = new Line(new Vector2D(0,0), new Vector2D(1,0));
+        ComparableSegment cs = new ComparableSegment(null, null, l);
+        assertNotNull(cs);
+        assertNull(cs.getStart());
+    }
+
+    @Test
+    public void testComparableSegmentCompareTo() {
+        Vector2D v1 = new Vector2D(1, 2);
+        Vector2D v2 = new Vector2D(2, 3);
+        Line l = new Line(v1, v2);
+        ComparableSegment cs1 = new ComparableSegment(v1, v1, l);
+        ComparableSegment cs2 = new ComparableSegment(v2, v2, l);
+
+        assertTrue(cs1.compareTo(cs1) == 0);
+        assertTrue(cs1.compareTo(cs2) < 0);
+        assertTrue(cs2.compareTo(cs1) > 0);
+    }
+
+    @Test
+    public void testComparableSegmentEquals() {
+        Vector2D v1 = new Vector2D(1, 2);
+        Vector2D v2 = new Vector2D(2, 3);
+        Line l = new Line(v1, v2);
+        ComparableSegment cs1 = new ComparableSegment(v1, v1, l);
+        ComparableSegment cs2 = new ComparableSegment(v1, v1, l);
+        ComparableSegment cs3 = new ComparableSegment(v2, v2, l);
+
+        assertTrue(cs1.equals(cs1));
+        assertTrue(cs1.equals(cs2));
+        assertFalse(cs1.equals(cs3));
+        assertFalse(cs1.equals(new Object()));
+    }
+
+    @Test
+    public void testComparableSegmentHashCode() {
+        Vector2D v1 = new Vector2D(1, 2);
+        Vector2D v2 = new Vector2D(2, 3);
+        Line l = new Line(v1, v2);
+        ComparableSegment cs1 = new ComparableSegment(v1, v1, l);
+        ComparableSegment cs2 = new ComparableSegment(v1, v1, l);
+        ComparableSegment cs3 = new ComparableSegment(v2, v2, l);
+
+        assertEquals(cs1.hashCode(), cs2.hashCode());
+        assertNotEquals(cs1.hashCode(), cs3.hashCode());
+    }
+
+    @Test
+    public void testSegmentsBuilderVisitInternalNodePlusOutside() {
+        BSPTree<Euclidean2D> node = new BSPTree<>();
+        BoundaryAttribute<Euclidean2D> attribute = new BoundaryAttribute<>(new Line(new Vector2D(0,0), new Vector2D(1,0)).wholeHyperplane(), null);
+        node.setAttribute(attribute);
+        
+        SegmentsBuilder visitor = new SegmentsBuilder();
+        visitor.visitInternalNode(node);
+
+        assertFalse(visitor.getSorted().isEmpty());
+    }
+
+    @Test
+    public void testSegmentsBuilderVisitInternalNodePlusInside() {
+        BSPTree<Euclidean2D> node = new BSPTree<>();
+        BoundaryAttribute<Euclidean2D> attribute = new BoundaryAttribute<>(null, new Line(new Vector2D(0,0), new Vector2D(1,0)).wholeHyperplane());
+        node.setAttribute(attribute);
+        
+        SegmentsBuilder visitor = new SegmentsBuilder();
+        visitor.visitInternalNode(node);
+
+        assertFalse(visitor.getSorted().isEmpty());
+    }
+
+    @Test
+    public void testSegmentsBuilderAddContributionReverse() {
+        Line line = new Line(new Vector2D(0,0), new Vector2D(1,0));
+        Interval interval = new Interval(0, 1);
+        IntervalsSet intervalsSet = new IntervalsSet(interval, Euclidean1D.getInstance());
+        AbstractSubHyperplane<Euclidean2D, Euclidean1D> sub = new AbstractSubHyperplane<Euclidean2D, Euclidean1D>(line, intervalsSet) {};
+
+        SegmentsBuilder visitor = new SegmentsBuilder();
+        visitor.addContribution(sub, true); // reversed
+
+        assertFalse(visitor.getSorted().isEmpty());
+        ComparableSegment segment = visitor.getSorted().getSmallest().getElement();
+        assertNotNull(segment.getStart());
+        assertNotNull(segment.getEnd());
+        // Reversed line means start and end are swapped compared to original line orientation
+        assertEquals(line.getReverse(), segment.getLine());
+    }
+
+    @Test
+    public void testSegmentsBuilderAddContributionNotReverse() {
+        Line line = new Line(new Vector2D(0,0), new Vector2D(1,0));
+        Interval interval = new Interval(0, 1);
+        IntervalsSet intervalsSet = new IntervalsSet(interval, Euclidean1D.getInstance());
+        AbstractSubHyperplane<Euclidean2D, Euclidean1D> sub = new AbstractSubHyperplane<Euclidean2D, Euclidean1D>(line, intervalsSet) {};
+
+        SegmentsBuilder visitor = new SegmentsBuilder();
+        visitor.addContribution(sub, false); // not reversed
+
+        assertFalse(visitor.getSorted().isEmpty());
+        ComparableSegment segment = visitor.getSorted().getSmallest().getElement();
+        assertNotNull(segment.getStart());
+        assertNotNull(segment.getEnd());
+        assertEquals(line, segment.getLine());
+    }
+
+    @Test
+    public void testGetVerticesSingleInfiniteLine() {
+        Line line = new Line(new Vector2D(0, 0), new Vector2D(1, 0));
+        Vector2D[] points = new Vector2D[] {
+            null,
+            line.toSpace(new Vector1D(-Float.MAX_VALUE)),
+            line.toSpace(new Vector1D(+Float.MAX_VALUE))
+        };
+        Vector2D[][] vertices = new Vector2D[][] { points };
+        PolygonsSet ps = new PolygonsSet();
+        ps.vertices = vertices;
+        Vector2D[][] actualVertices = ps.getVertices();
+        assertNotNull(actualVertices);
+        assertEquals(1, actualVertices.length);
+        assertEquals(3, actualVertices[0].length);
+        assertNull(actualVertices[0][0]);
+        assertEquals(line.toSpace(new Vector1D(-Float.MAX_VALUE)), actualVertices[0][1]);
+        assertEquals(line.toSpace(new Vector1D(+Float.MAX_VALUE)), actualVertices[0][2]);
+    }
+
+    @Test
+    public void testGetVerticesOpenLoopWithPoints() {
+        Line line1 = new Line(new Vector2D(0, 0), new Vector2D(1, 0));
+        Vector2D start1 = line1.toSpace(new Vector1D(-10));
+        Vector2D end1 = line1.toSpace(new Vector1D(-5));
+
+        Line line2 = new Line(new Vector2D(1, 0), new Vector2D(1, 1));
+        Vector2D start2 = line2.toSpace(new Vector1D(0));
+        Vector2D end2 = line2.toSpace(new Vector1D(1));
+
+        ComparableSegment segment1 = new ComparableSegment(start1, end1, line1);
+        ComparableSegment segment2 = new ComparableSegment(start2, end2, line2);
+
+        AVLTree<ComparableSegment> sorted = new AVLTree<>();
+        sorted.insert(segment1);
+        sorted.insert(segment2);
+
+        PolygonsSet ps = new PolygonsSet();
+        // Manually construct vertices array based on what followLoop would return
+        // This is to test getVertices logic when it processes the output of followLoop
+        ps.vertices = new Vector2D[][] {
+            new Vector2D[] {null, end1, start2, end2} // Mocking getVertices' processing
+        };
+
+        Vector2D[][] actualVertices = ps.getVertices();
+        assertNotNull(actualVertices);
+        assertEquals(1, actualVertices.length);
+        assertEquals(4, actualVertices[0].length); // null + 2 dummy points + 1 real point
+        assertNull(actualVertices[0][0]);
+        // Check the dummy point for the first segment
+        double x1_dummy = line1.toSubSpace(end1).getX() - FastMath.max(1.0, FastMath.abs(line1.toSubSpace(end1).getX() / 2));
+        assertEquals(line1.toSpace(new Vector1D(x1_dummy)), actualVertices[0][1]);
+        // Check the real point
+        assertEquals(segment2.getStart(), actualVertices[0][2]);
+        // Check the dummy point for the last segment (not needed as it's the start point of the next segment)
+        // The logic in getVertices is a bit complex here, so we test what's directly observable.
+    }
+
+    @Test
+    public void testGetVerticesClosedLoop() {
+        Line line1 = new Line(new Vector2D(0, 0), new Vector2D(1, 0));
+        Vector2D start1 = line1.toSpace(new Vector1D(0));
+        Vector2D end1 = line1.toSpace(new Vector1D(1));
+
+        Line line2 = new Line(new Vector2D(1, 0), new Vector2D(1, 1));
+        Vector2D start2 = line2.toSpace(new Vector1D(0));
+        Vector2D end2 = line2.toSpace(new Vector1D(1));
+
+        ComparableSegment segment1 = new ComparableSegment(start1, end1, line1);
+        ComparableSegment segment2 = new ComparableSegment(start2, end2, line2);
+
+        AVLTree<ComparableSegment> sorted = new AVLTree<>();
+        sorted.insert(segment1);
+        sorted.insert(segment2);
+
+        PolygonsSet ps = new PolygonsSet();
+        ps.vertices = new Vector2D[][] {
+            new Vector2D[] {start1, end1} // Mocking getVertices' processing of closed loop
+        };
+
+        Vector2D[][] actualVertices = ps.getVertices();
+        assertNotNull(actualVertices);
+        assertEquals(1, actualVertices.length);
+        assertEquals(2, actualVertices[0].length);
+        assertEquals(start1, actualVertices[0][0]);
+        assertEquals(end1, actualVertices[0][1]);
+    }
+
+    @Test
+    public void testGetVerticesFromBSP() {
+        // Create a simple box and use its boundary to build a BSP tree
+        PolygonsSet box = new PolygonsSet(0.0, 1.0, 0.0, 1.0);
+        BSPTree<Euclidean2D> tree = box.getTree(false);
+
+        PolygonsSet ps = new PolygonsSet(tree);
+        Vector2D[][] verts = ps.getVertices();
+        assertNotNull(verts);
+        assertEquals(1, verts.length); // Expecting one loop for the box
+        assertEquals(4, verts[0].length);
+    }
+}
+```
+
+1. SOURCE CODE ANALYSIS - The tests focus on constructors, methods for geometrical properties (`computeGeometricalProperties`), and methods for retrieving vertices (`getVertices`), as well as helper methods used internally (`followLoop`, `ComparableSegment` comparisons, and `SegmentsBuilder` visits).
+2. TEST CASE DESIGN -
+    @Test public void testConstructorEmpty() - No input, expected PolygonsSet(), derived from default constructor.
+    @Test public void testConstructorWithTreeFullSpace() - Input BSPTree(true), expected PolygonsSet, derived from constructor.
+    @Test public void testConstructorWithTreeEmptySpace() - Input BSPTree(false), expected PolygonsSet, derived from constructor.
+    @Test public void testConstructorWithBoundaryEmpty() - Input empty Collection, expected PolygonsSet, derived from constructor.
+    @Test public void testConstructorWithBox() - Input box bounds, expected PolygonsSet, derived from constructor.
+    @Test public void testBuildNew() - Input existing tree, expected new PolygonsSet, derived from buildNew method.
+    @Test public void testComputeGeometricalPropertiesFullSpace() - Input full space tree, expected infinite size, NaN barycenter, derived from computeGeometricalProperties.
+    @Test public void testComputeGeometricalPropertiesEmptySpace() - Input empty space tree, expected zero size, zero barycenter, derived from computeGeometricalProperties.
+    @Test public void testComputeGeometricalPropertiesInfinitePolygon() - Input with null vertex in vertices array, expected infinite size, NaN barycenter, derived from computeGeometricalProperties.
+    @Test public void testComputeGeometricalPropertiesFinitePolygon() - Input square vertices, expected size 1.0, barycenter (0.5, 0.5), derived from computeGeometricalProperties.
+    @Test public void testComputeGeometricalPropertiesNegativeAreaPolygon() - Input clockwise square vertices, expected infinite size, NaN barycenter, derived from computeGeometricalProperties.
+    @Test public void testGetVerticesEmpty() - No input, expected empty Vector2D[][], derived from getVertices on empty object.
+    @Test public void testGetVerticesFullSpace() - Input full space tree, expected empty Vector2D[][], derived from getVertices.
+    @Test public void testGetVerticesBox() - Input box, expected 4 vertices, derived from getVertices.
+    @Test public void testFollowLoopSingleInfiniteLine() - Input single segment, expected loop of size 1, derived from followLoop.
+    @Test public void testFollowLoopOpenLoop() - Input two segments forming an open loop, expected loop of size 2, derived from followLoop.
+    @Test public void testFollowLoopClosedLoop() - Input four segments forming a closed loop, expected loop of size 4, derived from followLoop.
+    @Test public void testComparableSegmentConstructor() - Input Vector2D and Line, expected ComparableSegment, derived from constructor.
+    @Test public void testComparableSegmentConstructorNullStart() - Input null start, expected ComparableSegment with null start, derived from constructor.
+    @Test public void testComparableSegmentCompareTo() - Input two segments, expected comparison result, derived from compareTo.
+    @Test public void testComparableSegmentEquals() - Input equal and unequal segments, expected equals result, derived from equals.
+    @Test public void testComparableSegmentHashCode() - Input equal and unequal segments, expected hash code equality, derived from hashCode.
+    @Test public void testSegmentsBuilderVisitInternalNodePlusOutside() - Input node with plusOutside boundary, expected non-empty sorted segments, derived from visitInternalNode.
+    @Test public void testSegmentsBuilderVisitInternalNodePlusInside() - Input node with plusInside boundary, expected non-empty sorted segments, derived from visitInternalNode.
+    @Test public void testSegmentsBuilderAddContributionReverse() - Input reversed sub-hyperplane, expected segment with reversed line, derived from addContribution.
+    @Test public void testSegmentsBuilderAddContributionNotReverse() - Input non-reversed sub-hyperplane, expected segment with original line, derived from addContribution.
+    @Test public void testGetVerticesSingleInfiniteLine() - Mocked vertices for single infinite line, expected specific format, derived from getVertices.
+    @Test public void testGetVerticesOpenLoopWithPoints() - Mocked vertices for open loop, expected specific format, derived from getVertices.
+    @Test public void testGetVerticesClosedLoop() - Mocked vertices for closed loop, expected specific format, derived from getVertices.
+    @Test public void testGetVerticesFromBSP() - Input box BSP tree, expected vertices for box, derived from getVertices and constructor.
+4. DEFECT DETECTION STRATEGY - Tests cover edge cases for geometrical properties calculation (full space, empty space, infinite, negative area), vertex extraction for different polygon types (box, open/closed loops, infinite lines), and internal helper logic for segment sorting and loop following.
+5. SUMMARY - 28 tests.
+6. LIMITATIONS - Tests do not cover all possible complex BSP tree structures or all combinations of open/closed loops. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

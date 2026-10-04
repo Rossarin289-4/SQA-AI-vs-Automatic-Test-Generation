@@ -1,0 +1,203 @@
+```java
+package com.fasterxml.jackson.databind;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.text.DateFormat;
+import java.util.*;
+import com.fasterxml.jackson.annotation.JsonAutoDetect;
+import com.fasterxml.jackson.annotation.JsonFormat;
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonAutoDetect.Visibility;
+import com.fasterxml.jackson.annotation.PropertyAccessor;
+import com.fasterxml.jackson.core.*;
+import com.fasterxml.jackson.databind.cfg.*;
+import com.fasterxml.jackson.databind.deser.DeserializationProblemHandler;
+import com.fasterxml.jackson.databind.introspect.*;
+import com.fasterxml.jackson.databind.jsontype.*;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.fasterxml.jackson.databind.type.TypeFactory;
+import com.fasterxml.jackson.databind.util.LinkedNode;
+import com.fasterxml.jackson.databind.util.RootNameLookup;
+import com.fasterxml.jackson.core.util.DefaultPrettyPrinter;
+import com.fasterxml.jackson.core.util.Instantiatable;
+import com.fasterxml.jackson.databind.introspect.ClassIntrospector;
+import com.fasterxml.jackson.databind.introspect.SimpleMixInResolver;
+import com.fasterxml.jackson.databind.introspect.VisibilityChecker;
+import com.fasterxml.jackson.databind.jsontype.SubtypeResolver;
+import com.fasterxml.jackson.databind.jsontype.TypeResolverBuilder;
+import com.fasterxml.jackson.databind.ser.FilterProvider;
+import com.fasterxml.jackson.databind.ser.SerializerFactory;
+
+public class DeserializationConfigTest {
+    private DeserializationConfig newConfig() {
+        BaseSettings base = new BaseSettings(
+                new com.fasterxml.jackson.databind.introspect.BasicClassIntrospector(),
+                com.fasterxml.jackson.databind.introspect.JacksonAnnotationIntrospector.instance,
+                VisibilityChecker.Std.defaultInstance(),
+                com.fasterxml.jackson.databind.jsontype.impl.StdTypeResolverBuilder.noTypeInfoBuilder(),
+                TypeFactory.defaultInstance(),
+                null, Locale.ROOT, TimeZone.getTimeZone("UTC"),
+                Base64Variants.getDefaultVariant(), null);
+        return new DeserializationConfig(base,
+                new com.fasterxml.jackson.databind.jsontype.impl.StdSubtypeResolver(),
+                new SimpleMixInResolver(null), new RootNameLookup());
+    }
+
+    @Test
+    public void testEnabledDefaultFeature() throws Exception {
+        DeserializationConfig c = newConfig();
+        assertTrue(c.isEnabled(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES));
+        assertFalse(c.isEnabled(DeserializationFeature.ACCEPT_SINGLE_VALUE_AS_ARRAY));
+    }
+
+    @Test
+    public void testEnableFeaturesTogether() throws Exception {
+        DeserializationConfig c = newConfig().withFeatures(
+                DeserializationFeature.ACCEPT_SINGLE_VALUE_AS_ARRAY,
+                DeserializationFeature.UNWRAP_SINGLE_VALUE_ARRAYS);
+        assertTrue(c.isEnabled(DeserializationFeature.ACCEPT_SINGLE_VALUE_AS_ARRAY));
+        assertTrue(c.hasDeserializationFeatures(
+                DeserializationFeature.ACCEPT_SINGLE_VALUE_AS_ARRAY.getMask()
+                | DeserializationFeature.UNWRAP_SINGLE_VALUE_ARRAYS.getMask()));
+    }
+
+    @Test
+    public void testDisableFeaturesTogether() throws Exception {
+        DeserializationConfig c = newConfig().withoutFeatures(
+                DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES,
+                DeserializationFeature.FAIL_ON_INVALID_SUBTYPE);
+        assertFalse(c.isEnabled(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES));
+        assertFalse(c.hasSomeOfFeatures(
+                DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES.getMask()
+                | DeserializationFeature.FAIL_ON_INVALID_SUBTYPE.getMask()));
+    }
+
+    @Test
+    public void testFeatureMasksExposeConfiguredBits() throws Exception {
+        DeserializationConfig c = newConfig().withFeatures(
+                DeserializationFeature.ACCEPT_SINGLE_VALUE_AS_ARRAY);
+        int mask = DeserializationFeature.ACCEPT_SINGLE_VALUE_AS_ARRAY.getMask();
+        assertEquals(mask, c.getDeserializationFeatures() & mask);
+        assertTrue(c.hasDeserializationFeatures(mask));
+        assertFalse(c.hasDeserializationFeatures(mask | 1));
+    }
+
+    @Test
+    public void testMapperFeaturesEnableAndDisable() throws Exception {
+        DeserializationConfig c = newConfig();
+        DeserializationConfig enabled = c.with(MapperFeature.ACCEPT_CASE_INSENSITIVE_PROPERTIES);
+        assertTrue(enabled.isEnabled(MapperFeature.ACCEPT_CASE_INSENSITIVE_PROPERTIES));
+        assertFalse(c.isEnabled(MapperFeature.ACCEPT_CASE_INSENSITIVE_PROPERTIES));
+        assertFalse(enabled.without(MapperFeature.ACCEPT_CASE_INSENSITIVE_PROPERTIES)
+                .isEnabled(MapperFeature.ACCEPT_CASE_INSENSITIVE_PROPERTIES));
+    }
+
+    @Test
+    public void testRootWrappingFeatureAndNameOverride() throws Exception {
+        DeserializationConfig c = newConfig().with(DeserializationFeature.UNWRAP_ROOT_VALUE);
+        assertTrue(c.useRootWrapping());
+        assertFalse(c.withRootName(PropertyName.construct("")).useRootWrapping());
+        assertTrue(c.withRootName(PropertyName.construct("root")).useRootWrapping());
+        assertFalse(newConfig().withRootName(null).useRootWrapping());
+    }
+
+    @Test
+    public void testRootNameNullAndEmptyNames() throws Exception {
+        DeserializationConfig c = newConfig();
+        assertFalse(c.withRootName(null).useRootWrapping());
+        assertFalse(c.withRootName(PropertyName.construct("")).useRootWrapping());
+        assertTrue(c.withRootName(PropertyName.construct("x")).useRootWrapping());
+    }
+
+    @Test
+    public void testHandlerRegistrationDeduplicatesSameObject() throws Exception {
+        DeserializationProblemHandler h = new DeserializationProblemHandler() { };
+        DeserializationConfig c = newConfig().withHandler(h);
+        assertSame(h, c.getProblemHandlers().value());
+        assertSame(c, c.withHandler(h));
+    }
+
+    @Test
+    public void testRemovingProblemHandlers() throws Exception {
+        DeserializationProblemHandler h = new DeserializationProblemHandler() { };
+        DeserializationConfig c = newConfig().withHandler(h).withNoProblemHandlers();
+        assertNull(c.getProblemHandlers());
+        assertSame(c, c.withNoProblemHandlers());
+    }
+
+    @Test
+    public void testNodeFactoryCanBeReplaced() throws Exception {
+        DeserializationConfig c = newConfig();
+        JsonNodeFactory factory = new JsonNodeFactory(false);
+        DeserializationConfig changed = c.with(factory);
+        assertSame(factory, changed.getNodeFactory());
+        assertSame(changed, changed.with(factory));
+    }
+
+    @Test
+    public void testDefaultPropertyInclusionAndFormat() throws Exception {
+        DeserializationConfig c = newConfig();
+        assertSame(c.getDefaultPropertyInclusion(), c.getDefaultPropertyInclusion(String.class));
+        assertSame(JsonInclude.Value.empty(), c.getDefaultPropertyInclusion());
+        assertSame(JsonFormat.Value.empty(), c.getDefaultPropertyFormat(String.class));
+    }
+
+    @Test
+    public void testAnnotationIntrospectorFeatureSwitch() throws Exception {
+        DeserializationConfig c = newConfig();
+        assertNotNull(c.getAnnotationIntrospector());
+        assertNotNull(c.without(MapperFeature.USE_ANNOTATIONS).getAnnotationIntrospector());
+    }
+
+    @Test
+    public void testViewCanBeSetAndCleared() throws Exception {
+        DeserializationConfig c = newConfig();
+        assertSame(c, c.withView(null));
+        assertNotSame(c, c.withView(String.class));
+        assertSame(c, c.withView(String.class).withView(null).withView(null));
+    }
+
+    @Test
+    public void testNoDefaultTypeDeserializerWithoutTypeMetadata() throws Exception {
+        DeserializationConfig c = newConfig();
+        assertNull(c.findTypeDeserializer(TypeFactory.defaultInstance().constructType(String.class)));
+    }
+
+    @Test
+    public void testEmptyFeatureMaskSemantics() throws Exception {
+        DeserializationConfig c = newConfig();
+        assertTrue(c.hasDeserializationFeatures(0));
+        assertFalse(c.hasSomeOfFeatures(0));
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+The target method is unspecified, so method selection is exploratory. Tests focus on feature masks and fluent configuration, root wrapping, problem-handler deduplication/removal, and factory/accessor behavior.
+
+### 2. TEST CASE DESIGN
+- `testEnabledDefaultFeature`: default enabled/disabled flags match collected feature defaults.
+- `testEnableFeaturesTogether`: enables both requested bits and confirms their combined mask.
+- `testDisableFeaturesTogether`: clears both requested defaults and checks no selected bit remains.
+- `testFeatureMasksExposeConfiguredBits`: configured bit appears in the full mask; a mask requiring an unset bit is not fully enabled.
+- `testMapperFeaturesEnableAndDisable`: mapper feature toggles on the returned copy without changing the original.
+- `testRootWrappingFeatureAndNameOverride`: enabled feature wraps; empty root name disables wrapping and nonempty name enables it.
+- `testRootNameNullAndEmptyNames`: null leaves the feature default in effect; empty and nonempty names override wrapping.
+- `testHandlerRegistrationDeduplicatesSameObject`: first registration places the same handler at the head; repeat registration returns the same config.
+- `testRemovingProblemHandlers`: removal clears the chain, and removal on an empty chain returns the same config.
+- `testNodeFactoryCanBeReplaced`: replacement factory is returned, and setting the identical factory is a no-op.
+- `testDefaultPropertyInclusionAndFormat`: source returns shared empty inclusion/format values and the same inclusion for per-type lookup.
+- `testAnnotationIntrospectorFeatureSwitch`: both configured and no-op introspectors are non-null.
+- `testViewCanBeSetAndCleared`: null view initially is unchanged; a non-null view gives a copy, and clearing gives the original configuration.
+- `testNoDefaultTypeDeserializerWithoutTypeMetadata`: no explicit or default type resolver yields null.
+- `testEmptyFeatureMaskSemantics`: all zero required bits are enabled, while none of zero bits are enabled.
+
+### 4. DEFECT DETECTION STRATEGY
+Assertions pin the source-defined configuration defaults and state transitions, including the distinctions between configured and original instances. No detection result is claimed.
+
+### 5. SUMMARY
+15 tests.
+
+### 6. LIMITATIONS
+The supplied prompt contains no target method and no faulty implementation; selected methods are exploratory. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

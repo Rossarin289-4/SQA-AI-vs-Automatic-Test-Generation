@@ -1,0 +1,413 @@
+```java
+package org.apache.commons.math.optimization.general;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import org.apache.commons.math.FunctionEvaluationException;
+import org.apache.commons.math.MaxEvaluationsExceededException;
+import org.apache.commons.math.MaxIterationsExceededException;
+import org.apache.commons.math.analysis.DifferentiableMultivariateVectorialFunction;
+import org.apache.commons.math.analysis.MultivariateMatrixFunction;
+import org.apache.commons.math.exception.LocalizedFormats;
+import org.apache.commons.math.linear.InvalidMatrixException;
+import org.apache.commons.math.linear.LUDecompositionImpl;
+import org.apache.commons.math.linear.MatrixUtils;
+import org.apache.commons.math.linear.RealMatrix;
+import org.apache.commons.math.optimization.OptimizationException;
+import org.apache.commons.math.optimization.SimpleVectorialValueChecker;
+import org.apache.commons.math.optimization.VectorialConvergenceChecker;
+import org.apache.commons.math.optimization.DifferentiableMultivariateVectorialOptimizer;
+import org.apache.commons.math.optimization.VectorialPointValuePair;
+
+public class AbstractLeastSquaresOptimizerTest {
+    // test methods (as many as the instructions ask for), each exactly in this form:
+    //     @Test
+    //     public void testWhatItChecks() throws Exception { ... }
+
+    @Test
+    public void testSetMaxIterations() throws Exception {
+        AbstractLeastSquaresOptimizer optimizer = new GaussNewtonOptimizer(true);
+        optimizer.setMaxIterations(10);
+        assertEquals(10, optimizer.getMaxIterations());
+    }
+
+    @Test
+    public void testGetMaxIterations() throws Exception {
+        AbstractLeastSquaresOptimizer optimizer = new GaussNewtonOptimizer(true);
+        assertEquals(DEFAULT_MAX_ITERATIONS, optimizer.getMaxIterations());
+        optimizer.setMaxIterations(50);
+        assertEquals(50, optimizer.getMaxIterations());
+    }
+
+    @Test
+    public void testGetIterations() throws Exception {
+        AbstractLeastSquaresOptimizer optimizer = new GaussNewtonOptimizer(true);
+        assertEquals(0, optimizer.getIterations());
+        // Trigger iteration increment by calling optimize, though we expect it to fail before completion
+        try {
+            optimizer.optimize(new DummyFunction(), new double[]{1.0}, new double[]{1.0}, new double[]{1.0});
+        } catch (Exception e) {
+            // Ignore exceptions, just want to see if iteration count increased
+        }
+        // The actual iteration count might be > 0 if the dummy function is designed to run for a bit
+        // A better approach is to call incrementIterationsCounter directly if it were public,
+        // but it's protected. Thus, we rely on the fact that optimize will call it.
+        // For this test, we can assume it will be called at least once if optimize is called.
+        // However, since doOptimize is abstract, optimize will fail before calling it.
+        // Let's create a scenario where it might run at least one iteration.
+        // This test is a bit weak due to the abstract nature of doOptimize.
+        // We'll test the initial state.
+        assertEquals(0, optimizer.getIterations());
+    }
+
+    @Test
+    public void testSetMaxEvaluations() throws Exception {
+        AbstractLeastSquaresOptimizer optimizer = new GaussNewtonOptimizer(true);
+        optimizer.setMaxEvaluations(20);
+        assertEquals(20, optimizer.getMaxEvaluations());
+    }
+
+    @Test
+    public void testGetMaxEvaluations() throws Exception {
+        AbstractLeastSquaresOptimizer optimizer = new GaussNewtonOptimizer(true);
+        assertEquals(Integer.MAX_VALUE, optimizer.getMaxEvaluations());
+        optimizer.setMaxEvaluations(1000);
+        assertEquals(1000, optimizer.getMaxEvaluations());
+    }
+
+    @Test
+    public void testGetEvaluations() throws Exception {
+        AbstractLeastSquaresOptimizer optimizer = new GaussNewtonOptimizer(true);
+        assertEquals(0, optimizer.getEvaluations());
+        // Similar to getIterations, calling optimize will trigger evaluation counts.
+        // Since doOptimize is abstract, optimize will fail before incrementing.
+        // We test the initial state.
+        assertEquals(0, optimizer.getEvaluations());
+    }
+
+    @Test
+    public void testGetJacobianEvaluations() throws Exception {
+        AbstractLeastSquaresOptimizer optimizer = new GaussNewtonOptimizer(true);
+        assertEquals(0, optimizer.getJacobianEvaluations());
+        // Similar to getIterations, calling optimize will trigger jacobian evaluation counts.
+        // Since doOptimize is abstract, optimize will fail before incrementing.
+        // We test the initial state.
+        assertEquals(0, optimizer.getJacobianEvaluations());
+    }
+
+    @Test
+    public void testSetConvergenceChecker() throws Exception {
+        AbstractLeastSquaresOptimizer optimizer = new GaussNewtonOptimizer(true);
+        VectorialConvergenceChecker checker = new SimpleVectorialValueChecker();
+        optimizer.setConvergenceChecker(checker);
+        assertEquals(checker, optimizer.getConvergenceChecker());
+    }
+
+    @Test
+    public void testGetConvergenceChecker() throws Exception {
+        AbstractLeastSquaresOptimizer optimizer = new GaussNewtonOptimizer(true);
+        assertTrue(optimizer.getConvergenceChecker() instanceof SimpleVectorialValueChecker);
+        VectorialConvergenceChecker checker = new MockConvergenceChecker();
+        optimizer.setConvergenceChecker(checker);
+        assertEquals(checker, optimizer.getConvergenceChecker());
+    }
+
+    @Test
+    public void testGetRMS_unconfigured() throws Exception {
+        AbstractLeastSquaresOptimizer optimizer = new GaussNewtonOptimizer(true);
+        // Before optimize is called, residuals and rows are not set.
+        // Expecting NaN due to division by zero or sqrt of NaN.
+        try {
+            optimizer.getRMS();
+            fail("Expected exception for unconfigured state");
+        } catch (Exception e) {
+            // We expect some exception because residuals and rows are not initialized.
+            // The exact exception depends on how getChiSquare() is called and what it does when uninitialized.
+            // Let's assume it would try to access uninitialized arrays, leading to NPE or similar.
+            // If the code handles it gracefully, we'd expect NaN.
+            // Let's test for a general exception indicating failure to compute.
+             assertTrue(e instanceof NullPointerException || e instanceof IndexOutOfBoundsException || e instanceof IllegalArgumentException);
+        }
+    }
+
+    @Test
+    public void testGetChiSquare_unconfigured() throws Exception {
+        AbstractLeastSquaresOptimizer optimizer = new GaussNewtonOptimizer(true);
+        // Before optimize is called, residuals and rows are not set.
+        // Expecting NaN or 0 depending on implementation.
+        try {
+            optimizer.getChiSquare();
+            fail("Expected exception for unconfigured state");
+        } catch (Exception e) {
+            assertTrue(e instanceof NullPointerException || e instanceof IndexOutOfBoundsException);
+        }
+    }
+
+    @Test
+    public void testGetCovariances_unconfigured() throws Exception {
+        AbstractLeastSquaresOptimizer optimizer = new GaussNewtonOptimizer(true);
+        // Before optimize is called, jacobian, cols, and rows are not set.
+        // updateJacobian will be called and is expected to fail.
+        try {
+            optimizer.getCovariances();
+            fail("Expected exception for unconfigured state");
+        } catch (Exception e) {
+            assertTrue(e instanceof NullPointerException || e instanceof FunctionEvaluationException || e instanceof OptimizationException);
+        }
+    }
+
+    @Test
+    public void testGuessParametersErrors_unconfigured() throws Exception {
+        AbstractLeastSquaresOptimizer optimizer = new GaussNewtonOptimizer(true);
+        // Before optimize is called, rows and cols are not set.
+        // The check rows <= cols will likely throw an exception or lead to NPE.
+        try {
+            optimizer.guessParametersErrors();
+            fail("Expected exception for unconfigured state");
+        } catch (Exception e) {
+            assertTrue(e instanceof OptimizationException || e instanceof NullPointerException);
+        }
+    }
+
+    @Test
+    public void testOptimize_nullFunction() throws Exception {
+        AbstractLeastSquaresOptimizer optimizer = new GaussNewtonOptimizer(true);
+        try {
+            optimizer.optimize(null, new double[]{1.0}, new double[]{1.0}, new double[]{1.0});
+            fail("Expected IllegalArgumentException for null function");
+        } catch (IllegalArgumentException e) {
+            // Expected
+        }
+    }
+
+    @Test
+    public void testOptimize_nullTarget() throws Exception {
+        AbstractLeastSquaresOptimizer optimizer = new GaussNewtonOptimizer(true);
+        try {
+            optimizer.optimize(new DummyFunction(), null, new double[]{1.0}, new double[]{1.0});
+            fail("Expected NullPointerException for null target");
+        } catch (NullPointerException e) {
+            // Expected
+        }
+    }
+
+    @Test
+    public void testOptimize_nullWeights() throws Exception {
+        AbstractLeastSquaresOptimizer optimizer = new GaussNewtonOptimizer(true);
+        try {
+            optimizer.optimize(new DummyFunction(), new double[]{1.0}, null, new double[]{1.0});
+            fail("Expected NullPointerException for null weights");
+        } catch (NullPointerException e) {
+            // Expected
+        }
+    }
+
+    @Test
+    public void testOptimize_nullStartPoint() throws Exception {
+        AbstractLeastSquaresOptimizer optimizer = new GaussNewtonOptimizer(true);
+        try {
+            optimizer.optimize(new DummyFunction(), new double[]{1.0}, new double[]{1.0}, null);
+            fail("Expected NullPointerException for null startPoint");
+        } catch (NullPointerException e) {
+            // Expected
+        }
+    }
+
+    @Test
+    public void testOptimize_targetWeightsDimensionMismatch() throws Exception {
+        AbstractLeastSquaresOptimizer optimizer = new GaussNewtonOptimizer(true);
+        try {
+            optimizer.optimize(new DummyFunction(), new double[]{1.0, 2.0}, new double[]{1.0}, new double[]{1.0});
+            fail("Expected OptimizationException for dimension mismatch");
+        } catch (OptimizationException e) {
+            // Expected
+        }
+    }
+
+    @Test
+    public void testOptimize_startPointDimensionMismatch() throws Exception {
+        AbstractLeastSquaresOptimizer optimizer = new GaussNewtonOptimizer(true);
+        // The check for startPoint dimension mismatch happens within doOptimize,
+        // which is abstract. However, the optimize method sets up `cols = point.length`.
+        // The `DummyFunction` we use returns a fixed dimension for its value and jacobian,
+        // which might cause a mismatch.
+        // Let's create a scenario where `cols` is set correctly, but the function's
+        // output dimension doesn't match `rows`.
+        // The current setup won't directly test the `IllegalArgumentException` from `doOptimize`.
+        // However, the `optimize` method itself might throw exceptions if `f.value` or `f.jacobian`
+        // are called with a startPoint that leads to dimension issues later.
+
+        // Let's craft a DummyFunction that expects a certain dimension for its value/jacobian.
+        // The base class `optimize` sets `rows = target.length` and `cols = point.length`.
+        // `updateResidualsAndCost` checks `objective.length != rows`.
+        // `updateJacobian` checks `jacobian.length != rows`.
+        // If `cols` is different from what the function expects, it might throw.
+        // The `optimize` method itself does not validate `point.length` against `f.jacobian().getColumnDimension()`.
+        // The `IllegalArgumentException` is thrown by `doOptimize()`.
+        // Since `doOptimize` is abstract, we can't directly test this here.
+        // We will test a case where `rows` and `cols` are set, but the dummy function might fail.
+        // A more direct test would require a concrete optimizer and a function that fails based on input dimension.
+
+        // For now, let's test a case where the target and start point have different lengths.
+        // This will set rows and cols differently. The problem arises when `f.value` is called.
+        try {
+            optimizer.optimize(new DummyFunction(2), new double[]{1.0, 2.0}, new double[]{1.0, 1.0}, new double[]{1.0});
+            fail("Expected exception due to dimension mismatch between target and startPoint related to function evaluation");
+        } catch (Exception e) {
+             // This might catch FunctionEvaluationException or OptimizationException depending on the DummyFunction.
+            assertTrue(e instanceof FunctionEvaluationException || e instanceof OptimizationException || e instanceof IllegalArgumentException);
+        }
+    }
+
+
+    @Test
+    public void testGetCovariances_singularProblem() throws Exception {
+        // This test requires a function that leads to a singular matrix.
+        // We can simulate this by creating a function whose jacobian leads to a non-invertible jTj.
+        AbstractLeastSquaresOptimizer optimizer = new GaussNewtonOptimizer(true);
+        double[] target = {1.0, 2.0};
+        double[] weights = {1.0, 1.0};
+        double[] startPoint = {1.0, 1.0}; // 2 parameters
+
+        // A function where the jacobian columns are linearly dependent.
+        // f1 = x1 + x2, f2 = x1 + x2
+        // J = [[1, 1], [1, 1]]
+        // J^T J = [[2, 2], [2, 2]] (singular)
+        DifferentiableMultivariateVectorialFunction singularJacobianFunction = new DifferentiableMultivariateVectorialFunction() {
+            @Override
+            public double[] value(double[] point) throws FunctionEvaluationException {
+                // Values are not critical for covariance calculation as it depends on jacobian.
+                return new double[]{point[0] + point[1], point[0] + point[1]};
+            }
+
+            @Override
+            public MultivariateMatrixFunction jacobian() {
+                return new MultivariateMatrixFunction() {
+                    @Override
+                    public double[][] value(double[] point) throws FunctionEvaluationException {
+                        return new double[][]{
+                            {1.0, 1.0},
+                            {1.0, 1.0}
+                        };
+                    }
+                };
+            }
+        };
+
+        try {
+            optimizer.optimize(singularJacobianFunction, target, weights, startPoint);
+            optimizer.getCovariances(); // This should throw OptimizationException
+            fail("Expected OptimizationException for singular problem");
+        } catch (OptimizationException e) {
+            // Expected exception
+            assertTrue(e.getMessage().contains(LocalizedFormats.UNABLE_TO_COMPUTE_COVARIANCE_SINGULAR_PROBLEM.getSourceString()));
+        } catch (FunctionEvaluationException e) {
+            // Might be thrown by the dummy function itself if not careful.
+        }
+    }
+
+     @Test
+    public void testGuessParametersErrors_noDegreesOfFreedom() throws Exception {
+        AbstractLeastSquaresOptimizer optimizer = new GaussNewtonOptimizer(true);
+        double[] target = {1.0}; // 1 measurement
+        double[] weights = {1.0};
+        double[] startPoint = {1.0, 2.0}; // 2 parameters
+
+        try {
+            optimizer.optimize(new DummyFunction(1, 2), target, weights, startPoint);
+            optimizer.guessParametersErrors();
+            fail("Expected OptimizationException for no degrees of freedom");
+        } catch (OptimizationException e) {
+            // Expected
+            assertTrue(e.getMessage().contains(LocalizedFormats.NO_DEGREES_OF_FREEDOM.getSourceString()));
+        }
+    }
+
+    // Dummy implementation of DifferentiableMultivariateVectorialFunction for testing.
+    // Allows specifying dimensions for value and jacobian.
+    private static class DummyFunction implements DifferentiableMultivariateVectorialFunction {
+        private final int valueDimension;
+        private final int jacobianColDimension;
+        private final int jacobianRowDimension;
+
+        public DummyFunction() {
+            this(2, 2); // Default: 2 outputs, 2 parameters
+        }
+
+        public DummyFunction(int valueDim, int paramDim) {
+            this.valueDimension = valueDim;
+            this.jacobianColDimension = paramDim;
+            this.jacobianRowDimension = valueDim; // Jacobian rows = function value dimension
+        }
+
+        @Override
+        public double[] value(double[] point) throws FunctionEvaluationException {
+            double[] result = new double[valueDimension];
+            // Simple example: sum of elements for each output
+            for (int i = 0; i < valueDimension; i++) {
+                double sum = 0;
+                for (int j = 0; j < point.length; j++) {
+                    sum += point[j];
+                }
+                result[i] = sum + i; // Add index for slight variation
+            }
+            return result;
+        }
+
+        @Override
+        public MultivariateMatrixFunction jacobian() {
+            return new MultivariateMatrixFunction() {
+                @Override
+                public double[][] value(double[] point) throws FunctionEvaluationException {
+                    double[][] jac = new double[jacobianRowDimension][jacobianColDimension];
+                    // Simple jacobian: each element of point contributes 1 to each output
+                    for (int i = 0; i < jacobianRowDimension; i++) {
+                        for (int j = 0; j < jacobianColDimension; j++) {
+                            jac[i][j] = 1.0;
+                        }
+                    }
+                    return jac;
+                }
+            };
+        }
+    }
+
+    // Mock implementation of VectorialConvergenceChecker for testing setters/getters.
+    private static class MockConvergenceChecker implements VectorialConvergenceChecker {
+        @Override
+        public boolean converged(int iteration, VectorialPointValuePair previous, VectorialPointValuePair current) {
+            return false; // Always false, not relevant for these tests
+        }
+    }
+
+    // Constants from AbstractLeastSquaresOptimizer for default values
+    private static final int DEFAULT_MAX_ITERATIONS = 100;
+}
+```
+
+1. SOURCE CODE ANALYSIS - The tests cover configuration methods (setters/getters for max iterations, evaluations, convergence checker) and utility methods (RMS, ChiSquare, Covariances, ParametersErrors) in their unconfigured state. The `optimize` method is tested for various invalid inputs. Some tests are designed to fail gracefully when the optimizer is not fully configured, while others probe specific exception conditions like singular matrices or lack of degrees of freedom.
+2. TEST CASE DESIGN -
+    - testSetMaxIterations: input 10, expected 10, derived from setter logic.
+    - testGetMaxIterations: input default and 50, expected 100 and 50, derived from default and setter logic.
+    - testGetIterations: input 0, expected 0, derived from initial state.
+    - testSetMaxEvaluations: input 20, expected 20, derived from setter logic.
+    - testGetMaxEvaluations: input default and 1000, expected Integer.MAX_VALUE and 1000, derived from default and setter logic.
+    - testGetEvaluations: input 0, expected 0, derived from initial state.
+    - testGetJacobianEvaluations: input 0, expected 0, derived from initial state.
+    - testSetConvergenceChecker: input mock checker, expected mock checker, derived from setter logic.
+    - testGetConvergenceChecker: input default and mock checker, expected SimpleVectorialValueChecker and mock checker, derived from default and setter logic.
+    - testGetRMS_unconfigured: input no configuration, expected Exception, derived from uninitialized state.
+    - testGetChiSquare_unconfigured: input no configuration, expected Exception, derived from uninitialized state.
+    - testGetCovariances_unconfigured: input no configuration, expected Exception, derived from uninitialized state.
+    - testGuessParametersErrors_unconfigured: input no configuration, expected Exception, derived from uninitialized state.
+    - testOptimize_nullFunction: input null, expected IllegalArgumentException, derived from null check.
+    - testOptimize_nullTarget: input null, expected NullPointerException, derived from null check.
+    - testOptimize_nullWeights: input null, expected NullPointerException, derived from null check.
+    - testOptimize_nullStartPoint: input null, expected NullPointerException, derived from null check.
+    - testOptimize_targetWeightsDimensionMismatch: input mismatched lengths, expected OptimizationException, derived from length check.
+    - testOptimize_startPointDimensionMismatch: input mismatched dimensions for function, expected Exception, derived from function evaluation logic.
+    - testGetCovariances_singularProblem: input function with singular Jacobian, expected OptimizationException, derived from LUDecomposition failure.
+    - testGuessParametersErrors_noDegreesOfFreedom: input rows <= cols, expected OptimizationException, derived from condition check.
+4. DEFECT DETECTION STRATEGY - Tests focus on ensuring that configuration parameters are correctly set and retrieved, that exception handling for invalid inputs and unconfigured states is robust, and that specific mathematical conditions (singular matrices, degrees of freedom) are correctly identified and reported.
+5. SUMMARY - 21 tests.
+6. LIMITATIONS - Tests for `getIterations()`, `getEvaluations()`, and `getJacobianEvaluations()` are based on initial states or assumptions about `optimize` calling internal counters, due to the abstract nature of `doOptimize`. Tests for `optimize` involving dimension mismatches rely on the behavior of `DummyFunction` and potential exceptions during function evaluation. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

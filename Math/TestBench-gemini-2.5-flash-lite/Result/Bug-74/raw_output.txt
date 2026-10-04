@@ -1,0 +1,619 @@
+```java
+package org.apache.commons.math.ode.nonstiff;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import org.apache.commons.math.ode.DerivativeException;
+import org.apache.commons.math.ode.FirstOrderDifferentialEquations;
+import org.apache.commons.math.ode.IntegratorException;
+import org.apache.commons.math.ode.events.CombinedEventsManager;
+import org.apache.commons.math.ode.sampling.AbstractStepInterpolator;
+import org.apache.commons.math.ode.sampling.DummyStepInterpolator;
+import org.apache.commons.math.ode.sampling.StepHandler;
+
+public class EmbeddedRungeKuttaIntegratorTest {
+    // test methods (as many as the instructions ask for), each exactly in this form:
+    //     @Test
+    //     public void testWhatItChecks() throws Exception { ... }
+
+    @Test
+    public void testSetGetSafety() {
+        // Test setting and getting the safety factor
+        EmbeddedRungeKuttaIntegrator integrator = new DormandPrince54Integrator(1e-6, 1.0, 1e-6, 1e-6);
+        double initialSafety = integrator.getSafety();
+        integrator.setSafety(0.8);
+        assertEquals(0.8, integrator.getSafety(), 1e-9);
+        integrator.setSafety(initialSafety);
+        assertEquals(initialSafety, integrator.getSafety(), 1e-9);
+    }
+
+    @Test
+    public void testSetGetMinReduction() {
+        // Test setting and getting the minimal reduction factor
+        EmbeddedRungeKuttaIntegrator integrator = new DormandPrince54Integrator(1e-6, 1.0, 1e-6, 1e-6);
+        double initialMinReduction = integrator.getMinReduction();
+        integrator.setMinReduction(0.3);
+        assertEquals(0.3, integrator.getMinReduction(), 1e-9);
+        integrator.setMinReduction(initialMinReduction);
+        assertEquals(initialMinReduction, integrator.getMinReduction(), 1e-9);
+    }
+
+    @Test
+    public void testSetGetMaxGrowth() {
+        // Test setting and getting the maximal growth factor
+        EmbeddedRungeKuttaIntegrator integrator = new DormandPrince54Integrator(1e-6, 1.0, 1e-6, 1e-6);
+        double initialMaxGrowth = integrator.getMaxGrowth();
+        integrator.setMaxGrowth(12.0);
+        assertEquals(12.0, integrator.getMaxGrowth(), 1e-9);
+        integrator.setMaxGrowth(initialMaxGrowth);
+        assertEquals(initialMaxGrowth, integrator.getMaxGrowth(), 1e-9);
+    }
+
+    @Test
+    public void testIntegrateSimpleODEForward() throws Exception {
+        // Test integration of a simple ODE with positive time direction
+        FirstOrderDifferentialEquations equations = new FirstOrderDifferentialEquations() {
+            @Override
+            public int getDimension() {
+                return 1;
+            }
+
+            @Override
+            public void computeDerivatives(double t, double[] y, double[] yDot) throws DerivativeException {
+                yDot[0] = -y[0];
+            }
+        };
+        double[] y0 = {1.0};
+        double t0 = 0.0;
+        double t = 1.0;
+        double[] y = new double[1];
+
+        EmbeddedRungeKuttaIntegrator integrator = new DormandPrince54Integrator(1e-6, 1.0, 1e-6, 1e-6);
+        integrator.addStepHandler(new StepHandler() {
+            @Override
+            public void handleStep(org.apache.commons.math.ode.sampling.StepInterpolator interpolator, boolean isLast) throws DerivativeException {
+            }
+            @Override
+            public void reset() {}
+            @Override
+            public boolean requiresDenseOutput() { return false; }
+        });
+
+        double stopTime = integrator.integrate(equations, t0, y0, t, y);
+
+        // For y' = -y, y(0) = 1, the solution is y(t) = e^(-t)
+        // At t=1, y(1) = e^(-1) approx 0.367879
+        assertEquals(t, stopTime, 1e-5); // Allow for some integration error
+        assertEquals(Math.exp(-t), y[0], 1e-5);
+    }
+
+    @Test
+    public void testIntegrateSimpleODEBackward() throws Exception {
+        // Test integration of a simple ODE with negative time direction
+        FirstOrderDifferentialEquations equations = new FirstOrderDifferentialEquations() {
+            @Override
+            public int getDimension() {
+                return 1;
+            }
+
+            @Override
+            public void computeDerivatives(double t, double[] y, double[] yDot) throws DerivativeException {
+                yDot[0] = -y[0];
+            }
+        };
+        double[] y0 = {Math.exp(-1.0)}; // Start at t=1 with y(1) = e^-1
+        double t0 = 1.0;
+        double t = 0.0;
+        double[] y = new double[1];
+
+        EmbeddedRungeKuttaIntegrator integrator = new DormandPrince54Integrator(1e-6, 1.0, 1e-6, 1e-6);
+        integrator.addStepHandler(new StepHandler() {
+            @Override
+            public void handleStep(org.apache.commons.math.ode.sampling.StepInterpolator interpolator, boolean isLast) throws DerivativeException {
+            }
+            @Override
+            public void reset() {}
+            @Override
+            public boolean requiresDenseOutput() { return false; }
+        });
+
+        double stopTime = integrator.integrate(equations, t0, y0, t, y);
+
+        // For y' = -y, y(1) = e^-1, the solution is y(t) = e^(-t)
+        // At t=0, y(0) = e^(0) = 1
+        assertEquals(t, stopTime, 1e-5); // Allow for some integration error
+        assertEquals(1.0, y[0], 1e-5);
+    }
+
+    @Test
+    public void testIntegrateTwoBodyProblemForward() throws Exception {
+        // Test integration of a simplified two-body problem (conservation of energy)
+        // d^2x/dt^2 = -x / (x^2 + y^2)^(3/2)
+        // d^2y/dt^2 = -y / (x^2 + y^2)^(3/2)
+        // Convert to first-order system:
+        // y[0] = x, y[1] = x', y[2] = y, y[3] = y'
+        // yDot[0] = y[1]
+        // yDot[1] = -y[0] / (y[0]^2 + y[2]^2)^(3/2)
+        // yDot[2] = y[3]
+        // yDot[3] = -y[2] / (y[0]^2 + y[2]^2)^(3/2)
+        FirstOrderDifferentialEquations equations = new FirstOrderDifferentialEquations() {
+            @Override
+            public int getDimension() {
+                return 4;
+            }
+
+            @Override
+            public void computeDerivatives(double t, double[] y, double[] yDot) throws DerivativeException {
+                double r2 = y[0] * y[0] + y[2] * y[2];
+                double r3 = r2 * Math.sqrt(r2);
+                yDot[0] = y[1];
+                yDot[1] = -y[0] / r3;
+                yDot[2] = y[3];
+                yDot[3] = -y[2] / r3;
+            }
+        };
+
+        double[] y0 = {1.0, 0.0, 0.0, 1.0}; // Initial position (1,0), velocity (0,1) -> circular orbit
+        double t0 = 0.0;
+        double t = 2.0 * Math.PI; // One full orbit for circular path
+        double[] y = new double[4];
+
+        EmbeddedRungeKuttaIntegrator integrator = new DormandPrince54Integrator(1e-6, 1.0, 1e-8, 1e-8);
+        integrator.addStepHandler(new StepHandler() {
+            @Override
+            public void handleStep(org.apache.commons.math.ode.sampling.StepInterpolator interpolator, boolean isLast) throws DerivativeException {
+            }
+            @Override
+            public void reset() {}
+            @Override
+            public boolean requiresDenseOutput() { return false; }
+        });
+
+        double stopTime = integrator.integrate(equations, t0, y0, t, y);
+
+        // For a circular orbit starting at (1,0) with velocity (0,1), after 2*PI time, it should return to (1,0) with velocity (0,1).
+        // The magnitude of velocity should remain constant.
+        // Energy = 0.5 * (vx^2 + vy^2) - 1/r. Should be conserved.
+        // Initial energy: 0.5 * (0^2 + 1^2) - 1/1 = 0.5 - 1 = -0.5
+        assertEquals(t, stopTime, 1e-4); // Allow for some integration error
+        assertEquals(y0[0], y[0], 1e-4);
+        assertEquals(y0[1], y[1], 1e-4);
+        assertEquals(y0[2], y[2], 1e-4);
+        assertEquals(y0[3], y[3], 1e-4);
+        // Check energy conservation
+        double finalEnergy = 0.5 * (y[1]*y[1] + y[3]*y[3]) - 1.0 / Math.sqrt(y[0]*y[0] + y[2]*y[2]);
+        assertEquals(-0.5, finalEnergy, 1e-4);
+    }
+
+    @Test
+    public void testIntegrateZeroInitialState() throws Exception {
+        // Test integration when initial state is zero
+        FirstOrderDifferentialEquations equations = new FirstOrderDifferentialEquations() {
+            @Override
+            public int getDimension() {
+                return 1;
+            }
+
+            @Override
+            public void computeDerivatives(double t, double[] y, double[] yDot) throws DerivativeException {
+                yDot[0] = t; // Simple example
+            }
+        };
+        double[] y0 = {0.0};
+        double t0 = 0.0;
+        double t = 1.0;
+        double[] y = new double[1];
+
+        EmbeddedRungeKuttaIntegrator integrator = new DormandPrince54Integrator(1e-6, 1.0, 1e-6, 1e-6);
+        double stopTime = integrator.integrate(equations, t0, y0, t, y);
+
+        // For y' = t, y(0) = 0, solution is y(t) = 0.5 * t^2
+        // At t=1, y(1) = 0.5
+        assertEquals(t, stopTime, 1e-5);
+        assertEquals(0.5, y[0], 1e-5);
+    }
+
+    @Test
+    public void testIntegrateWithEvent() throws Exception {
+        // Test integration with an event handler that stops the integration
+        FirstOrderDifferentialEquations equations = new FirstOrderDifferentialEquations() {
+            @Override
+            public int getDimension() {
+                return 1;
+            }
+
+            @Override
+            public void computeDerivatives(double t, double[] y, double[] yDot) throws DerivativeException {
+                yDot[0] = 1.0; // Simple constant derivative
+            }
+        };
+        double[] y0 = {0.0};
+        double t0 = 0.0;
+        double t = 10.0; // Target end time
+        double[] y = new double[1];
+
+        EmbeddedRungeKuttaIntegrator integrator = new DormandPrince54Integrator(1e-6, 1.0, 1e-6, 1e-6);
+
+        // Event: stop when y reaches 5.0
+        integrator.addEventHandler(new EventHandler() {
+            @Override
+            public void reset() {}
+            @Override
+            public double g(double t, double[] y) throws DerivativeException {
+                return y[0] - 5.0; // Event when y[0] = 5.0
+            }
+            @Override
+            public Action eventOccurred(double t, double[] y, boolean increasing) throws DerivativeException {
+                return Action.STOP; // Stop integration when event occurs
+            }
+        }, 0.1, 1e-6, 100);
+
+        double stopTime = integrator.integrate(equations, t0, y0, t, y);
+
+        // With y' = 1, y(0) = 0, y(t) = t. The event should occur at t=5.0.
+        assertEquals(5.0, stopTime, 1e-5);
+        assertEquals(5.0, y[0], 1e-5);
+    }
+
+    @Test
+    public void testIntegrateWithEventAndRecompute() throws Exception {
+        // Test integration with an event handler that resets derivatives
+        FirstOrderDifferentialEquations equations = new FirstOrderDifferentialEquations() {
+            @Override
+            public int getDimension() {
+                return 1;
+            }
+
+            @Override
+            public void computeDerivatives(double t, double[] y, double[] yDot) throws DerivativeException {
+                yDot[0] = t > 5.0 ? -1.0 : 1.0; // Change behavior after t=5.0
+            }
+        };
+        double[] y0 = {0.0};
+        double t0 = 0.0;
+        double t = 10.0;
+        double[] y = new double[1];
+
+        EmbeddedRungeKuttaIntegrator integrator = new DormandPrince54Integrator(1e-6, 1.0, 1e-6, 1e-6);
+
+        // Event: when y[0] reaches 5.0, reset state (not really needed here, but tests the mechanism)
+        integrator.addEventHandler(new EventHandler() {
+            @Override
+            public void reset() {}
+            @Override
+            public double g(double t, double[] y) throws DerivativeException {
+                return y[0] - 5.0;
+            }
+            @Override
+            public Action eventOccurred(double t, double[] y, boolean increasing) throws DerivativeException {
+                // If we were to change initial conditions or something, we'd do it here.
+                // For this test, we just ensure the derivatives are recomputed.
+                return Action.RESET_DERIVATIVES;
+            }
+        }, 0.1, 1e-6, 100);
+
+        double stopTime = integrator.integrate(equations, t0, y0, t, y);
+
+        // Expected behavior:
+        // From t=0 to t=5, y(t) = t, so y(5) = 5.0
+        // From t=5 to t=10, y'(t) = -1.
+        // At t=5, y=5.0. So for t>5, y(t) = 5.0 - (t - 5.0) = 10.0 - t
+        // At t=10, y(10) = 10.0 - 10.0 = 0.0
+        assertEquals(t, stopTime, 1e-4);
+        assertEquals(0.0, y[0], 1e-4);
+    }
+
+
+    @Test
+    public void testIntegratorExceptionOnNullEquations() {
+        // Test that IntegratorException is thrown if FirstOrderDifferentialEquations is null
+        EmbeddedRungeKuttaIntegrator integrator = new DormandPrince54Integrator(1e-6, 1.0, 1e-6, 1e-6);
+        try {
+            integrator.integrate(null, 0.0, new double[]{1.0}, 1.0, new double[1]);
+            fail("Expected IntegratorException for null equations");
+        } catch (IntegratorException expected) {
+            // Expected
+        } catch (DerivativeException e) {
+            fail("Unexpected DerivativeException");
+        }
+    }
+
+    @Test
+    public void testIntegratorExceptionOnNullY0() {
+        // Test that IntegratorException is thrown if y0 is null
+        FirstOrderDifferentialEquations equations = new FirstOrderDifferentialEquations() {
+            @Override
+            public int getDimension() { return 1; }
+            @Override
+            public void computeDerivatives(double t, double[] y, double[] yDot) throws DerivativeException { yDot[0] = 1; }
+        };
+        EmbeddedRungeKuttaIntegrator integrator = new DormandPrince54Integrator(1e-6, 1.0, 1e-6, 1e-6);
+        try {
+            integrator.integrate(equations, 0.0, null, 1.0, new double[1]);
+            fail("Expected IntegratorException for null y0");
+        } catch (IntegratorException expected) {
+            // Expected
+        } catch (DerivativeException e) {
+            fail("Unexpected DerivativeException");
+        }
+    }
+
+    @Test
+    public void testIntegratorExceptionOnNullY() {
+        // Test that IntegratorException is thrown if y is null
+        FirstOrderDifferentialEquations equations = new FirstOrderDifferentialEquations() {
+            @Override
+            public int getDimension() { return 1; }
+            @Override
+            public void computeDerivatives(double t, double[] y, double[] yDot) throws DerivativeException { yDot[0] = 1; }
+        };
+        EmbeddedRungeKuttaIntegrator integrator = new DormandPrince54Integrator(1e-6, 1.0, 1e-6, 1e-6);
+        try {
+            integrator.integrate(equations, 0.0, new double[]{1.0}, 1.0, null);
+            fail("Expected IntegratorException for null y");
+        } catch (IntegratorException expected) {
+            // Expected
+        } catch (DerivativeException e) {
+            fail("Unexpected DerivativeException");
+        }
+    }
+
+    @Test
+    public void testIntegratorExceptionOnInconsistentDimensions() {
+        // Test that IntegratorException is thrown if y0 and y dimensions mismatch
+        FirstOrderDifferentialEquations equations = new FirstOrderDifferentialEquations() {
+            @Override
+            public int getDimension() { return 2; } // Dimension is 2
+            @Override
+            public void computeDerivatives(double t, double[] y, double[] yDot) throws DerivativeException { yDot[0] = y[0]; yDot[1] = y[1]; }
+        };
+        EmbeddedRungeKuttaIntegrator integrator = new DormandPrince54Integrator(1e-6, 1.0, 1e-6, 1e-6);
+        try {
+            integrator.integrate(equations, 0.0, new double[]{1.0}, 1.0, new double[1]); // y0 has dim 1, y has dim 1 but equations expect 2
+            fail("Expected IntegratorException for inconsistent dimensions");
+        } catch (IntegratorException expected) {
+            // Expected
+        } catch (DerivativeException e) {
+            fail("Unexpected DerivativeException");
+        }
+    }
+
+    @Test
+    public void testSetMinReductionEdgeCases() {
+        EmbeddedRungeKuttaIntegrator integrator = new DormandPrince54Integrator(1e-6, 1.0, 1e-6, 1e-6);
+        // Minimal reduction factor must be positive and less than or equal to 1.0
+        integrator.setMinReduction(0.1);
+        assertEquals(0.1, integrator.getMinReduction(), 1e-9);
+        integrator.setMinReduction(1.0);
+        assertEquals(1.0, integrator.getMinReduction(), 1e-9);
+        // Values outside [0, 1] are not explicitly checked in the constructor,
+        // but the typical usage implies these bounds. The integrate method uses
+        // Math.max(minReduction, ...) so negative values would be clamped to 0.
+        // Values > 1 would be clamped by Math.min(maxGrowth, ...) if maxGrowth < 1,
+        // otherwise they would be used directly.
+        // For the purpose of this test, we focus on valid ranges.
+    }
+
+    @Test
+    public void testMaxGrowthEdgeCases() {
+        EmbeddedRungeKuttaIntegrator integrator = new DormandPrince54Integrator(1e-6, 1.0, 1e-6, 1e-6);
+        // Maximal growth factor should be >= 1.0
+        integrator.setMaxGrowth(10.0);
+        assertEquals(10.0, integrator.getMaxGrowth(), 1e-9);
+        integrator.setMaxGrowth(1.0);
+        assertEquals(1.0, integrator.getMaxGrowth(), 1e-9);
+        // Values less than 1.0 are not ideal for step size increase.
+        // The integrate method uses Math.min(maxGrowth, ...).
+        // Testing extremely large values (beyond Double.MAX_VALUE) is not practical here.
+    }
+
+    @Test
+    public void testSafetyFactorRange() {
+        EmbeddedRungeKuttaIntegrator integrator = new DormandPrince54Integrator(1e-6, 1.0, 1e-6, 1e-6);
+        integrator.setSafety(0.9); // Typical value
+        assertEquals(0.9, integrator.getSafety(), 1e-9);
+        integrator.setSafety(1.0);
+        assertEquals(1.0, integrator.getSafety(), 1e-9);
+        integrator.setSafety(0.0); // Might lead to very small steps if error is > 0
+        assertEquals(0.0, integrator.getSafety(), 1e-9);
+        // Safety factor can theoretically be > 1, but usually it's <= 1.
+        // Testing extreme negative values is not practically meaningful as it would lead to very large step sizes.
+    }
+
+    @Test
+    public void testIntegrateWithZeroStepSize() throws Exception {
+        // Test case where initial step size calculation might result in zero
+        FirstOrderDifferentialEquations equations = new FirstOrderDifferentialEquations() {
+            @Override
+            public int getDimension() { return 1; }
+            @Override
+            public void computeDerivatives(double t, double[] y, double[] yDot) throws DerivativeException {
+                yDot[0] = 0.0; // Constant zero derivative
+            }
+        };
+        double[] y0 = {0.0};
+        double t0 = 0.0;
+        double t = 1.0;
+        double[] y = new double[1];
+
+        // Using a very small maxStep to force minimal step size checks
+        EmbeddedRungeKuttaIntegrator integrator = new DormandPrince54Integrator(1e-10, 1e-10, 1e-10, 1e-10);
+        double stopTime = integrator.integrate(equations, t0, y0, t, y);
+
+        // If derivative is always zero, state should remain zero.
+        assertEquals(t0, stopTime, 1e-10); // Expected to stop immediately or after minimal step
+        assertEquals(0.0, y[0], 1e-10);
+    }
+
+    @Test
+    public void testIntegrateWithVerySmallTimeSpan() throws Exception {
+        // Test integration over a very small time span
+        FirstOrderDifferentialEquations equations = new FirstOrderDifferentialEquations() {
+            @Override
+            public int getDimension() { return 1; }
+            @Override
+            public void computeDerivatives(double t, double[] y, double[] yDot) throws DerivativeException {
+                yDot[0] = -y[0];
+            }
+        };
+        double[] y0 = {1.0};
+        double t0 = 0.0;
+        double t = 1e-9; // Very small time span
+        double[] y = new double[1];
+
+        EmbeddedRungeKuttaIntegrator integrator = new DormandPrince54Integrator(1e-10, 1.0, 1e-10, 1e-10);
+        double stopTime = integrator.integrate(equations, t0, y0, t, y);
+
+        // Solution y(t) = e^(-t). For small t, e^(-t) approx 1 - t.
+        assertEquals(t, stopTime, 1e-12); // Expect high accuracy for small steps
+        assertEquals(Math.exp(-t), y[0], 1e-12);
+    }
+
+
+    @Test
+    public void testHighamHall54() throws Exception {
+        // Test a different concrete integrator to ensure general behavior
+        FirstOrderDifferentialEquations equations = new FirstOrderDifferentialEquations() {
+            @Override
+            public int getDimension() {
+                return 1;
+            }
+
+            @Override
+            public void computeDerivatives(double t, double[] y, double[] yDot) throws DerivativeException {
+                yDot[0] = -y[0];
+            }
+        };
+        double[] y0 = {1.0};
+        double t0 = 0.0;
+        double t = 1.0;
+        double[] y = new double[1];
+
+        // Use HighamHall54Integrator
+        EmbeddedRungeKuttaIntegrator integrator = new HighamHall54Integrator(1e-6, 1.0, 1e-6, 1e-6);
+        double stopTime = integrator.integrate(equations, t0, y0, t, y);
+
+        assertEquals(t, stopTime, 1e-5);
+        assertEquals(Math.exp(-t), y[0], 1e-5);
+    }
+
+    @Test
+    public void testDormandPrince853() throws Exception {
+        // Test another concrete integrator
+        FirstOrderDifferentialEquations equations = new FirstOrderDifferentialEquations() {
+            @Override
+            public int getDimension() {
+                return 1;
+            }
+
+            @Override
+            public void computeDerivatives(double t, double[] y, double[] yDot) throws DerivativeException {
+                yDot[0] = -y[0];
+            }
+        };
+        double[] y0 = {1.0};
+        double t0 = 0.0;
+        double t = 1.0;
+        double[] y = new double[1];
+
+        // Use DormandPrince853Integrator
+        EmbeddedRungeKuttaIntegrator integrator = new DormandPrince853Integrator(1e-6, 1.0, 1e-6, 1e-6);
+        double stopTime = integrator.integrate(equations, t0, y0, t, y);
+
+        assertEquals(t, stopTime, 1e-6); // Higher order might give better accuracy
+        assertEquals(Math.exp(-t), y[0], 1e-6);
+    }
+
+    @Test
+    public void testMaximalStepSizeLimit() throws Exception {
+        // Test integration where the step size is limited by maxStep
+        FirstOrderDifferentialEquations equations = new FirstOrderDifferentialEquations() {
+            @Override
+            public int getDimension() { return 1; }
+            @Override
+            public void computeDerivatives(double t, double[] y, double[] yDot) throws DerivativeException {
+                yDot[0] = 1.0;
+            }
+        };
+        double[] y0 = {0.0};
+        double t0 = 0.0;
+        double t = 10.0;
+        double[] y = new double[1];
+
+        // Set a small maxStep, e.g., 0.5
+        EmbeddedRungeKuttaIntegrator integrator = new DormandPrince54Integrator(1e-6, 0.5, 1e-6, 1e-6);
+        double stopTime = integrator.integrate(equations, t0, y0, t, y);
+
+        // Integration should proceed in steps of at most 0.5.
+        // The final time should be t=10.0.
+        assertEquals(t, stopTime, 1e-5);
+        // The final value should be y(10) = 10.0
+        assertEquals(10.0, y[0], 1e-5);
+        // We can't directly assert the step size taken from here, but the final result should be correct.
+    }
+
+    @Test
+    public void testMinimalStepSizeLimit() throws Exception {
+        // Test integration where the step size is limited by minStep
+        FirstOrderDifferentialEquations equations = new FirstOrderDifferentialEquations() {
+            @Override
+            public int getDimension() { return 1; }
+            @Override
+            public void computeDerivatives(double t, double[] y, double[] yDot) throws DerivativeException {
+                yDot[0] = 1.0; // Constant derivative
+            }
+        };
+        double[] y0 = {0.0};
+        double t0 = 0.0;
+        double t = 1e-8; // Target time very close to t0
+        double[] y = new double[1];
+
+        // Set a relatively large minStep, e.g., 1e-6
+        EmbeddedRungeKuttaIntegrator integrator = new DormandPrince54Integrator(1e-6, 1.0, 1e-6, 1e-6);
+        double stopTime = integrator.integrate(equations, t0, y0, t, y);
+
+        // The integrator should not be able to take a step smaller than minStep if error is high.
+        // However, for a zero derivative and small time span, it might adjust.
+        // The important part is that if a step is rejected and reduced, it won't go below minStep.
+        // For this simple case, it should reach the target time.
+        assertEquals(t, stopTime, 1e-10);
+        assertEquals(t, y[0], 1e-10); // y(t) = t for y'=1, y(0)=0
+    }
+}
+```
+
+## SOURCE CODE ANALYSIS
+The tests focus on the `integrate` method, covering its core functionality, step size control, event handling, and error conditions. Various public methods like `setSafety`, `getMinReduction`, `setMaxGrowth` are also tested for their direct behavior.
+
+## TEST CASE DESIGN
+- testSetGetSafety: Sets and gets the safety factor. Expected: the value set is retrieved. Derived from direct setter/getter logic.
+- testSetGetMinReduction: Sets and gets the minimal reduction factor. Expected: the value set is retrieved. Derived from direct setter/getter logic.
+- testSetGetMaxGrowth: Sets and gets the maximal growth factor. Expected: the value set is retrieved. Derived from direct setter/getter logic.
+- testIntegrateSimpleODEForward: Integrates y'=-y with y(0)=1 from t=0 to t=1. Expected: y(1) approx 0.367879. Derived from analytical solution.
+- testIntegrateSimpleODEBackward: Integrates y'=-y with y(1)=e^-1 from t=1 to t=0. Expected: y(0)=1. Derived from analytical solution.
+- testIntegrateTwoBodyProblemForward: Integrates a simplified two-body problem, checking for conservation of position and velocity after one orbit. Expected: initial and final states are equal. Derived from orbital mechanics properties.
+- testIntegrateZeroInitialState: Integrates y'=t with y(0)=0 from t=0 to t=1. Expected: y(1)=0.5. Derived from analytical solution.
+- testIntegrateWithEvent: Integrates y'=1 with y(0)=0 until y=5. Expected: stops at t=5.0, y=5.0. Derived from event condition and analytical solution.
+- testIntegrateWithEventAndRecompute: Integrates a piecewise ODE with an event that triggers derivative recomputation. Expected: correct final state after piecewise integration. Derived from analyzing the piecewise ODE.
+- testIntegratorExceptionOnNullEquations: Checks for IntegratorException with null equations. Expected: IntegratorException. Derived from API contract.
+- testIntegratorExceptionOnNullY0: Checks for IntegratorException with null y0. Expected: IntegratorException. Derived from API contract.
+- testIntegratorExceptionOnNullY: Checks for IntegratorException with null y. Expected: IntegratorException. Derived from API contract.
+- testIntegratorExceptionOnInconsistentDimensions: Checks for IntegratorException on dimension mismatch. Expected: IntegratorException. Derived from API contract.
+- testSetMinReductionEdgeCases: Tests boundary values for setMinReduction. Expected: values are set correctly within valid range [0, 1]. Derived from parameter constraints.
+- testMaxGrowthEdgeCases: Tests boundary values for setMaxGrowth. Expected: values are set correctly within valid range [1, infinity). Derived from parameter constraints.
+- testSafetyFactorRange: Tests various values for setSafety. Expected: values are set correctly. Derived from parameter typical usage.
+- testIntegrateWithZeroStepSize: Integrates with zero derivative, expecting minimal step or immediate stop. Expected: state remains initial, stop time is t0. Derived from zero derivative behavior.
+- testIntegrateWithVerySmallTimeSpan: Integrates over a very small time span. Expected: high accuracy. Derived from numerical integration properties.
+- testHighamHall54: Uses HighamHall54Integrator for a simple ODE. Expected: accurate integration. Derived from analytical solution.
+- testDormandPrince853: Uses DormandPrince853Integrator for a simple ODE. Expected: accurate integration. Derived from analytical solution.
+- testMaximalStepSizeLimit: Integrates with a constrained maxStep. Expected: final state correct, integration proceeds within step limits. Derived from step size control logic.
+- testMinimalStepSizeLimit: Integrates with a constrained minStep. Expected: correct final state. Derived from step size control logic.
+
+## DEFECT DETECTION STRATEGY
+The tests aim to catch deviations in the numerical integration accuracy, step size adaptation logic (growth, reduction, minimum/maximum step), event handling (stopping, recomputation), and basic sanity checks (null inputs, dimension mismatches).
+
+## SUMMARY
+12 to 30 tests: 22 tests written.
+
+## LIMITATIONS
+Tests cover public API and common integration scenarios. Complex interactions between multiple events or highly stiff ODEs are not explicitly explored. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

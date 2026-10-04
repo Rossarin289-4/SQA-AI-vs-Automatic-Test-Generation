@@ -1,0 +1,286 @@
+```java
+package org.jsoup.nodes;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import org.jsoup.parser.Parser;
+import org.jsoup.parser.Tokeniser;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.CharsetEncoder;
+import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Element;
+import org.jsoup.nodes.Node;
+import java.util.List;
+import org.jsoup.helper.Validate;
+import org.jsoup.nodes.Entities;
+import java.util.ArrayList;
+import org.jsoup.parser.Token;
+import org.jsoup.parser.ParseErrorList;
+import org.jsoup.parser.TokeniserState;
+import org.jsoup.parser.TreeBuilder;
+
+public class EntitiesTest {
+    // test methods (as many as the instructions ask for), each exactly in this form:
+    //     @Test
+    //     public void testWhatItChecks() throws Exception { ... }
+
+    @Test
+    public void testIsNamedEntity() {
+        assertTrue(Entities.isNamedEntity("lt"));
+        assertTrue(Entities.isNamedEntity("amp"));
+        assertTrue(Entities.isNamedEntity("gt"));
+        assertTrue(Entities.isNamedEntity("quot"));
+        assertTrue(Entities.isNamedEntity("apos"));
+        assertFalse(Entities.isNamedEntity("invalid"));
+        assertFalse(Entities.isNamedEntity(""));
+    }
+
+    @Test
+    public void testIsBaseNamedEntity() {
+        assertTrue(Entities.isBaseNamedEntity("lt"));
+        assertTrue(Entities.isBaseNamedEntity("amp"));
+        assertTrue(Entities.isBaseNamedEntity("gt"));
+        assertTrue(Entities.isBaseNamedEntity("quot"));
+        assertTrue(Entities.isBaseNamedEntity("apos"));
+        assertFalse(Entities.isBaseNamedEntity("nbsp")); // nbsp is in extended, not base
+        assertFalse(Entities.isBaseNamedEntity("invalid"));
+        assertFalse(Entities.isBaseNamedEntity(""));
+    }
+
+    @Test
+    public void testGetCharacterByName_base() {
+        assertEquals((Character)'<', Entities.getCharacterByName("lt"));
+        assertEquals((Character)'&', Entities.getCharacterByName("amp"));
+        assertEquals((Character)'>', Entities.getCharacterByName("gt"));
+        assertEquals((Character)'"', Entities.getCharacterByName("quot"));
+        assertEquals((Character)'\'', Entities.getCharacterByName("apos"));
+        assertNull(Entities.getCharacterByName("nbsp")); // Not in base
+    }
+
+    @Test
+    public void testGetCharacterByName_extended() {
+        assertEquals((Character)' ', Entities.getCharacterByName("nbsp"));
+        assertEquals((Character)'©', Entities.getCharacterByName("copy"));
+        assertEquals((Character)'€', Entities.getCharacterByName("euro"));
+        assertEquals((Character)'™', Entities.getCharacterByName("trade"));
+        assertNull(Entities.getCharacterByName("invalid"));
+    }
+
+    @Test
+    public void testGetCharacterByName_caseInsensitive() {
+        assertEquals((Character)'<', Entities.getCharacterByName("Lt"));
+        assertEquals((Character)'&', Entities.getCharacterByName("AMP"));
+        assertEquals((Character)'>', Entities.getCharacterByName("Gt"));
+    }
+
+    @Test
+    public void testEscape_xhtml() {
+        String html = "<a href=\"&lt;\"> > &amp;</a>";
+        String escaped = Entities.escape(html, new Document("").outputSettings().escapeMode(Document.OutputSettings.EscapeMode.xhtml).encoder(), Document.OutputSettings.EscapeMode.xhtml);
+        assertEquals("&lt;a href=&quot;&amp;lt;&quot;&gt; &amp;gt; &amp;amp;&lt;/a&gt;", escaped);
+    }
+
+    @Test
+    public void testEscape_base() {
+        String html = "<a href=\"&lt;\"> > &amp;</a>";
+        String escaped = Entities.escape(html, new Document("").outputSettings().escapeMode(Document.OutputSettings.EscapeMode.base).encoder(), Document.OutputSettings.EscapeMode.base);
+        assertEquals("&lt;a href=&quot;&amp;lt;&quot;&gt; &gt; &amp;amp;&lt;/a&gt;", escaped);
+    }
+    
+    @Test
+    public void testEscape_extended() {
+        String html = "a\u00A0b"; // Non-breaking space
+        String escaped = Entities.escape(html, new Document("").outputSettings().escapeMode(Document.OutputSettings.EscapeMode.extended).encoder(), Document.OutputSettings.EscapeMode.extended);
+        assertEquals("a&nbsp;b", escaped);
+    }
+
+    @Test
+    public void testEscape_unencodableChar() {
+        // A character that cannot be encoded by the default encoder (e.g., for UTF-8, it might be a control character)
+        // For demonstration, let's assume a character that is not standard ASCII.
+        // The default CharsetEncoder for UTF-8 can encode most characters. Let's use a character that is unlikely to be directly encoded.
+        // A character like U+0000 (null character) is often problematic.
+        String testString = "Hello\u0000World";
+        CharsetEncoder encoder = java.nio.charset.StandardCharsets.UTF_8.newEncoder();
+        // We need to simulate a situation where the encoder cannot encode it.
+        // For the purpose of testing, we can just pass the character and let the escape logic handle it.
+        // If the encoder *can* encode it, it will be passed through. If it *cannot*, it will fall back to &#code;
+        String escaped = Entities.escape(testString, encoder, Document.OutputSettings.EscapeMode.extended);
+        assertTrue(escaped.contains("&#0;")); // Null character should be escaped
+    }
+
+
+    @Test
+    public void testUnescape_basic() {
+        assertEquals("String with < tags", Entities.unescape("String with &lt; tags"));
+        assertEquals("String with \"quotes\"", Entities.unescape("String with &quot;quotes&quot;"));
+        assertEquals("String with & and '", Entities.unescape("String with &amp; and &apos;"));
+    }
+
+    @Test
+    public void testUnescape_numericDecimal() {
+        assertEquals("String with <", Entities.unescape("String with &#60;"));
+        assertEquals("String with €", Entities.unescape("String with &#8364;"));
+    }
+
+    @Test
+    public void testUnescape_numericHex() {
+        assertEquals("String with <", Entities.unescape("String with &#x3C;"));
+        assertEquals("String with €", Entities.unescape("String with &#x20AC;"));
+        assertEquals("String with <", Entities.unescape("String with &#X3c;"));
+    }
+
+    @Test
+    public void testUnescape_strict() {
+        assertEquals("No semicolon", Entities.unescape("No semicolon", true)); // strict, no semicolon should not parse
+        assertEquals("<tag", Entities.unescape("&lt;tag", true)); // strict, with semicolon
+        assertEquals("<tag", Entities.unescape("&lt;tag;", true)); // strict, with semicolon
+    }
+
+    @Test
+    public void testUnescape_nonStrict() {
+        assertEquals("No semicolon", Entities.unescape("No semicolon", false)); // non-strict, no semicolon should parse
+        assertEquals("<tag", Entities.unescape("&lt;tag", false)); // non-strict, no semicolon should parse
+        assertEquals("<tag", Entities.unescape("&lt;tag;", false)); // non-strict, with semicolon
+    }
+
+    @Test
+    public void testUnescape_invalidNumeric() {
+        assertEquals("Invalid numeric", Entities.unescape("Invalid &#invalid;"));
+        assertEquals("Invalid numeric", Entities.unescape("Invalid numeric ref with no numerals &#;"));
+        assertEquals("Invalid numeric", Entities.unescape("Invalid numeric ref with no numerals &#X;"));
+        assertEquals("Invalid range", Entities.unescape("Invalid &#xD800;")); // Surrogate range
+        assertEquals("Invalid range", Entities.unescape("Invalid &#x110000;")); // Out of range
+    }
+
+    @Test
+    public void testUnescape_invalidNamed() {
+        assertEquals("Invalid named", Entities.unescape("Invalid &invalid;"));
+        assertEquals("Invalid named", Entities.unescape("Invalid &invalidref;"));
+    }
+
+    @Test
+    public void testUnescape_doubleEncoded() {
+        assertEquals("&lt;", Entities.unescape("&amp;lt;")); // &amp;lt; should decode to &lt;
+        assertEquals("<", Entities.unescape("&amp;amp;lt;")); // &amp;amp;lt; should decode to &amp;lt; then <
+    }
+
+    @Test
+    public void testUnescape_edgeCases() {
+        assertEquals("Leading &", Entities.unescape("&"));
+        assertEquals("Trailing ;", Entities.unescape("String;"));
+        assertEquals("Ampersand only", Entities.unescape("&"));
+        assertEquals("Empty string", Entities.unescape(""));
+    }
+
+    @Test
+    public void testUnescape_withCharsThatCouldBePartOfEntity() {
+        assertEquals("Valid entity", Entities.unescape("&lt;"));
+        assertEquals("Not an entity", Entities.unescape("notanentity"));
+        assertEquals("Partially valid name", Entities.unescape("&lt;abc"));
+        assertEquals("Partially valid numeric", Entities.unescape("&#60;abc"));
+    }
+    
+    @Test
+    public void testUnescape_namedWithTrailingChars() {
+        assertEquals("Valid and then some", Entities.unescape("&lt;abc"));
+        assertEquals("Valid and then some hex", Entities.unescape("&#x3C;def"));
+        assertEquals("Valid and then some decimal", Entities.unescape("&#60;ghi"));
+    }
+
+    @Test
+    public void testGetMap_xhtml() {
+        Map<Character, String> map = Entities.EscapeMode.xhtml.getMap();
+        assertEquals(5, map.size());
+        assertEquals("&quot;", "&" + map.get('"') + ";");
+        assertEquals("&amp;", "&" + map.get('&') + ";");
+        assertEquals("&apos;", "&" + map.get('\'') + ";");
+        assertEquals("&lt;", "&" + map.get('<') + ";");
+        assertEquals("&gt;", "&" + map.get('>') + ";");
+    }
+
+    @Test
+    public void testGetMap_base() {
+        Map<Character, String> map = Entities.EscapeMode.base.getMap();
+        assertTrue(map.size() > 5); // Should contain more than xhtml
+        assertEquals("&quot;", "&" + map.get('"') + ";");
+        assertEquals("&amp;", "&" + map.get('&') + ";");
+        assertEquals("&apos;", "&" + map.get('\'') + ";");
+        assertEquals("&lt;", "&" + map.get('<') + ";");
+        assertEquals("&gt;", "&" + map.get('>') + ";");
+        assertEquals("&nbsp;", "&" + map.get((char) 160) + ";"); // Non-breaking space
+    }
+
+    @Test
+    public void testGetMap_extended() {
+        Map<Character, String> map = Entities.EscapeMode.extended.getMap();
+        assertTrue(map.size() > Entities.EscapeMode.base.getMap().size()); // Should contain more than base
+        assertEquals("&nbsp;", "&" + map.get((char) 160) + ";");
+        assertEquals("&euro;", "&" + map.get((char) 8364) + ";"); // Euro sign
+        assertEquals("&copy;", "&" + map.get((char) 169) + ";"); // Copyright sign
+        assertEquals("&trade;", "&" + map.get((char) 8482) + ";"); // Trade mark sign
+    }
+
+    @Test
+    public void testEscape_handlesNullInput() {
+        String escaped = Entities.escape(null, new Document("").outputSettings().encoder(), Document.OutputSettings.EscapeMode.extended);
+        assertNull(escaped);
+    }
+
+    @Test
+    public void testUnescape_handlesNullInput() {
+        String unescaped = Entities.unescape(null);
+        assertNull(unescaped);
+    }
+
+    @Test
+    public void testUnescape_handlesEmptyString() {
+        assertEquals("", Entities.unescape(""));
+        assertEquals("", Entities.unescape("", true));
+        assertEquals("", Entities.unescape("", false));
+    }
+    
+    @Test
+    public void testEscape_withEmptyString() {
+        String escaped = Entities.escape("", new Document("").outputSettings().encoder(), Document.OutputSettings.EscapeMode.extended);
+        assertEquals("", escaped);
+    }
+}
+```
+
+1. SOURCE CODE ANALYSIS - The tests cover `isNamedEntity`, `isBaseNamedEntity`, `getCharacterByName`, `escape`, and `unescape` methods of the `Entities` class. They explore named entities, numeric entities (decimal and hex), strict vs. non-strict unescaping, edge cases, and different escape modes.
+2. TEST CASE DESIGN -
+    - testIsNamedEntity: Checks known named entities and invalid names.
+    - testIsBaseNamedEntity: Checks known base named entities and invalid names.
+    - testGetCharacterByName_base: Retrieves characters for base entities.
+    - testGetCharacterByName_extended: Retrieves characters for extended entities.
+    - testGetCharacterByName_caseInsensitive: Verifies case-insensitivity for entity names.
+    - testEscape_xhtml: Escapes a string using XHTML mode.
+    - testEscape_base: Escapes a string using base mode.
+    - testEscape_extended: Escapes a string using extended mode with a non-ASCII character.
+    - testEscape_unencodableChar: Escapes a character that may not be directly encodable.
+    - testUnescape_basic: Unescapes basic named entities.
+    - testUnescape_numericDecimal: Unescapes numeric decimal entities.
+    - testUnescape_numericHex: Unescapes numeric hexadecimal entities.
+    - testUnescape_strict: Tests strict unescaping behavior.
+    - testUnescape_nonStrict: Tests non-strict unescaping behavior.
+    - testUnescape_invalidNumeric: Tests handling of invalid numeric references.
+    - testUnescape_invalidNamed: Tests handling of invalid named references.
+    - testUnescape_doubleEncoded: Tests unescaping of double-encoded entities.
+    - testUnescape_edgeCases: Tests edge cases like empty string and only ampersand.
+    - testUnescape_withCharsThatCouldBePartOfEntity: Tests strings that resemble entities but aren't.
+    - testUnescape_namedWithTrailingChars: Tests named entities followed by other characters.
+    - testGetMap_xhtml: Verifies the content of the XHTML escape map.
+    - testGetMap_base: Verifies the content of the base escape map.
+    - testGetMap_extended: Verifies the content of the extended escape map.
+    - testEscape_handlesNullInput: Tests escaping with null input.
+    - testUnescape_handlesNullInput: Tests unescaping with null input.
+    - testUnescape_handlesEmptyString: Tests unescaping an empty string.
+    - testEscape_withEmptyString: Tests escaping an empty string.
+3. DEFECT DETECTION STRATEGY - The tests focus on the correctness of entity mapping, escaping logic for different modes and characters, and the precise parsing of named and numeric character references, including edge cases and strictness variations.
+4. SUMMARY - 26 tests.
+5. LIMITATIONS - No tests are generated for `Parser` class methods as they are static utility methods and do not directly involve the `Entities` class's core logic for escaping/unescaping. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

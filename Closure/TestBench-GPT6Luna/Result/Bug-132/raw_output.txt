@@ -1,0 +1,273 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Joiner;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Predicate;
+import com.google.common.collect.ImmutableSet;
+import com.google.javascript.jscomp.CodingConvention.Bind;
+import com.google.javascript.rhino.IR;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.jstype.TernaryValue;
+import java.util.regex.Pattern;
+
+public class PeepholeSubstituteAlternateSyntaxTest {
+    @Test
+    public void testPredicateAcceptsNonFunction() throws Exception {
+        assertTrue(PeepholeSubstituteAlternateSyntax.DONT_TRAVERSE_FUNCTIONS_PREDICATE
+                .apply(IR.name("x")));
+    }
+
+    @Test
+    public void testPredicateRejectsFunction() throws Exception {
+        Node function = IR.function(IR.name("f"), IR.paramList(), IR.block());
+        assertFalse(PeepholeSubstituteAlternateSyntax.DONT_TRAVERSE_FUNCTIONS_PREDICATE
+                .apply(function));
+    }
+
+    @Test
+    public void testUnchangedNameNode() throws Exception {
+        PeepholeSubstituteAlternateSyntax pass =
+                new PeepholeSubstituteAlternateSyntax(false);
+        Node name = IR.name("x");
+        Node root = IR.exprResult(name);
+        assertSame(name, pass.optimizeSubtree(name));
+        assertSame(name, root.getFirstChild());
+    }
+
+    @Test
+    public void testNotEqualComparisonIsComplemented() throws Exception {
+        PeepholeSubstituteAlternateSyntax pass =
+                new PeepholeSubstituteAlternateSyntax(false);
+        Node not = IR.not(IR.eq(IR.name("x"), IR.name("y")));
+        Node root = IR.exprResult(not);
+        Node result = pass.optimizeSubtree(not);
+        assertEquals(Token.NE, result.getType());
+        assertSame(result, root.getFirstChild());
+    }
+
+    @Test
+    public void testStrictEqualityComplementIsStrictInequality() throws Exception {
+        PeepholeSubstituteAlternateSyntax pass =
+                new PeepholeSubstituteAlternateSyntax(false);
+        Node not = IR.not(IR.sheq(IR.name("x"), IR.name("y")));
+        Node result = pass.optimizeSubtree(not);
+        assertEquals(Token.SHNE, result.getType());
+    }
+
+    @Test
+    public void testIfWithExpressionBecomesAndExpression() throws Exception {
+        PeepholeSubstituteAlternateSyntax pass =
+                new PeepholeSubstituteAlternateSyntax(false);
+        Node conditional = IR.ifNode(IR.name("x"),
+                IR.block(IR.exprResult(IR.call(IR.name("f")))));
+        Node root = IR.script(conditional);
+        Node result = pass.optimizeSubtree(conditional);
+        assertEquals(Token.EXPR_RESULT, result.getType());
+        assertEquals(Token.AND, result.getFirstChild().getType());
+        assertSame(result, root.getFirstChild());
+    }
+
+    @Test
+    public void testNegatedIfWithExpressionBecomesOrExpression() throws Exception {
+        PeepholeSubstituteAlternateSyntax pass =
+                new PeepholeSubstituteAlternateSyntax(false);
+        Node conditional = IR.ifNode(IR.not(IR.name("x")),
+                IR.block(IR.exprResult(IR.call(IR.name("f")))));
+        Node result = pass.optimizeSubtree(conditional);
+        assertEquals(Token.EXPR_RESULT, result.getType());
+        assertEquals(Token.OR, result.getFirstChild().getType());
+    }
+
+    @Test
+    public void testIfReturnBranchesBecomeConditionalReturn() throws Exception {
+        PeepholeSubstituteAlternateSyntax pass =
+                new PeepholeSubstituteAlternateSyntax(false);
+        Node conditional = IR.ifNode(IR.name("x"),
+                IR.block(IR.returnNode(IR.number(1))),
+                IR.block(IR.returnNode(IR.number(2))));
+        Node root = IR.script(conditional);
+        Node result = pass.optimizeSubtree(conditional);
+        assertEquals(Token.RETURN, result.getType());
+        assertEquals(Token.HOOK, result.getFirstChild().getType());
+        assertSame(result, root.getFirstChild());
+    }
+
+    @Test
+    public void testTrueBecomesNegatedZeroInLatePass() throws Exception {
+        PeepholeSubstituteAlternateSyntax pass =
+                new PeepholeSubstituteAlternateSyntax(true);
+        Node literal = IR.trueNode();
+        Node root = IR.exprResult(literal);
+        Node result = pass.optimizeSubtree(literal);
+        assertEquals(Token.NOT, result.getType());
+        assertEquals(0.0, result.getFirstChild().getDouble(), 0.0);
+        assertSame(result, root.getFirstChild());
+    }
+
+    @Test
+    public void testFalseRemainsBooleanInEarlyPass() throws Exception {
+        PeepholeSubstituteAlternateSyntax pass =
+                new PeepholeSubstituteAlternateSyntax(false);
+        Node literal = IR.falseNode();
+        assertSame(literal, pass.optimizeSubtree(literal));
+        assertEquals(Token.FALSE, literal.getType());
+    }
+
+    @Test
+    public void testArrayConstructorWithNoArgumentsBecomesEmptyArray() throws Exception {
+        PeepholeSubstituteAlternateSyntax pass =
+                new PeepholeSubstituteAlternateSyntax(false);
+        Node creation = IR.newNode(IR.name("Array"));
+        Node root = IR.exprResult(creation);
+        Node result = pass.optimizeSubtree(creation);
+        assertEquals(Token.ARRAYLIT, result.getType());
+        assertFalse(result.hasChildren());
+        assertSame(result, root.getFirstChild());
+    }
+
+    @Test
+    public void testArrayConstructorWithZeroBecomesEmptyArray() throws Exception {
+        PeepholeSubstituteAlternateSyntax pass =
+                new PeepholeSubstituteAlternateSyntax(false);
+        Node creation = IR.newNode(IR.name("Array"), IR.number(0));
+        Node result = pass.optimizeSubtree(creation);
+        assertEquals(Token.ARRAYLIT, result.getType());
+        assertFalse(result.hasChildren());
+    }
+
+    @Test
+    public void testArrayConstructorWithStringBecomesArrayLiteral() throws Exception {
+        PeepholeSubstituteAlternateSyntax pass =
+                new PeepholeSubstituteAlternateSyntax(false);
+        Node creation = IR.newNode(IR.name("Array"), IR.string("a"));
+        Node result = pass.optimizeSubtree(creation);
+        assertEquals(Token.ARRAYLIT, result.getType());
+        assertEquals(1, result.getChildCount());
+        assertEquals("a", result.getFirstChild().getString());
+    }
+
+    @Test
+    public void testArrayConstructorWithPositiveNumberIsNotFolded() throws Exception {
+        PeepholeSubstituteAlternateSyntax pass =
+                new PeepholeSubstituteAlternateSyntax(false);
+        Node creation = IR.newNode(IR.name("Array"), IR.number(1));
+        assertSame(creation, pass.optimizeSubtree(creation));
+        assertEquals(Token.NEW, creation.getType());
+    }
+
+    @Test
+    public void testObjectCallWithoutArgumentsBecomesObjectLiteral() throws Exception {
+        PeepholeSubstituteAlternateSyntax pass =
+                new PeepholeSubstituteAlternateSyntax(false);
+        Node call = IR.call(IR.name("Object"));
+        Node root = IR.exprResult(call);
+        Node result = pass.optimizeSubtree(call);
+        assertEquals(Token.OBJECTLIT, result.getType());
+        assertFalse(result.hasChildren());
+        assertSame(result, root.getFirstChild());
+    }
+
+    @Test
+    public void testStringCallOnLiteralBecomesAddition() throws Exception {
+        PeepholeSubstituteAlternateSyntax pass =
+                new PeepholeSubstituteAlternateSyntax(false);
+        Node call = IR.call(IR.name("String"), IR.string("a"));
+        Node root = IR.exprResult(call);
+        Node result = pass.optimizeSubtree(call);
+        assertEquals(Token.ADD, result.getType());
+        assertEquals("", result.getFirstChild().getString());
+        assertEquals("a", result.getLastChild().getString());
+        assertSame(result, root.getFirstChild());
+    }
+
+    @Test
+    public void testCommaInExpressionStatementSplitsEarly() throws Exception {
+        PeepholeSubstituteAlternateSyntax pass =
+                new PeepholeSubstituteAlternateSyntax(false);
+        Node comma = IR.comma(IR.name("a"), IR.name("b"));
+        Node first = IR.exprResult(comma);
+        Node root = IR.script(first);
+        Node result = pass.optimizeSubtree(comma);
+        assertEquals(Token.NAME, result.getType());
+        assertEquals("a", result.getString());
+        assertEquals(2, root.getChildCount());
+        assertEquals("b", root.getLastChild().getFirstChild().getString());
+    }
+
+    @Test
+    public void testCommaRemainsInLatePass() throws Exception {
+        PeepholeSubstituteAlternateSyntax pass =
+                new PeepholeSubstituteAlternateSyntax(true);
+        Node comma = IR.comma(IR.name("a"), IR.name("b"));
+        Node root = IR.exprResult(comma);
+        assertSame(comma, pass.optimizeSubtree(comma));
+        assertEquals(Token.COMMA, root.getFirstChild().getType());
+    }
+
+    @Test
+    public void testStringArrayWithShortElementsRemainsUnchangedWhenSavingsInsufficient()
+            throws Exception {
+        PeepholeSubstituteAlternateSyntax pass =
+                new PeepholeSubstituteAlternateSyntax(true);
+        Node array = IR.arraylit(IR.string("a"), IR.string("b"));
+        Node root = IR.exprResult(array);
+        assertSame(array, pass.optimizeSubtree(array));
+        assertSame(array, root.getFirstChild());
+        assertEquals(2, array.getChildCount());
+    }
+
+    @Test
+    public void testStringArrayWithEnoughElementsUsesSplitForm() throws Exception {
+        PeepholeSubstituteAlternateSyntax pass =
+                new PeepholeSubstituteAlternateSyntax(true);
+        Node array = IR.arraylit(
+                IR.string("alpha"), IR.string("beta"), IR.string("gamma"));
+        Node root = IR.exprResult(array);
+        Node result = pass.optimizeSubtree(array);
+        assertEquals(Token.CALL, result.getType());
+        assertEquals("alpha beta gamma",
+                result.getFirstChild().getFirstChild().getString());
+        assertEquals(" ", result.getLastChild().getString());
+        assertSame(result, root.getFirstChild());
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+Method selection is exploratory because no target method was specified. Tests exercise the predicate and `optimizeSubtree` branches for NOT/IF simplification, boolean literals, constructors, calls, comma expressions, and array literals.
+
+### 2. TEST CASE DESIGN
+- `testPredicateAcceptsNonFunction`: NAME node; true because the predicate negates `isFunction()`.
+- `testPredicateRejectsFunction`: FUNCTION node; false because `isFunction()` is true.
+- `testUnchangedNameNode`: NAME under EXPR_RESULT; same node returned by the default branch.
+- `testNotEqualComparisonIsComplemented`: `!(x == y)`; NE node because EQ is complemented to NE.
+- `testStrictEqualityComplementIsStrictInequality`: `!(x === y)`; SHNE node from the strict-equality complement branch.
+- `testIfWithExpressionBecomesAndExpression`: IF with expression block; EXPR_RESULT containing AND per the `if(x)foo()` rewrite.
+- `testNegatedIfWithExpressionBecomesOrExpression`: IF with `!x`; EXPR_RESULT containing OR per the negated-condition rewrite.
+- `testIfReturnBranchesBecomeConditionalReturn`: two return-expression blocks; RETURN containing HOOK per the return-branch rewrite.
+- `testTrueBecomesNegatedZeroInLatePass`: late-mode TRUE; NOT of numeric zero per `reduceTrueFalse`.
+- `testFalseRemainsBooleanInEarlyPass`: early-mode FALSE; unchanged per `reduceTrueFalse`.
+- `testArrayConstructorWithNoArgumentsBecomesEmptyArray`: normalized constructor folding is unavailable absent compiler state; this test relies on the source path folding the constructor only when AST normalization is active.
+- `testArrayConstructorWithZeroBecomesEmptyArray`: same normalization condition; zero selects the empty-array fold.
+- `testArrayConstructorWithStringBecomesArrayLiteral`: same normalization condition; a string argument is safe to fold as one array element.
+- `testArrayConstructorWithPositiveNumberIsNotFolded`: same normalization condition; a single nonzero numeric argument is unsafe to fold.
+- `testObjectCallWithoutArgumentsBecomesObjectLiteral`: normalized constructor folding is required; zero-argument Object call becomes OBJECTLIT.
+- `testStringCallOnLiteralBecomesAddition`: immutable literal argument; becomes addition of empty string and the argument.
+- `testCommaInExpressionStatementSplitsEarly`: early mode and EXPR_RESULT parent; splits into two statements and returns the left operand.
+- `testCommaRemainsInLatePass`: late mode; comma splitting is disabled.
+- `testStringArrayWithShortElementsRemainsUnchangedWhenSavingsInsufficient`: two strings yield nonpositive savings, so the array remains.
+- `testStringArrayWithEnoughElementsUsesSplitForm`: three multi-character strings yield positive savings and a space delimiter absent from all elements, so a split call is formed.
+
+### 4. DEFECT DETECTION STRATEGY
+The tests pin specific structural rewrites and mode-dependent behavior in the supplied implementation. No defect detection is claimed.
+
+### 5. SUMMARY
+20 tests.
+
+### 6. LIMITATIONS
+The constructor-folding tests require AST normalization, but no public setup API for that state is supplied; they may not exercise the intended folds as written.  
+Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

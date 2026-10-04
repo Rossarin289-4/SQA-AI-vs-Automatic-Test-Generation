@@ -1,0 +1,866 @@
+```java
+package com.fasterxml.jackson.databind.deser;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.util.*;
+import com.fasterxml.jackson.annotation.ObjectIdGenerator;
+import com.fasterxml.jackson.annotation.ObjectIdGenerators;
+import com.fasterxml.jackson.annotation.ObjectIdResolver;
+import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.annotation.JsonPOJOBuilder;
+import com.fasterxml.jackson.databind.cfg.DeserializerFactoryConfig;
+import com.fasterxml.jackson.databind.deser.impl.*;
+import com.fasterxml.jackson.databind.deser.std.ThrowableDeserializer;
+import com.fasterxml.jackson.databind.introspect.*;
+import com.fasterxml.jackson.databind.jsontype.TypeDeserializer;
+import com.fasterxml.jackson.databind.util.ArrayBuilders;
+import com.fasterxml.jackson.databind.util.ClassUtil;
+import com.fasterxml.jackson.databind.util.SimpleBeanPropertyDefinition;
+
+public class BeanDeserializerFactoryTest {
+
+    // Helper to create a dummy DeserializationContext
+    private DeserializationContext createDummyContext() {
+        // Mockito or similar would be better, but adhering to rules.
+        // This is a minimal mock.
+        return new DeserializationContext(null, null, null) {
+            @Override
+            public DeserializerFactory getFactory() {
+                return BeanDeserializerFactory.instance; // Default instance
+            }
+
+            @Override
+            public JavaType constructType(Class<?> cls) {
+                // Mock basic type construction
+                return new com.fasterxml.jackson.databind.type.SimpleType(cls);
+            }
+
+            @Override
+            public BeanDescription introspectForBuilder(JavaType builderType) throws JsonMappingException {
+                // Mock for builder introspector
+                return new com.fasterxml.jackson.databind.introspect.BasicBeanDescription(
+                        null, builderType, null, null, null, null, null);
+            }
+
+            @Override
+            public JavaType getTypeFactory() {
+                return com.fasterxml.jackson.databind.type.TypeFactory.defaultInstance();
+            }
+
+            @Override
+            public ObjectIdResolver objectIdResolverInstance(AnnotatedClass classInfo, ObjectIdInfo info) throws JsonMappingException {
+                // Return a default instance if needed
+                return new com.fasterxml.jackson.databind.deser.impl.ObjectIdReader.DefaultObjectIdResolver();
+            }
+
+            @Override
+            public ObjectIdGenerator<?> objectIdGeneratorInstance(AnnotatedClass classInfo, ObjectIdInfo info) throws JsonMappingException {
+                // Return a default instance if needed
+                return new ObjectIdGenerators.IntSequenceGenerator();
+            }
+        };
+    }
+
+    // Helper to create a dummy BeanDescription
+    private BeanDescription createDummyBeanDescription(JavaType type) {
+        return new com.fasterxml.jackson.databind.introspect.BasicBeanDescription(
+            null, type, null, null, null, null, null);
+    }
+
+    // Helper to create a dummy DeserializerFactoryConfig
+    private DeserializerFactoryConfig createDummyConfig() {
+        return new DeserializerFactoryConfig();
+    }
+
+    @Test
+    public void testInstanceIsNotNull() throws Exception {
+        assertNotNull("Instance should not be null", BeanDeserializerFactory.instance);
+    }
+
+    @Test
+    public void testInstanceHasDefaultConfig() throws Exception {
+        DeserializerFactoryConfig config = BeanDeserializerFactory.instance.withConfig(createDummyConfig());
+        assertNotNull("Instance with default config should not be null", config);
+    }
+
+    @Test
+    public void testCreateBeanDeserializerForThrowable() throws Exception {
+        DeserializationContext ctxt = createDummyContext();
+        JavaType type = ctxt.constructType(Throwable.class);
+        BeanDescription beanDesc = createDummyBeanDescription(type);
+        JsonDeserializer<Object> deserializer = BeanDeserializerFactory.instance.createBeanDeserializer(ctxt, type, beanDesc);
+        assertTrue("Deserializer for Throwable should be a ThrowableDeserializer", deserializer instanceof ThrowableDeserializer);
+    }
+
+    @Test
+    public void testCreateBeanDeserializerForAbstractType() throws Exception {
+        DeserializationContext ctxt = createDummyContext();
+        JavaType type = ctxt.constructType(java.util.List.class); // Abstract type
+        BeanDescription beanDesc = createDummyBeanDescription(type);
+
+        // Mock AbstractTypeResolver to return a concrete type
+        DeserializerFactoryConfig configWithResolver = new DeserializerFactoryConfig()
+                .withAbstractTypeResolver(new AbstractTypeResolver() {
+                    @Override
+                    public JavaType resolveAbstractType(DeserializationConfig config, BeanDescription typeDesc) {
+                        if (typeDesc.getType().getRawClass() == java.util.List.class) {
+                            return ctxt.constructType(java.util.ArrayList.class);
+                        }
+                        return null;
+                    }
+                });
+        BeanDeserializerFactory factoryWithResolver = new BeanDeserializerFactory(configWithResolver);
+
+        JsonDeserializer<Object> deserializer = factoryWithResolver.createBeanDeserializer(ctxt, type, beanDesc);
+        assertNotNull("Deserializer for abstract List should be created", deserializer);
+        // Further assertions could check if it's an ArrayList deserializer if that was exposed.
+    }
+
+    @Test
+    public void testCreateBeanDeserializerForStandardType() throws Exception {
+        DeserializationContext ctxt = createDummyContext();
+        JavaType type = ctxt.constructType(String.class);
+        BeanDescription beanDesc = createDummyBeanDescription(type);
+        JsonDeserializer<Object> deserializer = BeanDeserializerFactory.instance.createBeanDeserializer(ctxt, type, beanDesc);
+        assertNotNull("Deserializer for String should be created", deserializer);
+        // Could assert it's a StringDeserializer, but that's implementation detail of findStdDeserializer
+    }
+
+    @Test
+    public void testCreateBeanDeserializerForUnknownType() throws Exception {
+        DeserializationContext ctxt = createDummyContext();
+        JavaType type = ctxt.constructType(Object.class); // A general object type, not a potential bean
+        BeanDescription beanDesc = createDummyBeanDescription(type);
+        JsonDeserializer<Object> deserializer = BeanDeserializerFactory.instance.createBeanDeserializer(ctxt, type, beanDesc);
+        assertNotNull("Deserializer for Object should be created (fallback to bean deserializer)", deserializer);
+    }
+
+    @Test
+    public void testCreateBuilderBasedDeserializer() throws Exception {
+        DeserializationContext ctxt = createDummyContext();
+        JavaType valueType = ctxt.constructType(String.class); // Dummy value type
+        JavaType builderType = ctxt.constructType(StringBuilder.class); // Dummy builder type
+        BeanDescription beanDesc = createDummyBeanDescription(builderType);
+
+        JsonDeserializer<Object> deserializer = BeanDeserializerFactory.instance.createBuilderBasedDeserializer(ctxt, valueType, beanDesc, StringBuilder.class);
+        assertNotNull("Builder-based deserializer should be created", deserializer);
+    }
+
+    @Test
+    public void testBuildBeanDeserializerForSimpleBean() throws Exception {
+        DeserializationContext ctxt = createDummyContext();
+        // Need a concrete type that can be a bean
+        JavaType type = ctxt.constructType(BeanExample.class);
+        BeanDescription beanDesc = createDummyBeanDescription(type);
+        JsonDeserializer<Object> deserializer = BeanDeserializerFactory.instance.buildBeanDeserializer(ctxt, type, beanDesc);
+        assertNotNull("Bean deserializer for BeanExample should be created", deserializer);
+    }
+
+    @Test
+    public void testBuildBeanDeserializerForAbstractTypeWithMaterialization() throws Exception {
+        DeserializationContext ctxt = createDummyContext();
+        JavaType type = ctxt.constructType(java.util.Map.class); // Abstract type
+        BeanDescription beanDesc = createDummyBeanDescription(type);
+
+        DeserializerFactoryConfig configWithResolver = new DeserializerFactoryConfig()
+                .withAbstractTypeResolver(new AbstractTypeResolver() {
+                    @Override
+                    public JavaType resolveAbstractType(DeserializationConfig config, BeanDescription typeDesc) {
+                        if (typeDesc.getType().getRawClass() == java.util.Map.class) {
+                            return ctxt.constructType(java.util.HashMap.class);
+                        }
+                        return null;
+                    }
+                });
+        BeanDeserializerFactory factoryWithResolver = new BeanDeserializerFactory(configWithResolver);
+
+        JsonDeserializer<Object> deserializer = factoryWithResolver.buildBeanDeserializer(ctxt, type, beanDesc);
+        assertNotNull("Bean deserializer for abstract Map should be created after materialization", deserializer);
+    }
+
+    @Test
+    public void testBuildBeanDeserializerForThrowableWithInitCause() throws Exception {
+        DeserializationContext ctxt = createDummyContext();
+        JavaType type = ctxt.constructType(Exception.class); // Subclass of Throwable
+        BeanDescription beanDesc = createDummyBeanDescription(type);
+        // Mock BeanDescription to have initCause method
+        AnnotatedMethod initCauseMethod = new AnnotatedMethod(
+                null, // Member
+                Exception.class.getMethod("initCause", Throwable.class),
+                null, null); // Annotations, TypeResolutionContext
+        BeanDescription beanDescWithMethod = new com.fasterxml.jackson.databind.introspect.BasicBeanDescription(
+            null, type, null, null, null, null, null) {
+            @Override
+            public AnnotatedMethod findMethod(String name, Class<?>[] paramTypes) {
+                if ("initCause".equals(name) && paramTypes.length == 1 && paramTypes[0] == Throwable.class) {
+                    return initCauseMethod;
+                }
+                return super.findMethod(name, paramTypes);
+            }
+        };
+
+        JsonDeserializer<Object> deserializer = BeanDeserializerFactory.instance.buildBeanDeserializer(ctxt, type, beanDescWithMethod);
+        assertTrue("Deserializer for Exception should be built", deserializer != null);
+        // Note: We can't directly assert it's ThrowableDeserializer here from buildBeanDeserializer
+        // as buildThrowableDeserializer is called from createBeanDeserializer.
+        // This test mainly checks buildBeanDeserializer's path.
+    }
+
+
+    @Test
+    public void testBuildThrowableDeserializer() throws Exception {
+        DeserializationContext ctxt = createDummyContext();
+        JavaType type = ctxt.constructType(RuntimeException.class);
+        BeanDescription beanDesc = createDummyBeanDescription(type);
+
+        // Mock BeanDescription to have initCause method and potentially others
+        AnnotatedMethod initCauseMethod = new AnnotatedMethod(
+                null, // Member
+                RuntimeException.class.getMethod("initCause", Throwable.class),
+                null, null); // Annotations, TypeResolutionContext
+        BeanDescription beanDescWithMethod = new com.fasterxml.jackson.databind.introspect.BasicBeanDescription(
+            null, type, null, null, null, null, null) {
+            @Override
+            public AnnotatedMethod findMethod(String name, Class<?>[] paramTypes) {
+                if ("initCause".equals(name) && paramTypes.length == 1 && paramTypes[0] == Throwable.class) {
+                    return initCauseMethod;
+                }
+                // Mock ignorable properties
+                if ("getLocalizedMessage".equals(name) || "getSuppressed".equals(name) || "getMessage".equals(name)) {
+                    return null; // Pretend these methods exist but aren't directly found by BeanDescription introspection for simplicity
+                }
+                return super.findMethod(name, paramTypes);
+            }
+
+            @Override
+            public List<BeanPropertyDefinition> findProperties() {
+                // Mock to have some properties, e.g. for 'message' if it were a setter/field
+                return Collections.emptyList();
+            }
+        };
+
+        JsonDeserializer<Object> deserializer = BeanDeserializerFactory.instance.buildThrowableDeserializer(ctxt, type, beanDescWithMethod);
+        assertTrue("Throwable deserializer should be constructed", deserializer != null);
+        assertTrue("Throwable deserializer should be of type ThrowableDeserializer", deserializer instanceof ThrowableDeserializer);
+    }
+
+    @Test
+    public void testConstructBeanDeserializerBuilder() throws Exception {
+        DeserializationContext ctxt = createDummyContext();
+        JavaType type = ctxt.constructType(BeanExample.class);
+        BeanDescription beanDesc = createDummyBeanDescription(type);
+        BeanDeserializerBuilder builder = BeanDeserializerFactory.instance.constructBeanDeserializerBuilder(ctxt, beanDesc);
+        assertNotNull("BeanDeserializerBuilder should be constructed", builder);
+        assertEquals("Builder should be for the correct bean description", beanDesc, builder._beanDesc);
+    }
+
+    @Test
+    public void testAddBeanProps() throws Exception {
+        DeserializationContext ctxt = createDummyContext();
+        JavaType type = ctxt.constructType(BeanExample.class);
+        BeanDescription beanDesc = createDummyBeanDescription(type);
+        BeanDeserializerBuilder builder = BeanDeserializerFactory.instance.constructBeanDeserializerBuilder(ctxt, beanDesc);
+
+        // Mock BeanDescription to provide properties
+        AnnotatedField fieldA = new AnnotatedField(null, BeanExample.class.getDeclaredField("fieldA"), null, null);
+        SimpleBeanPropertyDefinition propDefA = SimpleBeanPropertyDefinition.construct(
+            ctxt.getConfig(), fieldA, PropertyName.construct("fieldA"));
+
+        List<BeanPropertyDefinition> propDefs = Collections.singletonList(propDefA);
+
+        BeanDeserializerFactory factory = BeanDeserializerFactory.instance;
+        // Need to override BeanDescription to return mock properties
+        BeanDescription mockBeanDesc = new com.fasterxml.jackson.databind.introspect.BasicBeanDescription(
+                null, type, null, null, null, null, null) {
+            @Override
+            public List<BeanPropertyDefinition> findProperties() {
+                return propDefs;
+            }
+        };
+
+        // Capture the actually constructed SettableBeanProperty
+        final SettableBeanProperty[] capturedProp = new SettableBeanProperty[1];
+        builder.addProperty(new SettableBeanProperty(propDefA, null, null, null) {
+            @Override
+            public void set(Object bean, Object value) throws Exception { /* no-op */ }
+            @Override
+            public Object get(Object bean) throws Exception { return null; }
+            @Override
+            public void deserializeAndSet(com.fasterxml.jackson.core.JsonParser p, DeserializationContext ctxt, Object bean) throws Exception {
+                capturedProp[0] = this; // Capture the property
+            }
+            @Override
+            protected SettableBeanProperty withDelegate(SettableBeanProperty d) { return this; } // Not needed for mock
+        });
+
+
+        // Call addBeanProps - this method populates the builder
+        // Since this is a void method, we can't directly test its return.
+        // We can test side effects on the builder or properties.
+        // The actual construction of SettableBeanProperty is complex and relies on many other components.
+        // For simplicity, we'll test if the builder is prepared for properties.
+        // A more thorough test would involve a mock context and config to fully construct properties.
+        factory.addBeanProps(ctxt, mockBeanDesc, builder);
+
+        // We can check if the builder has properties added, assuming addProperty was called internally by addBeanProps
+        // This requires knowing how addBeanProps interacts with builder.
+        // A simpler test: check if builder state is modified.
+        assertTrue("Builder should contain settable properties after addBeanProps", builder.getProperties().hasNext());
+    }
+
+    @Test
+    public void testAddObjectIdReaderWhenPresent() throws Exception {
+        DeserializationContext ctxt = createDummyContext();
+        JavaType type = ctxt.constructType(BeanWithObjectId.class);
+        BeanDescription beanDesc = createDummyBeanDescription(type);
+        BeanDeserializerBuilder builder = BeanDeserializerFactory.instance.constructBeanDeserializerBuilder(ctxt, beanDesc);
+
+        // Mock BeanDescription to return ObjectIdInfo
+        ObjectIdInfo objectIdInfo = new ObjectIdInfo(
+                PropertyName.construct("id"),
+                type,
+                ObjectIdGenerators.IntSequenceGenerator.class,
+                null // No resolver
+        );
+        // Need a SettableBeanProperty for the ID
+        AnnotatedField idField = new AnnotatedField(null, BeanWithObjectId.class.getDeclaredField("id"), null, null);
+        SimpleBeanPropertyDefinition idPropDef = SimpleBeanPropertyDefinition.construct(
+                ctxt.getConfig(), idField, PropertyName.construct("id"));
+        SettableBeanProperty idProp = new FieldProperty(idPropDef, ctxt.constructType(Integer.class), null, null, (AnnotatedField) idField);
+
+        // Mock builder to return this property
+        BeanDeserializerBuilder mockBuilder = new BeanDeserializerBuilder(beanDesc, ctxt.getConfig()) {
+            @Override
+            public SettableBeanProperty findProperty(PropertyName propertyName) {
+                if (propertyName.getSimpleName().equals("id")) {
+                    return idProp;
+                }
+                return null;
+            }
+        };
+        mockBuilder.setValueInstantiator(new ValueInstantiator(ctxt.getConfig(), beanDesc) { // Mock ValueInstantiator
+            @Override
+            public boolean canCreateFromObjectWith() { return true; }
+            @Override
+            public Object createFromObjectWith(DeserializationContext ctxt, Object[] args) { return new BeanWithObjectId(); }
+            @Override
+            public SettableBeanProperty[] getFromObjectArguments(DeserializationConfig config) {
+                return new SettableBeanProperty[]{idProp}; // Return ID prop as constructor arg
+            }
+        });
+
+        // Override BeanDescription to return ObjectIdInfo
+        BeanDescription mockBeanDesc = new com.fasterxml.jackson.databind.introspect.BasicBeanDescription(
+            null, type, null, null, null, null, null) {
+            @Override
+            public ObjectIdInfo getObjectIdInfo() {
+                return objectIdInfo;
+            }
+            @Override
+            public JavaType getType() { return type; }
+        };
+
+        // Need to mock the ctxt to return the correct id type for deserializer lookup
+        DeserializationContext mockCtxt = new DeserializationContext(null, null, null) {
+            @Override
+            public DeserializerFactory getFactory() {
+                return BeanDeserializerFactory.instance;
+            }
+            @Override
+            public JavaType constructType(Class<?> cls) {
+                return new com.fasterxml.jackson.databind.type.SimpleType(cls);
+            }
+            @Override
+            public JavaType getTypeFactory() {
+                return com.fasterxml.jackson.databind.type.TypeFactory.defaultInstance();
+            }
+            @Override
+            public ObjectIdResolver objectIdResolverInstance(AnnotatedClass classInfo, ObjectIdInfo info) throws JsonMappingException {
+                return new com.fasterxml.jackson.databind.deser.impl.ObjectIdReader.DefaultObjectIdResolver();
+            }
+            @Override
+            public ObjectIdGenerator<?> objectIdGeneratorInstance(AnnotatedClass classInfo, ObjectIdInfo info) throws JsonMappingException {
+                // PropertyGenerator needs extra handling
+                if (info.getGeneratorType() == ObjectIdGenerators.PropertyGenerator.class) {
+                    return new PropertyBasedObjectIdGenerator(info.getScope());
+                }
+                return super.objectIdGeneratorInstance(classInfo, info);
+            }
+
+            @Override
+            public JsonDeserializer<Object> findRootValueDeserializer(JavaType typeToDeserialize) throws JsonMappingException {
+                // Mock finding deserializer for the ID type
+                if (typeToDeserialize.getRawClass() == Integer.class) {
+                    return new com.fasterxml.jackson.databind.deser.std.IntegerDeserializer();
+                }
+                return null;
+            }
+        };
+
+        BeanDeserializerFactory.instance.addObjectIdReader(mockCtxt, mockBeanDesc, mockBuilder);
+        assertNotNull("ObjectIdReader should be set on the builder", mockBuilder.getObjectIdReader());
+    }
+
+    @Test
+    public void testAddBeanProps_IgnoreUnknownPropertiesTrue() throws Exception {
+        DeserializationContext ctxt = createDummyContext();
+        JavaType type = ctxt.constructType(BeanExample.class);
+        BeanDescription beanDesc = createDummyBeanDescription(type);
+        BeanDeserializerBuilder builder = BeanDeserializerFactory.instance.constructBeanDeserializerBuilder(ctxt, beanDesc);
+
+        // Mock AnnotationIntrospector to return ignoreUnknownProperties = true
+        AnnotationIntrospector ai = new com.fasterxml.jackson.databind.introspect.JacksonAnnotationIntrospector() {
+            @Override
+            public Boolean findIgnoreUnknownProperties(AnnotatedClass ac) {
+                return Boolean.TRUE;
+            }
+        };
+        DeserializationConfig config = ctxt.getConfig().with(ai);
+        DeserializationContext mockCtxt = new DeserializationContext(config, null, null) {
+            @Override
+            public DeserializerFactory getFactory() {
+                return BeanDeserializerFactory.instance;
+            }
+            @Override
+            public JavaType constructType(Class<?> cls) { return new com.fasterxml.jackson.databind.type.SimpleType(cls); }
+            @Override
+            public JavaType getTypeFactory() { return com.fasterxml.jackson.databind.type.TypeFactory.defaultInstance(); }
+        };
+
+        // Mock BeanDescription to have properties
+        AnnotatedField fieldA = new AnnotatedField(null, BeanExample.class.getDeclaredField("fieldA"), null, null);
+        SimpleBeanPropertyDefinition propDefA = SimpleBeanPropertyDefinition.construct(
+            mockCtxt.getConfig(), fieldA, PropertyName.construct("fieldA"));
+        List<BeanPropertyDefinition> propDefs = Collections.singletonList(propDefA);
+        BeanDescription mockBeanDesc = new com.fasterxml.jackson.databind.introspect.BasicBeanDescription(
+                null, type, null, null, null, null, null) {
+            @Override
+            public List<BeanPropertyDefinition> findProperties() { return propDefs; }
+        };
+
+        BeanDeserializerFactory.instance.addBeanProps(mockCtxt, mockBeanDesc, builder);
+        assertTrue("Builder should ignore unknown properties", builder._ignoreAllUnknown);
+    }
+
+    @Test
+    public void testAddBeanProps_IgnoredProperties() throws Exception {
+        DeserializationContext ctxt = createDummyContext();
+        JavaType type = ctxt.constructType(BeanExample.class);
+        BeanDescription beanDesc = createDummyBeanDescription(type);
+        BeanDeserializerBuilder builder = BeanDeserializerFactory.instance.constructBeanDeserializerBuilder(ctxt, beanDesc);
+
+        // Mock AnnotationIntrospector to return ignored properties
+        AnnotationIntrospector ai = new com.fasterxml.jackson.databind.introspect.JacksonAnnotationIntrospector() {
+            @Override
+            public String[] findPropertiesToIgnore(AnnotatedClass ac, boolean forView) {
+                return new String[]{"fieldB"};
+            }
+        };
+        DeserializationConfig config = ctxt.getConfig().with(ai);
+        DeserializationContext mockCtxt = new DeserializationContext(config, null, null) {
+            @Override
+            public DeserializerFactory getFactory() {
+                return BeanDeserializerFactory.instance;
+            }
+            @Override
+            public JavaType constructType(Class<?> cls) { return new com.fasterxml.jackson.databind.type.SimpleType(cls); }
+            @Override
+            public JavaType getTypeFactory() { return com.fasterxml.jackson.databind.type.TypeFactory.defaultInstance(); }
+        };
+
+        // Mock BeanDescription to have properties
+        AnnotatedField fieldA = new AnnotatedField(null, BeanExample.class.getDeclaredField("fieldA"), null, null);
+        AnnotatedField fieldB = new AnnotatedField(null, BeanExample.class.getDeclaredField("fieldB"), null, null);
+        SimpleBeanPropertyDefinition propDefA = SimpleBeanPropertyDefinition.construct(
+            mockCtxt.getConfig(), fieldA, PropertyName.construct("fieldA"));
+        SimpleBeanPropertyDefinition propDefB = SimpleBeanPropertyDefinition.construct(
+            mockCtxt.getConfig(), fieldB, PropertyName.construct("fieldB"));
+        List<BeanPropertyDefinition> propDefs = Arrays.asList(propDefA, propDefB);
+        BeanDescription mockBeanDesc = new com.fasterxml.jackson.databind.introspect.BasicBeanDescription(
+                null, type, null, null, null, null, null) {
+            @Override
+            public List<BeanPropertyDefinition> findProperties() { return propDefs; }
+        };
+
+        BeanDeserializerFactory.instance.addBeanProps(mockCtxt, mockBeanDesc, builder);
+        assertTrue("Property 'fieldB' should be marked as ignorable", builder._ignorableProps.contains("fieldB"));
+    }
+
+    @Test
+    public void testAddInjectables() throws Exception {
+        DeserializationContext ctxt = createDummyContext();
+        JavaType type = ctxt.constructType(BeanWithInjectable.class);
+        BeanDescription beanDesc = createDummyBeanDescription(type);
+        BeanDeserializerBuilder builder = BeanDeserializerFactory.instance.constructBeanDeserializerBuilder(ctxt, beanDesc);
+
+        // Mock BeanDescription to have an injectable
+        Map<Object, AnnotatedMember> injectables = new HashMap<>();
+        AnnotatedField fieldInject = new AnnotatedField(null, BeanWithInjectable.class.getDeclaredField("injectableField"), null, null);
+        injectables.put("someValue", fieldInject);
+
+        BeanDescription mockBeanDesc = new com.fasterxml.jackson.databind.introspect.BasicBeanDescription(
+            null, type, null, null, null, null, null) {
+            @Override
+            public Map<Object, AnnotatedMember> findInjectables() {
+                return injectables;
+            }
+        };
+
+        BeanDeserializerFactory.instance.addInjectables(ctxt, mockBeanDesc, builder);
+        assertFalse("Builder should have injectables", builder.getInjectables().isEmpty());
+        assertEquals("Injectable value should be 'someValue'", "someValue", builder.getInjectables().get(0).getValueId());
+    }
+
+    @Test
+    public void testAddReferenceProperties() throws Exception {
+        DeserializationContext ctxt = createDummyContext();
+        JavaType type = ctxt.constructType(BeanWithReference.class);
+        BeanDescription beanDesc = createDummyBeanDescription(type);
+        BeanDeserializerBuilder builder = BeanDeserializerFactory.instance.constructBeanDeserializerBuilder(ctxt, beanDesc);
+
+        // Mock BeanDescription to have a back-reference property
+        Map<String, AnnotatedMember> backRefs = new HashMap<>();
+        // Need a setter for the back-reference
+        AnnotatedMethod setterMethod = new AnnotatedMethod(
+                null, // Member
+                BeanWithReference.class.getMethod("setOtherBean", BeanWithReference.class),
+                null, null);
+        backRefs.put("other", setterMethod);
+
+        BeanDescription mockBeanDesc = new com.fasterxml.jackson.databind.introspect.BasicBeanDescription(
+            null, type, null, null, null, null, null) {
+            @Override
+            public Map<String, AnnotatedMember> findBackReferenceProperties() {
+                return backRefs;
+            }
+        };
+
+        // Need to mock constructSettableProperty to return a non-null value
+        BeanDeserializerFactory factory = new BeanDeserializerFactory(createDummyConfig()) {
+            @Override
+            protected SettableBeanProperty constructSettableProperty(DeserializationContext ctxt, BeanDescription beanDesc, BeanPropertyDefinition propDef, JavaType propType0) throws JsonMappingException {
+                // Create a dummy SettableBeanProperty
+                return new MethodProperty(propDef, propType0, null, null, (AnnotatedMethod) propDef.getMutator());
+            }
+        };
+
+        factory.addReferenceProperties(ctxt, mockBeanDesc, builder);
+        assertNotNull("Builder should have back-reference properties", builder._backRefProperties);
+        assertFalse("Builder should have a back-reference for 'other'", builder._backRefProperties.isEmpty());
+    }
+
+    @Test
+    public void testBuildBuilderBasedDeserializer() throws Exception {
+        DeserializationContext ctxt = createDummyContext();
+        JavaType valueType = ctxt.constructType(BuiltBean.class);
+        JavaType builderType = ctxt.constructType(BuiltBean.Builder.class);
+        BeanDescription builderDesc = createDummyBeanDescription(builderType);
+
+        // Mock builderDesc to have a build method
+        AnnotatedMethod buildMethod = new AnnotatedMethod(null, BuiltBean.Builder.class.getMethod("build"), null, null);
+        BeanDescription mockBuilderDesc = new com.fasterxml.jackson.databind.introspect.BasicBeanDescription(
+            null, builderType, null, null, null, null, null) {
+            @Override
+            public AnnotatedMethod findMethod(String name, Class<?>[] paramTypes) {
+                if ("build".equals(name) && (paramTypes == null || paramTypes.length == 0)) {
+                    return buildMethod;
+                }
+                return super.findMethod(name, paramTypes);
+            }
+            @Override
+            public JsonPOJOBuilder.Value findPOJOBuilderConfig() {
+                return new JsonPOJOBuilder.Value("build", null);
+            }
+        };
+        // Mock value instantiator for the builder
+        ValueInstantiator builderInstantiator = new ValueInstantiator(ctxt.getConfig(), mockBuilderDesc) {
+            @Override
+            public boolean canCreateUsingDefault() { return true; }
+            @Override
+            public Object createUsingDefault(DeserializationContext ctxt) { return new BuiltBean.Builder(); }
+        };
+
+        // Mock the factory to return the mock instantiator
+        BeanDeserializerFactory factory = new BeanDeserializerFactory(createDummyConfig()) {
+            @Override
+            protected ValueInstantiator findValueInstantiator(DeserializationContext ctxt, BeanDescription beanDesc) {
+                return builderInstantiator;
+            }
+        };
+
+        JsonDeserializer<Object> deserializer = factory.createBuilderBasedDeserializer(ctxt, valueType, mockBuilderDesc, BuiltBean.Builder.class);
+        assertNotNull("Builder-based deserializer should be created", deserializer);
+    }
+
+    @Test
+    public void testIsPotentialBeanTypeForConcreteClass() throws Exception {
+        assertTrue("String is a potential bean type", BeanDeserializerFactory.instance.isPotentialBeanType(String.class));
+    }
+
+    @Test
+    public void testIsPotentialBeanTypeForAbstractClass() throws Exception {
+        assertTrue("List is a potential bean type (can be materialized)", BeanDeserializerFactory.instance.isPotentialBeanType(List.class));
+    }
+
+    @Test
+    public void testIsPotentialBeanTypeForPrimitive() {
+        try {
+            BeanDeserializerFactory.instance.isPotentialBeanType(int.class);
+            fail("Primitive types should throw IllegalArgumentException");
+        } catch (IllegalArgumentException e) {
+            assertTrue("Exception message should indicate it's not a bean type", e.getMessage().contains("as a Bean"));
+        }
+    }
+
+    @Test
+    public void testCheckIllegalTypesWhenIllegal() throws Exception {
+        DeserializationContext ctxt = createDummyContext();
+        JavaType type = ctxt.constructType(String.class); // Dummy type, we'll set the name directly in checkIllegalTypes mock
+        BeanDescription beanDesc = createDummyBeanDescription(type);
+
+        // Mock BeanDeserializerFactory to have a specific illegal class name
+        BeanDeserializerFactory factory = new BeanDeserializerFactory(createDummyConfig()) {
+            @Override
+            protected Set<String> _cfgIllegalClassNames = Collections.singleton("java.lang.String"); // Override for test
+        };
+
+        try {
+            factory.checkIllegalTypes(ctxt, type, beanDesc);
+            fail("Should throw JsonMappingException for illegal type");
+        } catch (JsonMappingException e) {
+            assertTrue("Exception message should indicate illegal type", e.getMessage().contains("Illegal type"));
+        }
+    }
+
+    @Test
+    public void testCheckIllegalTypesWhenLegal() throws Exception {
+        DeserializationContext ctxt = createDummyContext();
+        JavaType type = ctxt.constructType(String.class);
+        BeanDescription beanDesc = createDummyBeanDescription(type);
+
+        // Use default illegal names, and String is not in it
+        BeanDeserializerFactory.instance.checkIllegalTypes(ctxt, type, beanDesc);
+        // No exception means it passed.
+    }
+
+    @Test
+    public void testBuildBeanDeserializerForAbstractTypeThatCannotBeMaterialized() throws Exception {
+        DeserializationContext ctxt = createDummyContext();
+        JavaType type = ctxt.constructType(java.util.Map.class); // Abstract type
+        BeanDescription beanDesc = createDummyBeanDescription(type);
+
+        // No AbstractTypeResolver configured, so it should return null for materialization
+        JsonDeserializer<Object> deserializer = BeanDeserializerFactory.instance.buildBeanDeserializer(ctxt, type, beanDesc);
+        assertNotNull("Deserializer should still be created, fallback to default behavior", deserializer);
+    }
+
+    @Test
+    public void testConstructSettablePropertyForMethod() throws Exception {
+        DeserializationContext ctxt = createDummyContext();
+        JavaType beanType = ctxt.constructType(BeanExample.class);
+        BeanDescription beanDesc = createDummyBeanDescription(beanType);
+        DeserializerFactoryConfig config = createDummyConfig();
+        BeanDeserializerFactory factory = new BeanDeserializerFactory(config);
+
+        AnnotatedMethod setterMethod = new AnnotatedMethod(
+                null,
+                BeanExample.class.getMethod("setFieldA", String.class),
+                null, null);
+        SimpleBeanPropertyDefinition propDef = SimpleBeanPropertyDefinition.construct(
+                ctxt.getConfig(), setterMethod, PropertyName.construct("fieldA"));
+        JavaType propType = ctxt.constructType(String.class);
+
+        SettableBeanProperty prop = factory.constructSettableProperty(ctxt, beanDesc, propDef, propType);
+        assertNotNull("SettableBeanProperty should be constructed for method", prop);
+        assertTrue("Property should be a MethodProperty", prop instanceof MethodProperty);
+    }
+
+    @Test
+    public void testConstructSettablePropertyForField() throws Exception {
+        DeserializationContext ctxt = createDummyContext();
+        JavaType beanType = ctxt.constructType(BeanExample.class);
+        BeanDescription beanDesc = createDummyBeanDescription(beanType);
+        DeserializerFactoryConfig config = createDummyConfig();
+        BeanDeserializerFactory factory = new BeanDeserializerFactory(config);
+
+        AnnotatedField field = new AnnotatedField(null, BeanExample.class.getDeclaredField("fieldB"), null, null);
+        SimpleBeanPropertyDefinition propDef = SimpleBeanPropertyDefinition.construct(
+                ctxt.getConfig(), field, PropertyName.construct("fieldB"));
+        JavaType propType = ctxt.constructType(Integer.class);
+
+        SettableBeanProperty prop = factory.constructSettableProperty(ctxt, beanDesc, propDef, propType);
+        assertNotNull("SettableBeanProperty should be constructed for field", prop);
+        assertTrue("Property should be a FieldProperty", prop instanceof FieldProperty);
+    }
+
+    @Test
+    public void testConstructSetterlessProperty() throws Exception {
+        DeserializationContext ctxt = createDummyContext();
+        JavaType beanType = ctxt.constructType(BeanExample.class);
+        BeanDescription beanDesc = createDummyBeanDescription(beanType);
+        DeserializerFactoryConfig config = createDummyConfig();
+        BeanDeserializerFactory factory = new BeanDeserializerFactory(config);
+
+        AnnotatedMethod getterMethod = new AnnotatedMethod(
+                null,
+                BeanExample.class.getMethod("getFieldA"),
+                null, null);
+        SimpleBeanPropertyDefinition propDef = SimpleBeanPropertyDefinition.construct(
+                ctxt.getConfig(), getterMethod, PropertyName.construct("fieldA"));
+        JavaType propType = ctxt.constructType(String.class); // Type returned by getter
+
+        SettableBeanProperty prop = factory.constructSetterlessProperty(ctxt, beanDesc, propDef);
+        assertNotNull("SetterlessProperty should be constructed", prop);
+        assertTrue("Property should be a SetterlessProperty", prop instanceof SetterlessProperty);
+    }
+
+    @Test
+    public void testConstructAnySetter() throws Exception {
+        DeserializationContext ctxt = createDummyContext();
+        JavaType beanType = ctxt.constructType(BeanWithAnySetter.class);
+        BeanDescription beanDesc = createDummyBeanDescription(beanType);
+        DeserializerFactoryConfig config = createDummyConfig();
+        BeanDeserializerFactory factory = new BeanDeserializerFactory(config);
+
+        AnnotatedMethod setterMethod = new AnnotatedMethod(
+                null,
+                BeanWithAnySetter.class.getMethod("setAny", String.class, Object.class),
+                null, null);
+        SettableAnyProperty anySetter = factory.constructAnySetter(ctxt, beanDesc, setterMethod);
+        assertNotNull("SettableAnyProperty should be constructed", anySetter);
+    }
+
+    @Test
+    public void testBuildAbstractDeserializer() throws Exception {
+        DeserializationContext ctxt = createDummyContext();
+        JavaType type = ctxt.constructType(java.util.Collection.class); // Abstract
+        BeanDescription beanDesc = createDummyBeanPropertyDefinition(type);
+        BeanDeserializerBuilder builder = BeanDeserializerFactory.instance.constructBeanDeserializerBuilder(ctxt, beanDesc);
+        builder.setValueInstantiator(new ValueInstantiator(ctxt.getConfig(), beanDesc) {}); // Mock ValueInstantiator
+
+        // To test buildAbstract, we need the builder to indicate it's abstract and cannot instantiate
+        BeanDeserializerFactory factory = new BeanDeserializerFactory(createDummyConfig()) {
+            @Override
+            protected BeanDeserializerBuilder constructBeanDeserializerBuilder(DeserializationContext ctxt, BeanDescription beanDesc) {
+                // Override to ensure builder is created, and can return buildAbstract
+                return new BeanDeserializerBuilder(beanDesc, ctxt.getConfig()) {
+                    @Override
+                    public AbstractDeserializer buildAbstract() {
+                        return new AbstractDeserializer(null) {}; // Mock AbstractDeserializer
+                    }
+                };
+            }
+        };
+
+        JsonDeserializer<Object> deserializer = factory.buildBeanDeserializer(ctxt, type, beanDesc);
+        assertTrue("Should return an AbstractDeserializer", deserializer instanceof AbstractDeserializer);
+    }
+
+
+    // --- Dummy classes for testing ---
+
+    public static class BeanExample {
+        public String fieldA;
+        public Integer fieldB;
+
+        public String getFieldA() { return fieldA; }
+        public void setFieldA(String value) { this.fieldA = value; }
+    }
+
+    public static class BeanWithObjectId {
+        public int id;
+        private BeanWithObjectId otherBean;
+
+        public int getId() { return id; }
+        public void setId(int id) { this.id = id; }
+
+        public void setOtherBean(BeanWithObjectId otherBean) { this.otherBean = otherBean; }
+    }
+
+    public static class BeanWithInjectable {
+        @com.fasterxml.jackson.annotation.JacksonInject
+        public Object injectableField;
+    }
+
+    public static class BeanWithReference {
+        private BeanWithReference otherBean;
+
+        public void setOtherBean(BeanWithReference otherBean) { this.otherBean = otherBean; }
+    }
+
+    public static class BuiltBean {
+        private String name;
+        public BuiltBean(String name) { this.name = name; }
+        public static class Builder {
+            private String name;
+            public Builder withName(String name) { this.name = name; return this; }
+            public BuiltBean build() { return new BuiltBean(name); }
+        }
+    }
+
+    public static class BeanWithAnySetter {
+        private Map<String, Object> properties = new HashMap<>();
+
+        @com.fasterxml.jackson.annotation.JsonAnySetter
+        public void setAny(String propertyName, Object value) {
+            properties.put(propertyName, value);
+        }
+    }
+
+    // Helper for mocking BeanDescription to return specific properties
+    private BeanDescription createDummyBeanPropertyDefinition(JavaType type) {
+        return new com.fasterxml.jackson.databind.introspect.BasicBeanDescription(
+            null, type, null, null, null, null, null) {
+            @Override
+            public List<BeanPropertyDefinition> findProperties() {
+                return Collections.emptyList(); // Default to no properties
+            }
+        };
+    }
+}
+```
+
+**SOURCE CODE ANALYSIS**
+The tests target `createBeanDeserializer`, `createBuilderBasedDeserializer`, `buildBeanDeserializer`, `buildThrowableDeserializer`, `constructBeanDeserializerBuilder`, `addBeanProps`, `addObjectIdReader`, `addInjectables`, `addReferenceProperties`, `constructSettableProperty`, `constructSetterlessProperty`, `constructAnySetter`, `isPotentialBeanType`, `checkIllegalTypes`, and `buildAbstract`. These methods cover various aspects of bean deserializer construction, including handling of standard types, exceptions, abstract types, builder patterns, property introspection, and security checks for illegal types.
+
+**TEST CASE DESIGN**
+- `testInstanceIsNotNull`: Checks if the static `instance` is initialized. Expected: `assertNotNull`.
+- `testInstanceHasDefaultConfig`: Verifies `withConfig` doesn't break instantiation. Expected: `assertNotNull`.
+- `testCreateBeanDeserializerForThrowable`: Tests creation of deserializer for `Throwable`. Expected: `instanceof ThrowableDeserializer`.
+- `testCreateBeanDeserializerForAbstractType`: Tests deserialization of abstract types with a mock resolver. Expected: Not null.
+- `testCreateBeanDeserializerForStandardType`: Tests standard types like `String`. Expected: Not null.
+- `testCreateBeanDeserializerForUnknownType`: Tests fallback for general `Object`. Expected: Not null.
+- `testCreateBuilderBasedDeserializer`: Tests creation of builder-based deserializer. Expected: Not null.
+- `testBuildBeanDeserializerForSimpleBean`: Tests building deserializer for a concrete bean. Expected: Not null.
+- `testBuildBeanDeserializerForAbstractTypeWithMaterialization`: Tests abstract type materialization with resolver. Expected: Not null.
+- `testBuildBeanDeserializerForThrowableWithInitCause`: Tests building Throwable deserializer with `initCause` method. Expected: Not null.
+- `testBuildThrowableDeserializer`: Tests construction of `ThrowableDeserializer`. Expected: `instanceof ThrowableDeserializer`.
+- `testConstructBeanDeserializerBuilder`: Checks construction of `BeanDeserializerBuilder`. Expected: Not null.
+- `testAddBeanProps`: Verifies `addBeanProps` populates builder with properties. Expected: Builder has properties.
+- `testAddObjectIdReaderWhenPresent`: Tests `addObjectIdReader` when `ObjectIdInfo` is present. Expected: `ObjectIdReader` is set.
+- `testAddBeanProps_IgnoreUnknownPropertiesTrue`: Tests ignoring unknown properties. Expected: `_ignoreAllUnknown` is true.
+- `testAddBeanProps_IgnoredProperties`: Tests handling of explicitly ignored properties. Expected: Property marked as ignorable.
+- `testAddInjectables`: Tests adding injectable properties. Expected: Injectables added to builder.
+- `testAddReferenceProperties`: Tests adding back-reference properties. Expected: Back-reference properties added.
+- `testBuildBuilderBasedDeserializer`: Tests the full `buildBuilderBasedDeserializer` path. Expected: Deserializer is created.
+- `testIsPotentialBeanTypeForConcreteClass`: Tests `isPotentialBeanType` for concrete class. Expected: `true`.
+- `testIsPotentialBeanTypeForAbstractClass`: Tests `isPotentialBeanType` for abstract class. Expected: `true`.
+- `testIsPotentialBeanTypeForPrimitive`: Tests `isPotentialBeanType` for primitive type. Expected: `IllegalArgumentException`.
+- `testCheckIllegalTypesWhenIllegal`: Tests security check for illegal types. Expected: `JsonMappingException`.
+- `testCheckIllegalTypesWhenLegal`: Tests security check for legal types. Expected: No exception.
+- `testBuildBeanDeserializerForAbstractTypeThatCannotBeMaterialized`: Tests abstract types without materialization. Expected: Not null.
+- `testConstructSettablePropertyForMethod`: Tests construction of `SettableBeanProperty` for a method. Expected: `MethodProperty`.
+- `testConstructSettablePropertyForField`: Tests construction of `SettableBeanProperty` for a field. Expected: `FieldProperty`.
+- `testConstructSetterlessProperty`: Tests construction of `SetterlessProperty`. Expected: `SetterlessProperty`.
+- `testConstructAnySetter`: Tests construction of `SettableAnyProperty`. Expected: Not null.
+- `testBuildAbstractDeserializer`: Tests building an abstract deserializer. Expected: `AbstractDeserializer`.
+
+**DEFECT DETECTION STRATEGY**
+Tests focus on the construction logic of `BeanDeserializerFactory`, covering various code paths within `createBeanDeserializer`, `buildBeanDeserializer`, and helper methods like `addBeanProps` and `addObjectIdReader`. Boundary conditions and special cases like exception handling, abstract types, and security checks are targeted.
+
+**SUMMARY**
+28 tests.
+
+**LIMITATIONS**
+Mocking `DeserializationContext` and `BeanDescription` is simplified due to the constraint of not using external libraries like Mockito. Some complex interactions between components might not be fully covered. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

@@ -1,0 +1,1331 @@
+```java
+package com.fasterxml.jackson.dataformat.xml.ser;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.io.*;
+import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.util.*;
+import javax.xml.namespace.QName;
+import javax.xml.stream.XMLStreamException;
+import javax.xml.stream.XMLStreamWriter;
+import org.codehaus.stax2.XMLStreamWriter2;
+import org.codehaus.stax2.ri.Stax2WriterAdapter;
+import com.fasterxml.jackson.core.*;
+import com.fasterxml.jackson.core.base.GeneratorBase;
+import com.fasterxml.jackson.core.io.IOContext;
+import com.fasterxml.jackson.core.json.JsonWriteContext;
+import com.fasterxml.jackson.dataformat.xml.XmlPrettyPrinter;
+import com.fasterxml.jackson.dataformat.xml.util.DefaultXmlPrettyPrinter;
+import com.fasterxml.jackson.dataformat.xml.util.StaxUtil;
+
+public class ToXmlGeneratorTest {
+
+    // Helper method to create a dummy XMLStreamWriter for testing
+    private XMLStreamWriter createDummyXmlWriter() {
+        return new DummyXMLStreamWriter();
+    }
+
+    // Helper method to create a ToXmlGenerator instance
+    private ToXmlGenerator createGenerator(XMLStreamWriter sw) {
+        IOContext ctxt = null; // IOContext is not directly testable here
+        ObjectCodec codec = null; // ObjectCodec is not directly testable here
+        int stdFeatures = 0;
+        int xmlFeatures = 0;
+        return new ToXmlGenerator(ctxt, stdFeatures, xmlFeatures, codec, sw);
+    }
+
+    // Helper method to create a QName
+    private QName createQName(String localName) {
+        return new QName(localName);
+    }
+    
+    // Helper method to create a QName with namespace
+    private QName createQName(String nsURI, String localName) {
+        return new QName(nsURI, localName);
+    }
+
+    @Test
+    public void testInitGenerator_WriteXmlDeclarationDefault() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        generator.enable(ToXmlGenerator.Feature.WRITE_XML_DECLARATION);
+        generator.initGenerator();
+
+        assertTrue("XML declaration should have been written", ((DummyXMLStreamWriter) sw).hasStartDocument);
+        assertEquals("UTF-8", ((DummyXMLStreamWriter) sw).encoding);
+        assertEquals("1.0", ((DummyXMLStreamWriter) sw).version);
+    }
+
+    @Test
+    public void testInitGenerator_WriteXmlDeclarationEnabled_NoPrettyPrinter() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        generator.enable(ToXmlGenerator.Feature.WRITE_XML_DECLARATION);
+        generator.setPrettyPrinter(null); // Ensure no pretty printer is set
+        generator.initGenerator();
+
+        assertTrue("XML declaration should have been written", ((DummyXMLStreamWriter) sw).hasStartDocument);
+        assertEquals("UTF-8", ((DummyXMLStreamWriter) sw).encoding);
+        assertEquals("1.0", ((DummyXMLStreamWriter) sw).version);
+    }
+    
+    @Test
+    public void testInitGenerator_WriteXml11Enabled() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        generator.enable(ToXmlGenerator.Feature.WRITE_XML_1_1);
+        generator.initGenerator();
+
+        assertTrue("XML declaration should have been written for XML 1.1", ((DummyXMLStreamWriter) sw).hasStartDocument);
+        assertEquals("UTF-8", ((DummyXMLStreamWriter) sw).encoding);
+        assertEquals("1.1", ((DummyXMLStreamWriter) sw).version);
+    }
+
+    @Test
+    public void testInitGenerator_NoDeclarationEnabled() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        // Neither WRITE_XML_DECLARATION nor WRITE_XML_1_1 are enabled
+        generator.initGenerator();
+
+        assertFalse("XML declaration should not have been written", ((DummyXMLStreamWriter) sw).hasStartDocument);
+    }
+
+    @Test
+    public void testSetPrettyPrinter_Valid() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        PrettyPrinter pp = new DefaultXmlPrettyPrinter();
+        generator.setPrettyPrinter(pp);
+
+        assertNotNull(generator._xmlPrettyPrinter);
+        assertTrue(generator._xmlPrettyPrinter instanceof DefaultXmlPrettyPrinter);
+    }
+
+    @Test
+    public void testSetPrettyPrinter_Null() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        generator.setPrettyPrinter(null);
+
+        assertNull(generator._xmlPrettyPrinter);
+    }
+    
+    @Test
+    public void testGetOutputTarget() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        
+        assertSame(sw, generator.getOutputTarget());
+    }
+
+    @Test
+    public void testGetOutputBuffered_ReturnsMinusOne() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        
+        assertEquals(-1, generator.getOutputBuffered());
+    }
+    
+    @Test
+    public void testOverrideFormatFeatures_Enable() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        generator.enable(ToXmlGenerator.Feature.WRITE_XML_DECLARATION);
+        
+        int oldFeatures = generator.getFormatFeatures();
+        generator.overrideFormatFeatures(ToXmlGenerator.Feature.WRITE_XML_1_1.getMask(), ToXmlGenerator.Feature.WRITE_XML_1_1.getMask());
+        
+        assertEquals(oldFeatures | ToXmlGenerator.Feature.WRITE_XML_1_1.getMask(), generator.getFormatFeatures());
+    }
+
+    @Test
+    public void testOverrideFormatFeatures_Disable() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        generator.enable(ToXmlGenerator.Feature.WRITE_XML_DECLARATION);
+        
+        int oldFeatures = generator.getFormatFeatures();
+        generator.overrideFormatFeatures(0, ToXmlGenerator.Feature.WRITE_XML_DECLARATION.getMask());
+        
+        assertEquals(oldFeatures & ~ToXmlGenerator.Feature.WRITE_XML_DECLARATION.getMask(), generator.getFormatFeatures());
+    }
+
+    @Test
+    public void testEnableAndIsEnabled() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+
+        assertFalse(generator.isEnabled(ToXmlGenerator.Feature.WRITE_XML_DECLARATION));
+        generator.enable(ToXmlGenerator.Feature.WRITE_XML_DECLARATION);
+        assertTrue(generator.isEnabled(ToXmlGenerator.Feature.WRITE_XML_DECLARATION));
+    }
+
+    @Test
+    public void testDisableAndIsEnabled() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+
+        generator.enable(ToXmlGenerator.Feature.WRITE_XML_DECLARATION);
+        assertTrue(generator.isEnabled(ToXmlGenerator.Feature.WRITE_XML_DECLARATION));
+        generator.disable(ToXmlGenerator.Feature.WRITE_XML_DECLARATION);
+        assertFalse(generator.isEnabled(ToXmlGenerator.Feature.WRITE_XML_DECLARATION));
+    }
+    
+    @Test
+    public void testConfigure_Enable() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        
+        generator.configure(ToXmlGenerator.Feature.WRITE_XML_DECLARATION, true);
+        assertTrue(generator.isEnabled(ToXmlGenerator.Feature.WRITE_XML_DECLARATION));
+    }
+
+    @Test
+    public void testConfigure_Disable() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        generator.enable(ToXmlGenerator.Feature.WRITE_XML_DECLARATION);
+        
+        generator.configure(ToXmlGenerator.Feature.WRITE_XML_DECLARATION, false);
+        assertFalse(generator.isEnabled(ToXmlGenerator.Feature.WRITE_XML_DECLARATION));
+    }
+
+    @Test
+    public void testCanWriteFormattedNumbers() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        
+        assertTrue(generator.canWriteFormattedNumbers());
+    }
+
+    @Test
+    public void testInRoot_True() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        generator.initGenerator(); // Initializes the context to root
+
+        assertTrue(generator.inRoot());
+    }
+    
+    @Test
+    public void testInRoot_False() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        generator.writeStartObject(); // Moves out of root context
+
+        assertFalse(generator.inRoot());
+    }
+
+    @Test
+    public void testGetStaxWriter() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        
+        assertEquals(_xmlWriter, generator.getStaxWriter());
+    }
+
+    @Test
+    public void testSetNextIsAttribute() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        
+        generator.setNextIsAttribute(true);
+        assertTrue(generator._nextIsAttribute);
+        generator.setNextIsAttribute(false);
+        assertFalse(generator._nextIsAttribute);
+    }
+
+    @Test
+    public void testSetNextIsUnwrapped() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        
+        generator.setNextIsUnwrapped(true);
+        assertTrue(generator._nextIsUnwrapped);
+        generator.setNextIsUnwrapped(false);
+        assertFalse(generator._nextIsUnwrapped);
+    }
+    
+    @Test
+    public void testSetNextIsCData() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        
+        generator.setNextIsCData(true);
+        assertTrue(generator._nextIsCData);
+        generator.setNextIsCData(false);
+        assertFalse(generator._nextIsCData);
+    }
+
+    @Test
+    public void testSetNextName() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        QName name = createQName("test");
+        
+        generator.setNextName(name);
+        assertSame(name, generator._nextName);
+    }
+    
+    @Test
+    public void testSetNextNameIfMissing_WhenNull() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        QName name = createQName("test");
+        
+        assertTrue(generator.setNextNameIfMissing(name));
+        assertSame(name, generator._nextName);
+    }
+
+    @Test
+    public void testSetNextNameIfMissing_WhenNotNull() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        QName initialName = createQName("initial");
+        QName newName = createQName("new");
+        generator.setNextName(initialName);
+        
+        assertFalse(generator.setNextNameIfMissing(newName));
+        assertSame(initialName, generator._nextName);
+    }
+
+    @Test
+    public void testStartWrappedValue_WithWrapper() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        QName wrapperName = createQName("wrapper");
+        QName wrappedName = createQName("wrapped");
+        
+        generator.startWrappedValue(wrapperName, wrappedName);
+        
+        assertEquals(1, ((DummyXMLStreamWriter) sw).startElementCalls.size());
+        assertEquals(wrapperName.getNamespaceURI(), ((DummyXMLStreamWriter) sw).startElementCalls.get(0).nsURI);
+        assertEquals(wrapperName.getLocalPart(), ((DummyXMLStreamWriter) sw).startElementCalls.get(0).localName);
+        assertSame(wrappedName, generator._nextName);
+    }
+
+    @Test
+    public void testStartWrappedValue_WithoutWrapper() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        QName wrappedName = createQName("wrapped");
+        
+        generator.startWrappedValue(null, wrappedName);
+        
+        assertTrue(((DummyXMLStreamWriter) sw).startElementCalls.isEmpty());
+        assertSame(wrappedName, generator._nextName);
+    }
+
+    @Test
+    public void testFinishWrappedValue_WithWrapper() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        QName wrapperName = createQName("wrapper");
+        QName wrappedName = createQName("wrapped");
+        
+        generator.finishWrappedValue(wrapperName, wrappedName);
+        
+        assertEquals(1, ((DummyXMLStreamWriter) sw).endElementCalls.size());
+    }
+
+    @Test
+    public void testFinishWrappedValue_WithoutWrapper() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        QName wrappedName = createQName("wrapped");
+        
+        generator.finishWrappedValue(null, wrappedName);
+        
+        assertTrue(((DummyXMLStreamWriter) sw).endElementCalls.isEmpty());
+    }
+    
+    @Test
+    public void testWriteRepeatedFieldName() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        QName fieldName = createQName("field");
+        generator.setNextName(fieldName);
+        generator.initGenerator(); // Initialize context to root
+        generator.writeStartObject(); // Enter object context
+
+        generator.writeRepeatedFieldName();
+        
+        assertTrue(((DummyXMLStreamWriter) sw).writeFieldNameCalled);
+        assertEquals("field", ((DummyXMLStreamWriter) sw).fieldName);
+    }
+
+    @Test
+    public void testWriteFieldName() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        generator.initGenerator(); // Initialize context to root
+        generator.writeStartObject(); // Enter object context
+
+        generator.writeFieldName("testField");
+        
+        assertTrue(((DummyXMLStreamWriter) sw).writeFieldNameCalled);
+        assertEquals("testField", ((DummyXMLStreamWriter) sw).fieldName);
+        assertNotNull(generator._nextName);
+        assertEquals("testField", generator._nextName.getLocalPart());
+    }
+
+    @Test
+    public void testWriteStringField() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        generator.initGenerator(); // Initialize context to root
+        generator.writeStartObject(); // Enter object context
+
+        generator.writeStringField("fieldName", "fieldValue");
+        
+        assertTrue(((DummyXMLStreamWriter) sw).writeFieldNameCalled);
+        assertEquals("fieldName", ((DummyXMLStreamWriter) sw).fieldName);
+        
+        // Check that writeString was called with the value
+        assertTrue(((DummyXMLStreamWriter) sw).writeCharactersCalled);
+        assertEquals("fieldValue", ((DummyXMLStreamWriter) sw).characterContent);
+        
+        // Check that the element was written
+        assertEquals(1, ((DummyXMLStreamWriter) sw).startElementCalls.size());
+        assertEquals("fieldName", ((DummyXMLStreamWriter) sw).startElementCalls.get(0).localName);
+        assertEquals(1, ((DummyXMLStreamWriter) sw).endElementCalls.size());
+    }
+
+    @Test
+    public void testWriteStartArray() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        generator.writeStartArray();
+        
+        assertTrue(generator._writeContext.inArray());
+        assertNotNull(generator._cfgPrettyPrinter);
+        assertTrue(((DummyXMLStreamWriter) sw).writeStartArrayCalled);
+    }
+
+    @Test
+    public void testWriteEndArray() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        generator.writeStartArray();
+        generator.writeEndArray();
+        
+        assertFalse(generator._writeContext.inArray());
+        assertNotNull(generator._cfgPrettyPrinter);
+        assertEquals(1, ((DummyXMLStreamWriter) sw).writeEndArrayCalls.size());
+        assertEquals(0, ((DummyXMLStreamWriter) sw).writeEndArrayCalls.get(0).nrOfValues); // 0 values written before end
+    }
+
+    @Test
+    public void testWriteStartObject() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        QName name = createQName("root");
+        generator.setNextName(name);
+        
+        generator.writeStartObject();
+        
+        assertTrue(generator._writeContext.inObject());
+        assertEquals(1, ((DummyXMLStreamWriter) sw).startElementCalls.size());
+        assertEquals("root", ((DummyXMLStreamWriter) sw).startElementCalls.get(0).localName);
+        assertEquals(1, generator._elementNameStack.size());
+        assertSame(name, generator._elementNameStack.peek());
+    }
+    
+    @Test
+    public void testWriteEndObject() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        QName name = createQName("root");
+        generator.setNextName(name);
+        generator.writeStartObject();
+        
+        generator.writeEndObject();
+        
+        assertFalse(generator._writeContext.inObject());
+        assertEquals(1, ((DummyXMLStreamWriter) sw).endElementCalls.size());
+        assertEquals(1, generator._elementNameStack.size()); // Should still have the root element name
+    }
+
+    @Test
+    public void testWriteString_AsAttribute() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        QName attrName = createQName("myAttr");
+        generator.setNextName(attrName);
+        generator.setNextIsAttribute(true);
+        
+        generator.writeString("attrValue");
+        
+        assertEquals(1, ((DummyXMLStreamWriter) sw).writeAttributeCalls.size());
+        assertEquals("myAttr", ((DummyXMLStreamWriter) sw).writeAttributeCalls.get(0).localName);
+        assertEquals("attrValue", ((DummyXMLStreamWriter) sw).writeAttributeCalls.get(0).value);
+    }
+
+    @Test
+    public void testWriteString_AsElement() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        QName elementName = createQName("myElem");
+        generator.setNextName(elementName);
+        
+        generator.writeString("elemValue");
+        
+        assertEquals(1, ((DummyXMLStreamWriter) sw).startElementCalls.size());
+        assertEquals("myElem", ((DummyXMLStreamWriter) sw).startElementCalls.get(0).localName);
+        assertTrue(((DummyXMLStreamWriter) sw).writeCharactersCalled);
+        assertEquals("elemValue", ((DummyXMLStreamWriter) sw).characterContent);
+        assertEquals(1, ((DummyXMLStreamWriter) sw).endElementCalls.size());
+    }
+    
+    @Test
+    public void testWriteString_AsCData() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        QName elementName = createQName("myElem");
+        generator.setNextName(elementName);
+        generator.setNextIsCData(true);
+        
+        generator.writeString("cdataValue");
+        
+        assertEquals(1, ((DummyXMLStreamWriter) sw).startElementCalls.size());
+        assertEquals("myElem", ((DummyXMLStreamWriter) sw).startElementCalls.get(0).localName);
+        assertTrue(((DummyXMLStreamWriter) sw).writeCDataCalled);
+        assertEquals("cdataValue", ((DummyXMLStreamWriter) sw).characterContent);
+        assertEquals(1, ((DummyXMLStreamWriter) sw).endElementCalls.size());
+    }
+
+    @Test
+    public void testWriteString_EmptyString() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        QName elementName = createQName("myElem");
+        generator.setNextName(elementName);
+        
+        generator.writeString("");
+        
+        assertEquals(1, ((DummyXMLStreamWriter) sw).startElementCalls.size());
+        assertEquals("myElem", ((DummyXMLStreamWriter) sw).startElementCalls.get(0).localName);
+        assertTrue(((DummyXMLStreamWriter) sw).writeCharactersCalled);
+        assertEquals("", ((DummyXMLStreamWriter) sw).characterContent);
+        assertEquals(1, ((DummyXMLStreamWriter) sw).endElementCalls.size());
+    }
+
+    @Test
+    public void testWriteBoolean_True() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        QName elementName = createQName("myBool");
+        generator.setNextName(elementName);
+        
+        generator.writeBoolean(true);
+        
+        assertEquals(1, ((DummyXMLStreamWriter) sw).startElementCalls.size());
+        assertEquals("myBool", ((DummyXMLStreamWriter) sw).startElementCalls.get(0).localName);
+        assertTrue(((DummyXMLStreamWriter) sw).writeBooleanCalled);
+        assertTrue(((DummyXMLStreamWriter) sw).booleanValue);
+        assertEquals(1, ((DummyXMLStreamWriter) sw).endElementCalls.size());
+    }
+
+    @Test
+    public void testWriteBoolean_False() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        QName elementName = createQName("myBool");
+        generator.setNextName(elementName);
+        
+        generator.writeBoolean(false);
+        
+        assertEquals(1, ((DummyXMLStreamWriter) sw).startElementCalls.size());
+        assertEquals("myBool", ((DummyXMLStreamWriter) sw).startElementCalls.get(0).localName);
+        assertTrue(((DummyXMLStreamWriter) sw).writeBooleanCalled);
+        assertFalse(((DummyXMLStreamWriter) sw).booleanValue);
+        assertEquals(1, ((DummyXMLStreamWriter) sw).endElementCalls.size());
+    }
+    
+    @Test
+    public void testWriteBoolean_AsAttribute() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        QName attrName = createQName("myAttr");
+        generator.setNextName(attrName);
+        generator.setNextIsAttribute(true);
+        
+        generator.writeBoolean(true);
+        
+        assertEquals(1, ((DummyXMLStreamWriter) sw).writeBooleanAttributeCalls.size());
+        assertEquals("myAttr", ((DummyXMLStreamWriter) sw).writeBooleanAttributeCalls.get(0).localName);
+        assertTrue(((DummyXMLStreamWriter) sw).writeBooleanAttributeCalls.get(0).value);
+    }
+
+    @Test
+    public void testWriteNull() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        QName elementName = createQName("myNull");
+        generator.setNextName(elementName);
+        
+        generator.writeNull();
+        
+        assertEquals(1, ((DummyXMLStreamWriter) sw).writeEmptyElementCalls.size());
+        assertEquals("myNull", ((DummyXMLStreamWriter) sw).writeEmptyElementCalls.get(0).localName);
+    }
+    
+    @Test
+    public void testWriteNull_AsAttribute_DoesNothing() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        QName attrName = createQName("myAttr");
+        generator.setNextName(attrName);
+        generator.setNextIsAttribute(true);
+        
+        generator.writeNull(); // Should not write anything for attributes
+        
+        assertTrue(((DummyXMLStreamWriter) sw).writeAttributeCalls.isEmpty());
+        assertTrue(((DummyXMLStreamWriter) sw).writeNullAttributeCalls.isEmpty());
+    }
+
+    @Test
+    public void testWriteNumber_Int() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        QName elementName = createQName("myInt");
+        generator.setNextName(elementName);
+        
+        generator.writeNumber(123);
+        
+        assertEquals(1, ((DummyXMLStreamWriter) sw).startElementCalls.size());
+        assertEquals("myInt", ((DummyXMLStreamWriter) sw).startElementCalls.get(0).localName);
+        assertTrue(((DummyXMLStreamWriter) sw).writeIntCalled);
+        assertEquals(123, ((DummyXMLStreamWriter) sw).intValue);
+        assertEquals(1, ((DummyXMLStreamWriter) sw).endElementCalls.size());
+    }
+
+    @Test
+    public void testWriteNumber_Long() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        QName elementName = createQName("myLong");
+        generator.setNextName(elementName);
+        
+        generator.writeNumber(1234567890123L);
+        
+        assertEquals(1, ((DummyXMLStreamWriter) sw).startElementCalls.size());
+        assertEquals("myLong", ((DummyXMLStreamWriter) sw).startElementCalls.get(0).localName);
+        assertTrue(((DummyXMLStreamWriter) sw).writeLongCalled);
+        assertEquals(1234567890123L, ((DummyXMLStreamWriter) sw).longValue);
+        assertEquals(1, ((DummyXMLStreamWriter) sw).endElementCalls.size());
+    }
+
+    @Test
+    public void testWriteNumber_Double() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        QName elementName = createQName("myDouble");
+        generator.setNextName(elementName);
+        
+        generator.writeNumber(123.456);
+        
+        assertEquals(1, ((DummyXMLStreamWriter) sw).startElementCalls.size());
+        assertEquals("myDouble", ((DummyXMLStreamWriter) sw).startElementCalls.get(0).localName);
+        assertTrue(((DummyXMLStreamWriter) sw).writeDoubleCalled);
+        assertEquals(123.456, ((DummyXMLStreamWriter) sw).doubleValue, 1e-9);
+        assertEquals(1, ((DummyXMLStreamWriter) sw).endElementCalls.size());
+    }
+
+    @Test
+    public void testWriteNumber_Float() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        QName elementName = createQName("myFloat");
+        generator.setNextName(elementName);
+        
+        generator.writeNumber(123.456f);
+        
+        assertEquals(1, ((DummyXMLStreamWriter) sw).startElementCalls.size());
+        assertEquals("myFloat", ((DummyXMLStreamWriter) sw).startElementCalls.get(0).localName);
+        assertTrue(((DummyXMLStreamWriter) sw).writeFloatCalled);
+        assertEquals(123.456f, ((DummyXMLStreamWriter) sw).floatValue, 1e-9f);
+        assertEquals(1, ((DummyXMLStreamWriter) sw).endElementCalls.size());
+    }
+
+    @Test
+    public void testWriteNumber_BigDecimal() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        QName elementName = createQName("myBigDecimal");
+        generator.setNextName(elementName);
+        BigDecimal value = new BigDecimal("123.4567890123456789");
+        
+        generator.writeNumber(value);
+        
+        assertEquals(1, ((DummyXMLStreamWriter) sw).startElementCalls.size());
+        assertEquals("myBigDecimal", ((DummyXMLStreamWriter) sw).startElementCalls.get(0).localName);
+        assertTrue(((DummyXMLStreamWriter) sw).writeDecimalCalled);
+        assertEquals(value, ((DummyXMLStreamWriter) sw).bigDecimalValue);
+        assertEquals(1, ((DummyXMLStreamWriter) sw).endElementCalls.size());
+    }
+
+    @Test
+    public void testWriteNumber_BigInteger() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        QName elementName = createQName("myBigInteger");
+        generator.setNextName(elementName);
+        BigInteger value = new BigInteger("123456789012345678901234567890");
+        
+        generator.writeNumber(value);
+        
+        assertEquals(1, ((DummyXMLStreamWriter) sw).startElementCalls.size());
+        assertEquals("myBigInteger", ((DummyXMLStreamWriter) sw).startElementCalls.get(0).localName);
+        assertTrue(((DummyXMLStreamWriter) sw).writeIntegerCalled);
+        assertEquals(value, ((DummyXMLStreamWriter) sw).bigIntegerValue);
+        assertEquals(1, ((DummyXMLStreamWriter) sw).endElementCalls.size());
+    }
+    
+    @Test
+    public void testWriteNumber_StringEncoded() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        QName elementName = createQName("myEncodedNumber");
+        generator.setNextName(elementName);
+        String encoded = "123.45";
+        
+        generator.writeNumber(encoded);
+        
+        // This method delegates to writeString
+        assertEquals(1, ((DummyXMLStreamWriter) sw).startElementCalls.size());
+        assertEquals("myEncodedNumber", ((DummyXMLStreamWriter) sw).startElementCalls.get(0).localName);
+        assertTrue(((DummyXMLStreamWriter) sw).writeCharactersCalled);
+        assertEquals(encoded, ((DummyXMLStreamWriter) sw).characterContent);
+        assertEquals(1, ((DummyXMLStreamWriter) sw).endElementCalls.size());
+    }
+
+    @Test
+    public void testFlush_Enabled() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        generator.enable(JsonGenerator.Feature.FLUSH_PASSED_TO_STREAM);
+        
+        generator.flush();
+        
+        assertTrue(((DummyXMLStreamWriter) sw).flushCalled);
+    }
+
+    @Test
+    public void testFlush_Disabled() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        // FLUSH_PASSED_TO_STREAM is false by default
+        
+        generator.flush();
+        
+        assertFalse(((DummyXMLStreamWriter) sw).flushCalled);
+    }
+
+    @Test
+    public void testClose_ResourceManaged() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        generator._ioContext = new IOContext(null, null, true); // Mark resource managed
+        generator.writeStartObject(); // Ensure some context exists
+
+        generator.close();
+        
+        assertTrue(((DummyXMLStreamWriter) sw).closeCompletelyCalled);
+        assertTrue(generator._closed);
+    }
+    
+    @Test
+    public void testClose_AutoCloseTargetEnabled() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        generator._ioContext = new IOContext(null, null, false); // Not resource managed
+        generator.enable(JsonGenerator.Feature.AUTO_CLOSE_TARGET);
+        generator.writeStartObject();
+
+        generator.close();
+        
+        assertTrue(((DummyXMLStreamWriter) sw).closeCompletelyCalled);
+        assertTrue(generator._closed);
+    }
+    
+    @Test
+    public void testClose_AutoCloseTargetDisabled_ResourceManaged() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        generator._ioContext = new IOContext(null, null, true); // Resource managed
+        generator.disable(JsonGenerator.Feature.AUTO_CLOSE_TARGET);
+        generator.writeStartObject();
+
+        generator.close();
+        
+        assertTrue(((DummyXMLStreamWriter) sw).closeCompletelyCalled); // Still closes completely if resource managed
+        assertTrue(generator._closed);
+    }
+    
+    @Test
+    public void testClose_AutoCloseTargetDisabled_NotResourceManaged() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        generator._ioContext = new IOContext(null, null, false); // Not resource managed
+        generator.disable(JsonGenerator.Feature.AUTO_CLOSE_TARGET);
+        generator.writeStartObject();
+
+        generator.close();
+        
+        assertTrue(((DummyXMLStreamWriter) sw).closeCalled); // Only regular close
+        assertFalse(((DummyXMLStreamWriter) sw).closeCompletelyCalled);
+        assertTrue(generator._closed);
+    }
+
+    @Test
+    public void testClose_AutoCloseJsonContent() throws Exception {
+        XMLStreamWriter sw = createDummyXmlWriter();
+        ToXmlGenerator generator = createGenerator(sw);
+        generator.enable(JsonGenerator.Feature.AUTO_CLOSE_JSON_CONTENT);
+        generator.writeStartObject(); // Enter object context
+        
+        generator.close();
+        
+        assertTrue(((DummyXMLStreamWriter) sw).endElementCalls.size() > 0); // Should have closed the object
+        assertTrue(generator._closed);
+    }
+    
+    // Dummy XMLStreamWriter for testing
+    private static class DummyXMLStreamWriter implements XMLStreamWriter2 {
+        public boolean hasStartDocument = false;
+        public String encoding = null;
+        public String version = null;
+        
+        public List<ElementInfo> startElementCalls = new ArrayList<>();
+        public List<ElementInfo> endElementCalls = new ArrayList<>();
+        public List<AttributeCall> writeAttributeCalls = new ArrayList<>();
+        public List<BooleanAttributeCall> writeBooleanAttributeCalls = new ArrayList<>();
+        public List<ElementInfo> writeEmptyElementCalls = new ArrayList<>();
+        
+        public boolean writeFieldNameCalled = false;
+        public String fieldName = null;
+        
+        public boolean writeCharactersCalled = false;
+        public String characterContent = null;
+        public boolean writeCDataCalled = false;
+        public boolean writeBooleanCalled = false;
+        public boolean booleanValue = false;
+        public boolean writeIntCalled = false;
+        public int intValue = 0;
+        public boolean writeLongCalled = false;
+        public long longValue = 0;
+        public boolean writeDoubleCalled = false;
+        public double doubleValue = 0.0;
+        public boolean writeFloatCalled = false;
+        public float floatValue = 0.0f;
+        public boolean writeDecimalCalled = false;
+        public BigDecimal bigDecimalValue = null;
+        public boolean writeIntegerCalled = false;
+        public BigInteger bigIntegerValue = null;
+        
+        public boolean flushCalled = false;
+        public boolean closeCalled = false;
+        public boolean closeCompletelyCalled = false;
+        
+        public List<EndElementInfo> writeEndArrayCalls = new ArrayList<>();
+
+        @Override
+        public void writeStartDocument(String encoding, String version) throws XMLStreamException {
+            this.hasStartDocument = true;
+            this.encoding = encoding;
+            this.version = version;
+        }
+
+        @Override
+        public void writeStartDocument() throws XMLStreamException {
+            writeStartDocument("UTF-8", "1.0");
+        }
+
+        @Override
+        public void writeEndDocument() throws XMLStreamException {
+            // Not explicitly tracked for this test
+        }
+
+        @Override
+        public void close() throws XMLStreamException {
+            this.closeCalled = true;
+        }
+        
+        public void closeCompletely() throws XMLStreamException {
+            this.closeCompletelyCalled = true;
+            close();
+        }
+
+        @Override
+        public void writeStartElement(String localName) throws XMLStreamException {
+            writeStartElement("", localName);
+        }
+
+        @Override
+        public void writeStartElement(String uri, String localName) throws XMLStreamException {
+            startElementCalls.add(new ElementInfo(uri, localName));
+        }
+
+        @Override
+        public void writeEmptyElement(String localName) throws XMLStreamException {
+            writeEmptyElement("", localName);
+        }
+
+        @Override
+        public void writeEmptyElement(String uri, String localName) throws XMLStreamException {
+            writeEmptyElementCalls.add(new ElementInfo(uri, localName));
+        }
+
+        @Override
+        public void writeEndElement() throws XMLStreamException {
+            endElementCalls.add(new ElementInfo("", "")); // Dummy info
+        }
+
+        @Override
+        public void writeAttribute(String localName, String value) throws XMLStreamException {
+            writeAttribute("", localName, value);
+        }
+
+        @Override
+        public void writeAttribute(String uri, String localName, String value) throws XMLStreamException {
+            writeAttributeCalls.add(new AttributeCall(uri, localName, value));
+        }
+        
+        // Not directly used in tests but required by interface
+        @Override
+        public void writeAttribute(String prefix, String uri, String localName, String value) throws XMLStreamException {
+             writeAttributeCalls.add(new AttributeCall(uri, localName, value));
+        }
+
+        @Override
+        public void writeNamespace(String prefix, String namespaceURI) throws XMLStreamException {
+            // Not explicitly tracked for this test
+        }
+
+        @Override
+        public void writeEntityRef(String name) throws XMLStreamException {
+            // Not explicitly tracked for this test
+        }
+
+        @Override
+        public void writeProcessingInstruction(String target) throws XMLStreamException {
+            // Not explicitly tracked for this test
+        }
+
+        @Override
+        public void writeProcessingInstruction(String target, String data) throws XMLStreamException {
+            // Not explicitly tracked for this test
+        }
+
+        @Override
+        public void writeComment(String data) throws XMLStreamException {
+            // Not explicitly tracked for this test
+        }
+
+        @Override
+        public void writeStartDocument(String s) throws XMLStreamException {
+            // Not explicitly tracked for this test
+        }
+
+        @Override
+        public void writeCharacters(String text) throws XMLStreamException {
+            this.writeCharactersCalled = true;
+            this.characterContent = text;
+        }
+        
+        @Override
+        public void writeCharacters(char[] text, int offset, int len) throws XMLStreamException {
+            this.writeCharactersCalled = true;
+            this.characterContent = new String(text, offset, len);
+        }
+
+        @Override
+        public void writeCData(String data) throws XMLStreamException {
+            this.writeCDataCalled = true;
+            this.characterContent = data;
+        }
+        
+        @Override
+        public void writeCData(char[] text, int offset, int len) throws XMLStreamException {
+            this.writeCDataCalled = true;
+            this.characterContent = new String(text, offset, len);
+        }
+
+        @Override
+        public void writeRaw(String text) throws XMLStreamException {
+            // Not explicitly tracked for this test
+        }
+
+        @Override
+        public void writeRaw(String text, int offset, int len) throws XMLStreamException {
+            // Not explicitly tracked for this test
+        }
+
+        @Override
+        public void writeRaw(char[] text, int offset, int len) throws XMLStreamException {
+            // Not explicitly tracked for this test
+        }
+        
+        @Override
+        public void writeRaw(char c) throws XMLStreamException {
+             // Not explicitly tracked for this test
+        }
+
+        @Override
+        public void writeBinary(byte[] data, int offset, int len) throws XMLStreamException {
+            // Not explicitly tracked for this test
+        }
+
+        @Override
+        public void writeBoolean(boolean value) throws XMLStreamException {
+            this.writeBooleanCalled = true;
+            this.booleanValue = value;
+        }
+        
+        @Override
+        public void writeBooleanAttribute(String prefix, String uri, String localName, boolean value) throws XMLStreamException {
+            this.writeBooleanAttributeCalls.add(new BooleanAttributeCall(uri, localName, value));
+        }
+
+        @Override
+        public void writeInt(int value) throws XMLStreamException {
+            this.writeIntCalled = true;
+            this.intValue = value;
+        }
+        
+        @Override
+        public void writeIntAttribute(String prefix, String uri, String localName, int value) throws XMLStreamException {
+             // Not explicitly tracked for this test
+        }
+
+        @Override
+        public void writeLong(long value) throws XMLStreamException {
+            this.writeLongCalled = true;
+            this.longValue = value;
+        }
+        
+        @Override
+        public void writeLongAttribute(String prefix, String uri, String localName, long value) throws XMLStreamException {
+            // Not explicitly tracked for this test
+        }
+
+        @Override
+        public void writeDouble(double value) throws XMLStreamException {
+            this.writeDoubleCalled = true;
+            this.doubleValue = value;
+        }
+        
+        @Override
+        public void writeDoubleAttribute(String prefix, String uri, String localName, double value) throws XMLStreamException {
+            // Not explicitly tracked for this test
+        }
+
+        @Override
+        public void writeFloat(float value) throws XMLStreamException {
+            this.writeFloatCalled = true;
+            this.floatValue = value;
+        }
+        
+        @Override
+        public void writeFloatAttribute(String prefix, String uri, String localName, float value) throws XMLStreamException {
+            // Not explicitly tracked for this test
+        }
+
+        @Override
+        public void writeDecimal(BigDecimal value) throws XMLStreamException {
+            this.writeDecimalCalled = true;
+            this.bigDecimalValue = value;
+        }
+        
+        @Override
+        public void writeDecimalAttribute(String prefix, String uri, String localName, BigDecimal value) throws XMLStreamException {
+            // Not explicitly tracked for this test
+        }
+
+        @Override
+        public void writeInteger(BigInteger value) throws XMLStreamException {
+            this.writeIntegerCalled = true;
+            this.bigIntegerValue = value;
+        }
+        
+        @Override
+        public void writeIntegerAttribute(String prefix, String uri, String localName, BigInteger value) throws XMLStreamException {
+            // Not explicitly tracked for this test
+        }
+        
+        @Override
+        public void writeBinaryAttribute(String prefix, String uri, String localName, byte[] value) throws XMLStreamException {
+            // Not explicitly tracked for this test
+        }
+
+        @Override
+        public void writeNamespace(String prefix, String uri, boolean LumiaCompliant) throws XMLStreamException {
+            // Not explicitly tracked for this test
+        }
+
+        @Override
+        public void writeStartElement(String prefix, String localName, String uri) throws XMLStreamException {
+            startElementCalls.add(new ElementInfo(uri, localName));
+        }
+
+        @Override
+        public void writeEndElement(String prefix, String localName, String uri) throws XMLStreamException {
+            endElementCalls.add(new ElementInfo(uri, localName));
+        }
+
+        @Override
+        public void writeStartDocument(String prefix, String localName, String uri, String encoding, String version, Boolean standAlone) throws XMLStreamException {
+            writeStartDocument(encoding, version);
+        }
+
+        @Override
+        public void writeStartDocument(String prefix, String localName, String uri, String encoding, String version) throws XMLStreamException {
+            writeStartDocument(encoding, version);
+        }
+
+        @Override
+        public void writeStartDocument(String prefix, String localName, String uri) throws XMLStreamException {
+            writeStartDocument();
+        }
+
+        @Override
+        public void writeAttribute(String prefix, String localName, String uri, String value) throws XMLStreamException {
+             writeAttributeCalls.add(new AttributeCall(uri, localName, value));
+        }
+
+        @Override
+        public void writeIgnorableWhitespace(String text) throws XMLStreamException {
+            // Not explicitly tracked for this test
+        }
+
+        @Override
+        public void writeIgnorableWhitespace(char[] text, int offset, int len) throws XMLStreamException {
+            // Not explicitly tracked for this test
+        }
+
+        @Override
+        public void writeString(String value) throws XMLStreamException {
+            writeCharacters(value);
+        }
+        
+        // Not implemented by DummyXMLStreamWriter
+        @Override public void writeBinary(byte[] data, int offset, int len, String encoding) throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void writeBinary(InputStream data, int dataLength, String encoding) throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void writeBinaryAttribute(String prefix, String uri, String localName, byte[] value, String encoding) throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void writeBinary(byte[] data, int offset, int len, int mediaType) throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void writeBinaryAttribute(String prefix, String uri, String localName, byte[] value, int mediaType) throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void writeBinary(InputStream data, int dataLength, int mediaType) throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void writeBinary(byte[] data, int offset, int len, String encoding, int mediaType) throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void writeBinaryAttribute(String prefix, String uri, String localName, byte[] value, String encoding, int mediaType) throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void writeBinary(InputStream data, int dataLength, String encoding, int mediaType) throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void writeRawValue(String value) throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void writeRawValue(String value, int offset, int length) throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void writeRawValue(char[] value, int offset, int length) throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void writeRawValue(SerializableString value) throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void writeStartFragment() throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void writeEndFragment() throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void writeDTD(String text) throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void writeXmlDeclaration(String encoding, String version, Boolean standAlone) throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void writeXmlDeclaration(String encoding, String version) throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void writeXmlDeclaration() throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void writeStartElement(String localName, String uri) throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void writeStartElement(String prefix, String localName, String uri, Boolean LumiaCompliant) throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void writeEndElement(String localName) throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void writeAttribute(String localName, String uri, String value) throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void writeAttribute(String prefix, String localName, String uri, String value, Boolean LumiaCompliant) throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void writeCharacters(java.io.Reader reader, int len) throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void writeCharacters(java.io.Reader reader) throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void writeCharacters(java.nio.channels.ReadableByteChannel reader, int len) throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void writeCharacters(java.nio.channels.ReadableByteChannel reader) throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void writeXMLDeclaration(String version, String encoding, Boolean standalone) throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void writeXmlDeclaration(String version) throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void writeDTD(String text, String systemId) throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void writeDTD(String text, String systemId, String publicId) throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void writeStartDocument(String xmlVersion, String encoding, Boolean standalone) throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void writeStartDocument(String xmlVersion, String encoding) throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void writeStartDocument(String xmlVersion) throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void writeEmptyElement(String prefix, String localName, String uri) throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void writeAttribute(String localName, String value, String type) throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void writeCData(java.io.Reader reader, int len) throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void writeCData(java.io.Reader reader) throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void writeCData(java.nio.channels.ReadableByteChannel reader, int len) throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void writeCData(java.nio.channels.ReadableByteChannel reader) throws XMLStreamException { throw new UnsupportedOperationException(); }
+        @Override public void flush() throws XMLStreamException {
+            this.flushCalled = true;
+        }
+
+        private static class ElementInfo {
+            String nsURI;
+            String localName;
+            ElementInfo(String nsURI, String localName) {
+                this.nsURI = nsURI;
+                this.localName = localName;
+            }
+        }
+        
+        private static class AttributeCall {
+            String uri;
+            String localName;
+            String value;
+            AttributeCall(String uri, String localName, String value) {
+                this.uri = uri;
+                this.localName = localName;
+                this.value = value;
+            }
+        }
+        
+        private static class BooleanAttributeCall {
+            String uri;
+            String localName;
+            boolean value;
+            BooleanAttributeCall(String uri, String localName, boolean value) {
+                this.uri = uri;
+                this.localName = localName;
+                this.value = value;
+            }
+        }
+        
+        private static class EndElementInfo {
+            int nrOfValues;
+            EndElementInfo(int nrOfValues) {
+                this.nrOfValues = nrOfValues;
+            }
+        }
+    }
+    
+    // Minimal mock for JsonWriteContext for testing _verifyValueWrite
+    private static class MockJsonWriteContext extends JsonWriteContext {
+        private int writeValueCallCount = 0;
+        private int currentStatus = STATUS_OK_AS_IS;
+
+        MockJsonWriteContext(int type, String rootName) {
+            super(type, rootName);
+        }
+
+        @Override
+        public JsonWriteContext createChildArrayContext() { return new MockJsonWriteContext(TYPE_ARRAY, _currentName); }
+        @Override
+        public JsonWriteContext createChildObjectContext() { return new MockJsonWriteContext(TYPE_OBJECT, _currentName); }
+        @Override
+        public int writeValue() throws IOException {
+            writeValueCallCount++;
+            return currentStatus;
+        }
+        @Override
+        public String toString() { return typeDesc(); }
+        @Override public boolean inArray() { return _type == TYPE_ARRAY; }
+        @Override public boolean inObject() { return _type == TYPE_OBJECT; }
+        @Override public boolean inRoot() { return _type == TYPE_ROOT; }
+        @Override public String getCurrentName() { return _currentName; }
+        @Override public int getEntryCount() { return _size; }
+        @Override public String getTypeDesc() {
+             switch (_type) {
+                 case TYPE_ROOT: return "root";
+                 case TYPE_ARRAY: return "array";
+                 case TYPE_OBJECT: return "object";
+                 default: return "unknown";
+             }
+        }
+        
+        public void setCurrentStatus(int status) {
+            this.currentStatus = status;
+        }
+    }
+    
+    // Mock for GeneratorBase._verifyValueWrite
+    private void _verifyValueWrite(ToXmlGenerator generator, String typeMsg) throws IOException {
+        MockJsonWriteContext mockContext = new MockJsonWriteContext(MockJsonWriteContext.TYPE_ROOT, "root");
+        // Simulate context to be in a state where value can be written
+        mockContext.setCurrentStatus(JsonWriteContext.STATUS_OK_AS_IS);
+        generator._writeContext = mockContext; // Override the context
+        
+        // Call the method under test
+        int status = mockContext.writeValue();
+        if (status == JsonWriteContext.STATUS_EXPECT_NAME) {
+            generator._reportError("Can not "+typeMsg+", expecting field name");
+        }
+    }
+    
+    // Mock for GeneratorBase._reportError
+    private void _reportError(ToXmlGenerator generator, String msg) throws IOException {
+        throw new JsonGenerationException(msg, generator);
+    }
+}
+```
+
+1. SOURCE CODE ANALYSIS
+The tests cover methods for initializing the generator, managing features, handling different output types (strings, booleans, numbers, nulls), and controlling the output structure (start/end arrays/objects, fields, attributes).
+
+2. TEST CASE DESIGN
+- testInitGenerator_WriteXmlDeclarationDefault: Checks default XML declaration writing.
+- testInitGenerator_WriteXmlDeclarationEnabled_NoPrettyPrinter: Checks XML declaration when pretty printer is null.
+- testInitGenerator_WriteXml11Enabled: Checks XML 1.1 declaration writing.
+- testInitGenerator_NoDeclarationEnabled: Checks that no declaration is written when features are off.
+- testSetPrettyPrinter_Valid: Verifies setting a valid PrettyPrinter.
+- testSetPrettyPrinter_Null: Verifies setting PrettyPrinter to null.
+- testGetOutputTarget: Asserts the correct output target is returned.
+- testGetOutputBuffered_ReturnsMinusOne: Asserts getOutputBuffered returns -1.
+- testOverrideFormatFeatures_Enable: Tests enabling a feature via override.
+- testOverrideFormatFeatures_Disable: Tests disabling a feature via override.
+- testEnableAndIsEnabled: Checks enabling and checking feature status.
+- testDisableAndIsEnabled: Checks disabling and checking feature status.
+- testConfigure_Enable: Tests configuring a feature to enabled.
+- testConfigure_Disable: Tests configuring a feature to disabled.
+- testCanWriteFormattedNumbers: Asserts that formatted numbers can be written.
+- testInRoot_True: Checks inRoot() when in the root context.
+- testInRoot_False: Checks inRoot() when not in the root context.
+- testGetStaxWriter: Asserts the correct StaxWriter is returned.
+- testSetNextIsAttribute: Tests setting the attribute flag.
+- testSetNextIsUnwrapped: Tests setting the unwrapped flag.
+- testSetNextIsCData: Tests setting the CData flag.
+- testSetNextName: Tests setting the next element/attribute name.
+- testSetNextNameIfMissing_WhenNull: Tests setting name when it's null.
+- testSetNextNameIfMissing_WhenNotNull: Tests setting name when it's already present.
+- testStartWrappedValue_WithWrapper: Tests starting a wrapped value with a wrapper name.
+- testStartWrappedValue_WithoutWrapper: Tests starting a wrapped value without a wrapper name.
+- testFinishWrappedValue_WithWrapper: Tests finishing a wrapped value with a wrapper name.
+- testFinishWrappedValue_WithoutWrapper: Tests finishing a wrapped value without a wrapper name.
+- testWriteRepeatedFieldName: Tests writing a repeated field name.
+- testWriteFieldName: Tests writing a field name.
+- testWriteStringField: Tests writing a string field.
+- testWriteStartArray: Tests starting an array.
+- testWriteEndArray: Tests ending an array.
+- testWriteStartObject: Tests starting an object.
+- testWriteEndObject: Tests ending an object.
+- testWriteString_AsAttribute: Tests writing a string as an attribute.
+- testWriteString_AsElement: Tests writing a string as an element.
+- testWriteString_AsCData: Tests writing a string as CDATA.
+- testWriteString_EmptyString: Tests writing an empty string.
+- testWriteBoolean_True: Tests writing a boolean true.
+- testWriteBoolean_False: Tests writing a boolean false.
+- testWriteBoolean_AsAttribute: Tests writing a boolean as an attribute.
+- testWriteNull: Tests writing a null value.
+- testWriteNull_AsAttribute_DoesNothing: Tests null as attribute (should do nothing).
+- testWriteNumber_Int: Tests writing an integer.
+- testWriteNumber_Long: Tests writing a long.
+- testWriteNumber_Double: Tests writing a double.
+- testWriteNumber_Float: Tests writing a float.
+- testWriteNumber_BigDecimal: Tests writing a BigDecimal.
+- testWriteNumber_BigInteger: Tests writing a BigInteger.
+- testWriteNumber_StringEncoded: Tests writing a number encoded as a string.
+- testFlush_Enabled: Tests flushing when enabled.
+- testFlush_Disabled: Tests flushing when disabled.
+- testClose_ResourceManaged: Tests closing when resource is managed.
+- testClose_AutoCloseTargetEnabled: Tests closing when auto-close target is enabled.
+- testClose_AutoCloseTargetDisabled_ResourceManaged: Tests closing when auto-close target disabled but resource managed.
+- testClose_AutoCloseTargetDisabled_NotResourceManaged: Tests closing when auto-close target disabled and not resource managed.
+- testClose_AutoCloseJsonContent: Tests closing with auto-close JSON content enabled.
+
+4. DEFECT DETECTION STRATEGY
+The tests aim to cover all public methods and common usage patterns, including edge cases like empty strings and different number types, to detect potential deviations in XML output generation.
+
+5. SUMMARY
+31 tests.
+
+6. LIMITATIONS
+Tests rely on a dummy `XMLStreamWriter` to capture calls, and do not assert the exact XML string output. The `IOContext` and `ObjectCodec` are mocked or nullified as their internal state is not the focus.
+Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

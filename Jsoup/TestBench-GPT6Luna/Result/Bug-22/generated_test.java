@@ -1,0 +1,347 @@
+package org.jsoup.nodes;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import org.jsoup.select.Elements;
+import org.jsoup.helper.StringUtil;
+import org.jsoup.helper.Validate;
+import org.jsoup.parser.Parser;
+import org.jsoup.parser.Tag;
+import org.jsoup.select.Collector;
+import org.jsoup.select.Evaluator;
+import org.jsoup.select.Selector;
+import java.util.*;
+import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
+import org.jsoup.select.NodeTraversor;
+import org.jsoup.select.NodeVisitor;
+import java.net.MalformedURLException;
+import java.net.URL;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import org.jsoup.nodes.Element;
+import org.jsoup.nodes.Node;
+
+public class ElementTest {
+    @Test
+    public void testTagAndAttributeAccess() throws Exception {
+        Element e = new Element(Tag.valueOf("div"), "");
+        assertEquals("div", e.nodeName());
+        assertEquals("div", e.tagName());
+        assertEquals("div", e.tag().getName());
+        assertTrue(e.isBlock());
+        assertEquals("", e.id());
+        assertSame(e, e.attr("id", "x"));
+        assertEquals("x", e.id());
+        e.tagName("span");
+        assertEquals("span", e.tagName());
+        assertFalse(e.isBlock());
+    }
+
+    @Test
+    public void testDatasetViewTracksAttributeChanges() throws Exception {
+        Element e = new Element(Tag.valueOf("div"), "");
+        e.attr("data-key", "one");
+        Map<String, String> dataset = e.dataset();
+        assertEquals("one", dataset.get("key"));
+        e.attr("data-key", "two");
+        assertEquals("two", dataset.get("key"));
+        dataset.put("next", "three");
+        assertEquals("three", e.attr("data-next"));
+    }
+
+    @Test
+    public void testMixedChildListsAndEmpty() throws Exception {
+        Element e = new Element(Tag.valueOf("div"), "");
+        Element child = e.appendElement("span");
+        e.appendText("text");
+        e.appendChild(new DataNode("raw", ""));
+        assertEquals(1, e.children().size());
+        assertSame(child, e.child(0));
+        assertEquals(1, e.textNodes().size());
+        assertEquals(1, e.dataNodes().size());
+        assertSame(e, e.empty());
+        assertEquals(0, e.children().size());
+        assertEquals(0, e.textNodes().size());
+        assertEquals(0, e.dataNodes().size());
+    }
+
+    @Test
+    public void testPrependAndAppendOrder() throws Exception {
+        Element e = new Element(Tag.valueOf("div"), "");
+        Element last = e.appendElement("b");
+        Element first = e.prependElement("i");
+        e.prependText("start");
+        e.appendText("end");
+        assertSame(first, e.child(0));
+        assertSame(last, e.child(1));
+        assertEquals("start", e.textNodes().get(0).text());
+        assertEquals("end", e.textNodes().get(1).text());
+        assertEquals(2, e.children().size());
+    }
+
+    @Test
+    public void testAppendAndPrependParsedHtml() throws Exception {
+        Element e = new Element(Tag.valueOf("div"), "");
+        e.append("<p>one</p>");
+        e.prepend("<b>two</b>");
+        assertEquals(2, e.children().size());
+        assertEquals("b", e.child(0).tagName());
+        assertEquals("two", e.child(0).text());
+        assertEquals("p", e.child(1).tagName());
+        assertEquals("one", e.child(1).text());
+    }
+
+    @Test
+    public void testParentAndAncestorOrder() throws Exception {
+        Element root = new Element(Tag.valueOf("div"), "");
+        Element middle = root.appendElement("section");
+        Element leaf = middle.appendElement("p");
+        assertSame(middle, leaf.parent());
+        Elements parents = leaf.parents();
+        assertEquals(2, parents.size());
+        assertSame(middle, parents.get(0));
+        assertSame(root, parents.get(1));
+    }
+
+    @Test
+    public void testSiblingElementBoundariesAndIndices() throws Exception {
+        Element parent = new Element(Tag.valueOf("div"), "");
+        Element a = parent.appendElement("i");
+        Element b = parent.appendElement("b");
+        Element c = parent.appendElement("u");
+        assertEquals(0, a.elementSiblingIndex().intValue());
+        assertEquals(1, b.elementSiblingIndex().intValue());
+        assertEquals(2, c.elementSiblingIndex().intValue());
+        assertNull(a.previousElementSibling());
+        assertSame(b, a.nextElementSibling());
+        assertSame(a, b.previousElementSibling());
+        assertSame(c, b.nextElementSibling());
+        assertNull(c.nextElementSibling());
+        assertSame(a, b.firstElementSibling());
+        assertSame(c, b.lastElementSibling());
+        assertEquals(2, b.siblingElements().size());
+    }
+
+    @Test
+    public void testFindByTagIdAndClass() throws Exception {
+        Element root = new Element(Tag.valueOf("div"), "");
+        root.attr("id", "root");
+        Element child = root.appendElement("p").attr("id", "chosen").attr("class", "alpha beta");
+        assertEquals(2, root.getElementsByTag("p").size() + root.getElementsByTag("div").size());
+        assertSame(child, root.getElementById("chosen"));
+        assertEquals(1, root.getElementsByClass("beta").size());
+        assertSame(root, root.getElementById("root"));
+    }
+
+    @Test
+    public void testAttributeLookupsAndValueMatching() throws Exception {
+        Element root = new Element(Tag.valueOf("div"), "");
+        root.attr("data-code", "Abc-123");
+        Element child = root.appendElement("a").attr("href", "Abc-123");
+        assertEquals(1, root.getElementsByAttribute("href").size());
+        assertEquals(1, root.getElementsByAttributeStarting(" data- ").size());
+        assertSame(child, root.getElementsByAttributeValue("href", "abc-123").get(0));
+        assertEquals(2, root.getElementsByAttributeValueNot("href", "other").size());
+        assertEquals(1, root.getElementsByAttributeValueStarting("href", "abc").size());
+        assertEquals(1, root.getElementsByAttributeValueEnding("href", "123").size());
+        assertEquals(1, root.getElementsByAttributeValueContaining("href", "c-1").size());
+        assertEquals(1, root.getElementsByAttributeValueMatching("href", Pattern.compile("Abc.*")).size());
+    }
+
+    @Test
+    public void testIndexQueriesAtZeroAndLastIndex() throws Exception {
+        Element root = new Element(Tag.valueOf("div"), "");
+        Element a = root.appendElement("i");
+        Element b = root.appendElement("b");
+        Element c = root.appendElement("u");
+        assertEquals(2, root.getElementsByIndexLessThan(1).size());
+        assertEquals(1, root.getElementsByIndexEquals(0).size());
+        assertSame(a, root.getElementsByIndexEquals(0).get(0));
+        assertEquals(1, root.getElementsByIndexGreaterThan(1).size());
+        assertSame(c, root.getElementsByIndexGreaterThan(1).get(0));
+        assertEquals(0, root.getElementsByIndexLessThan(0).size());
+        assertEquals(0, root.getElementsByIndexGreaterThan(2).size());
+        assertEquals(0, root.getElementsByIndexEquals(3).size());
+    }
+
+    @Test
+    public void testTextOwnTextAndHasText() throws Exception {
+        Element root = new Element(Tag.valueOf("div"), "");
+        root.appendText("One ");
+        root.appendElement("b").text("Two");
+        root.appendText(" Three");
+        assertEquals("One Two Three", root.text());
+        assertEquals("One Three", root.ownText());
+        assertTrue(root.hasText());
+        Element blank = new Element(Tag.valueOf("p"), "");
+        blank.appendText("  ");
+        assertFalse(blank.hasText());
+    }
+
+    @Test
+    public void testBrSeparatesCombinedText() throws Exception {
+        Element e = new Element(Tag.valueOf("p"), "");
+        e.appendText("left");
+        e.appendElement("br");
+        e.appendText("right");
+        assertEquals("left right", e.text());
+        assertEquals("left right", e.ownText());
+    }
+
+    @Test
+    public void testRecursiveDataAggregation() throws Exception {
+        Element root = new Element(Tag.valueOf("div"), "");
+        root.appendChild(new DataNode("a", ""));
+        Element child = root.appendElement("script");
+        child.appendChild(new DataNode("b", ""));
+        assertEquals("ab", root.data());
+        assertEquals(1, root.dataNodes().size());
+    }
+
+    @Test
+    public void testClassMutationAndCaseInsensitiveCheck() throws Exception {
+        Element e = new Element(Tag.valueOf("div"), "");
+        e.attr("class", "alpha beta");
+        assertTrue(e.hasClass("ALPHA"));
+        assertSame(e, e.addClass("gamma"));
+        assertEquals("alpha beta gamma", e.className());
+        e.removeClass("beta");
+        assertEquals("alpha gamma", e.className());
+        assertFalse(e.hasClass("beta"));
+    }
+
+    @Test
+    public void testAllElementsAndSelector() throws Exception {
+        Element root = new Element(Tag.valueOf("div"), "");
+        root.appendElement("p").attr("class", "pick");
+        root.appendElement("span");
+        assertEquals(3, root.getAllElements().size());
+        assertEquals(1, root.select(".pick").size());
+        assertEquals("p", root.select(".pick").get(0).tagName());
+    }
+
+    @Test
+    public void testContainingAndRegexTextQueries() throws Exception {
+        Element root = new Element(Tag.valueOf("div"), "");
+        Element child = root.appendElement("p");
+        child.appendText("Hello");
+        assertEquals(2, root.getElementsContainingText("hello").size());
+        assertEquals(1, root.getElementsContainingOwnText("hello").size());
+        assertEquals(2, root.getElementsMatchingText(Pattern.compile(".*Hello.*")).size());
+        assertEquals(1, root.getElementsMatchingOwnText(Pattern.compile("Hello")).size());
+    }
+
+    @Test
+    public void testIdAndAttributeLookupIncludeRootAndDescendants() throws Exception {
+        Element root = new Element(Tag.valueOf("div"), "");
+        root.attr("data-x", "v");
+        Element child = root.appendElement("span").attr("id", "target").attr("title", "v");
+        assertSame(child, root.getElementById("target"));
+        assertEquals(1, root.getElementsByAttribute("title").size());
+        assertEquals(1, root.getElementsByAttributeStarting("data-").size());
+        assertSame(root, root.getElementsByAttributeValue("data-x", "v").get(0));
+    }
+
+    @Test
+    public void testTextReplacementClearsExistingChildren() throws Exception {
+        Element e = new Element(Tag.valueOf("div"), "");
+        e.appendElement("b").text("old");
+        assertSame(e, e.text("new"));
+        assertEquals("new", e.text());
+        assertEquals(0, e.children().size());
+        assertEquals(1, e.textNodes().size());
+    }
+
+    @Test
+    public void testDataAndTextNodesRemainSeparate() throws Exception {
+        Element e = new Element(Tag.valueOf("script"), "");
+        e.appendChild(new DataNode("code", ""));
+        e.appendText("words");
+        assertEquals("code", e.data());
+        assertEquals(1, e.dataNodes().size());
+        assertEquals(1, e.textNodes().size());
+    }
+
+    @Test
+    public void testPrependChildUsesSameChildAndPlacesAtZero() throws Exception {
+        Element parent = new Element(Tag.valueOf("div"), "");
+        Element existing = parent.appendElement("b");
+        Element inserted = new Element(Tag.valueOf("i"), "");
+        assertSame(parent, parent.prependChild(inserted));
+        assertSame(inserted, parent.child(0));
+        assertSame(existing, parent.child(1));
+        assertSame(parent, inserted.parent());
+    }
+
+    @Test
+    public void testBeforeHtmlAtFirstElement() throws Exception {
+        Element parent = new Element(Tag.valueOf("div"), "");
+        Element target = parent.appendElement("b");
+        assertSame(target, target.before("<i>x</i>"));
+        assertEquals(2, parent.children().size());
+        assertEquals("i", parent.child(0).tagName());
+        assertEquals("x", parent.child(0).text());
+        assertSame(target, parent.child(1));
+    }
+
+    @Test
+    public void testAfterHtmlAtLastElement() throws Exception {
+        Element parent = new Element(Tag.valueOf("div"), "");
+        Element target = parent.appendElement("b");
+        assertSame(target, target.after("<i>x</i>"));
+        assertEquals(2, parent.children().size());
+        assertSame(target, parent.child(0));
+        assertEquals("i", parent.child(1).tagName());
+        assertEquals("x", parent.child(1).text());
+    }
+
+    @Test
+    public void testWrapElementInParsedContainer() throws Exception {
+        Element parent = new Element(Tag.valueOf("div"), "");
+        Element target = parent.appendElement("b").text("word");
+        assertSame(target, target.wrap("<i></i>"));
+        assertEquals(1, parent.children().size());
+        Element wrapper = parent.child(0);
+        assertEquals("i", wrapper.tagName());
+        assertSame(target, wrapper.child(0));
+        assertEquals("word", wrapper.text());
+    }
+
+    @Test
+    public void testClassNamesReturnsDistinctNamesInInsertionOrder() throws Exception {
+        Element e = new Element(Tag.valueOf("div"), "");
+        e.attr("class", "alpha beta alpha");
+        Set<String> names = e.classNames();
+        assertEquals(2, names.size());
+        assertTrue(names.contains("alpha"));
+        assertTrue(names.contains("beta"));
+        assertEquals("alpha", names.iterator().next());
+    }
+
+    @Test
+    public void testClassNamesMutationPersistsWhenAddedThroughElement() throws Exception {
+        Element e = new Element(Tag.valueOf("div"), "");
+        e.attr("class", "one");
+        Set<String> names = e.classNames();
+        names.add("two");
+        assertTrue(names.contains("two"));
+        assertEquals("one", e.className());
+        e.addClass("three");
+        assertEquals("one two three", e.className());
+    }
+
+    @Test
+    public void testBeforeAndAfterPreserveTextSiblingPosition() throws Exception {
+        Element parent = new Element(Tag.valueOf("div"), "");
+        Element target = parent.appendElement("b");
+        target.before("left");
+        target.after("right");
+        assertEquals(3, parent.childNodes().size());
+        assertEquals("left", ((TextNode) parent.childNode(0)).text());
+        assertSame(target, parent.childNode(1));
+        assertEquals("right", ((TextNode) parent.childNode(2)).text());
+        assertEquals(0, parent.children().get(0).elementSiblingIndex().intValue());
+    }
+}

@@ -1,0 +1,1854 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Preconditions;
+import com.google.javascript.jscomp.CheckLevel;
+import com.google.javascript.jscomp.Scope.Var;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.jstype.EnumType;
+import com.google.javascript.rhino.jstype.FunctionType;
+import com.google.javascript.rhino.jstype.JSType;
+import com.google.javascript.rhino.jstype.JSTypeNative;
+import com.google.javascript.rhino.jstype.JSTypeRegistry;
+import com.google.javascript.rhino.jstype.ObjectType;
+import com.google.javascript.rhino.jstype.TernaryValue;
+import java.util.Iterator;
+import java.util.Set;
+import java.util.HashMap;
+
+public class TypeCheckTest {
+    // test methods (as many as the instructions ask for), each exactly in this form:
+    //     @Test
+    //     public void testWhatItChecks() throws Exception { ... }
+
+    @Test
+    public void testVisitName() throws Exception {
+        // Test a simple variable declaration.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 1;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitNameWithInferredType() throws Exception {
+        // Test a variable that gets its type inferred from assignment.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x; x = 1;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitNameWithUnknownType() throws Exception {
+        // Test a variable with an unknown type.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = unknownVar;");
+        tester.test();
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitGetProp() throws Exception {
+        // Test accessing a property on an object.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var obj = { a: 1 }; var x = obj.a;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitGetPropOnNull() throws Exception {
+        // Test accessing a property on a null object.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var obj = null; var x = obj.a;");
+        tester.test(1); // Expecting one error
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitGetPropOnUnknown() throws Exception {
+        // Test accessing a property on an unknown type.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var obj = unknownVar; var x = obj.a;");
+        tester.test();
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitGetElem() throws Exception {
+        // Test accessing an element on an array.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var arr = [1, 2]; var x = arr[0];");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitGetElemOnInvalidIndex() throws Exception {
+        // Test accessing an element with an invalid index.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var arr = [1, 2]; var x = arr['a'];");
+        tester.test(1); // Expecting one error
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitVar() throws Exception {
+        // Test a simple variable declaration with an initializer.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 1;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitVarMultipleDeclarations() throws Exception {
+        // Test multiple variable declarations in one var statement.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 1, y = 'a', z;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitVarMultipleDeclarationsSameType() throws Exception {
+        // Test multiple variable declarations with the same type.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x: number = 1, y: number = 2;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitVarMultipleDeclarationsDifferentTypes() throws Exception {
+        // Test multiple variable declarations with different types.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x: number = 1, y: string = 'a';");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitNew() throws Exception {
+        // Test creating a new object.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("function MyClass() {} var obj = new MyClass();");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitNewWithArguments() throws Exception {
+        // Test creating a new object with arguments.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("function MyClass(a, b) {} var obj = new MyClass(1, 'a');");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitNewNonConstructor() throws Exception {
+        // Test calling 'new' on a non-constructor.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = new 1;");
+        tester.test(1); // Expecting one error
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitCall() throws Exception {
+        // Test calling a function.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("function foo() { return 1; } var x = foo();");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitCallWithArguments() throws Exception {
+        // Test calling a function with arguments.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("function foo(a, b) { return a + b; } var x = foo(1, 2);");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitCallNonCallable() throws Exception {
+        // Test calling a non-callable type.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 1();");
+        tester.test(1); // Expecting one error
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitCallWrongArgumentCount() throws Exception {
+        // Test calling a function with the wrong number of arguments.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("function foo(a, b) {} foo(1);");
+        tester.test(1); // Expecting one error
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitReturn() throws Exception {
+        // Test a simple return statement.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("function foo() { return 1; }");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitReturnVoid() throws Exception {
+        // Test returning nothing from a function.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("function foo() { }");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitReturnWrongType() throws Exception {
+        // Test returning a value with the wrong type.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("function foo(): string { return 1; }");
+        tester.test(1); // Expecting one error
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitBinaryOperatorAdd() throws Exception {
+        // Test addition operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 1 + 2;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitBinaryOperatorAddString() throws Exception {
+        // Test string concatenation.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 'a' + 'b';");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitBinaryOperatorAddMixed() throws Exception {
+        // Test addition with mixed types.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 1 + 'a';");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitBinaryOperatorSubtract() throws Exception {
+        // Test subtraction operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 3 - 2;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitBinaryOperatorMultiply() throws Exception {
+        // Test multiplication operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 3 * 2;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitBinaryOperatorDivide() throws Exception {
+        // Test division operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 6 / 3;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitBinaryOperatorModulus() throws Exception {
+        // Test modulus operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 7 % 3;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitBinaryOperatorBitwiseAnd() throws Exception {
+        // Test bitwise AND operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 5 & 3;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitBinaryOperatorBitwiseOr() throws Exception {
+        // Test bitwise OR operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 5 | 3;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitBinaryOperatorBitwiseXor() throws Exception {
+        // Test bitwise XOR operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 5 ^ 3;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitBinaryOperatorLeftShift() throws Exception {
+        // Test left shift operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 5 << 1;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitBinaryOperatorRightShift() throws Exception {
+        // Test signed right shift operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = -5 >> 1;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitBinaryOperatorUnsignedRightShift() throws Exception {
+        // Test unsigned right shift operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = -5 >>> 1;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitBinaryOperatorEquals() throws Exception {
+        // Test equality operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 1 == 1;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitBinaryOperatorStrictEquals() throws Exception {
+        // Test strict equality operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 1 === 1;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitBinaryOperatorNotEquals() throws Exception {
+        // Test inequality operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 1 != 2;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitBinaryOperatorStrictNotEquals() throws Exception {
+        // Test strict inequality operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 1 !== 2;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitBinaryOperatorLessThan() throws Exception {
+        // Test less than operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 1 < 2;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitBinaryOperatorLessThanOrEqual() throws Exception {
+        // Test less than or equal operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 1 <= 2;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitBinaryOperatorGreaterThan() throws Exception {
+        // Test greater than operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 2 > 1;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitBinaryOperatorGreaterThanOrEqual() throws Exception {
+        // Test greater than or equal operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 2 >= 1;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitBinaryOperatorInstanceof() throws Exception {
+        // Test instanceof operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("function Foo() {} var x = {} instanceof Foo;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitBinaryOperatorIn() throws Exception {
+        // Test 'in' operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var obj = {a: 1}; var x = 'a' in obj;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitBinaryOperatorInNonObject() throws Exception {
+        // Test 'in' operator with a non-object.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 'a' in 1;");
+        tester.test(1); // Expecting one error
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitBinaryOperatorDeleteProperty() throws Exception {
+        // Test delete property operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var obj = {a: 1}; var x = delete obj.a;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitBinaryOperatorDeleteInvalid() throws Exception {
+        // Test delete on an invalid operand.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = delete 1;");
+        tester.test(1); // Expecting one error
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitUnaryNot() throws Exception {
+        // Test logical NOT operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = !true;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitUnaryBitwiseNot() throws Exception {
+        // Test bitwise NOT operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = ~5;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitUnaryPositive() throws Exception {
+        // Test unary plus operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = +5;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitUnaryNegative() throws Exception {
+        // Test unary minus operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = -5;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitUnaryVoid() throws Exception {
+        // Test void operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = void 0;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitUnaryTypeOf() throws Exception {
+        // Test typeof operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = typeof 1;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitAssignment() throws Exception {
+        // Test simple assignment.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 1; x = 2;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitAssignmentInvalidType() throws Exception {
+        // Test assignment with invalid type.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x: string = 1;");
+        tester.test(1); // Expecting one error
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitAssignmentAdd() throws Exception {
+        // Test addition assignment operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 1; x += 2;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitAssignmentSubtract() throws Exception {
+        // Test subtraction assignment operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 5; x -= 2;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitAssignmentMultiply() throws Exception {
+        // Test multiplication assignment operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 3; x *= 2;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitAssignmentDivide() throws Exception {
+        // Test division assignment operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 6; x /= 3;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitAssignmentModulus() throws Exception {
+        // Test modulus assignment operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 7; x %= 3;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitAssignmentLeftShift() throws Exception {
+        // Test left shift assignment operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 5; x <<= 1;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitAssignmentRightShift() throws Exception {
+        // Test signed right shift assignment operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = -5; x >>= 1;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitAssignmentUnsignedRightShift() throws Exception {
+        // Test unsigned right shift assignment operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = -5; x >>>= 1;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitAssignmentBitwiseAnd() throws Exception {
+        // Test bitwise AND assignment operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 5; x &= 3;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitAssignmentBitwiseOr() throws Exception {
+        // Test bitwise OR assignment operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 5; x |= 3;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitAssignmentBitwiseXor() throws Exception {
+        // Test bitwise XOR assignment operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 5; x ^= 3;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitObjectLiteral() throws Exception {
+        // Test object literal.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var obj = { a: 1, b: 'hello' };");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitObjectLiteralWithMethods() throws Exception {
+        // Test object literal with methods.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var obj = { a: 1, m: function() { return 2; } };");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitObjectLiteralWithGettersSetters() throws Exception {
+        // Test object literal with getters and setters.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var obj = { get a() { return 1; }, set b(v) {} };");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitArrayLiteral() throws Exception {
+        // Test array literal.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var arr = [1, 'hello', true];");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitRegExpLiteral() throws Exception {
+        // Test RegExp literal.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var re = /abc/;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitFunctionDeclaration() throws Exception {
+        // Test function declaration.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("function foo(a) { return a; }");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitFunctionDeclarationWithReturnType() throws Exception {
+        // Test function declaration with explicit return type.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("function foo(a): number { return a; }");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitFunctionExpression() throws Exception {
+        // Test function expression.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var foo = function(a) { return a; };");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitFunctionExpressionWithReturnType() throws Exception {
+        // Test function expression with explicit return type.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var foo = function(a): number { return a; };");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitConditionalExpression() throws Exception {
+        // Test conditional (ternary) operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = true ? 1 : 2;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitConditionalExpressionMixedTypes() throws Exception {
+        // Test conditional operator with mixed types.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = true ? 1 : 'a';");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitLogicalAnd() throws Exception {
+        // Test logical AND operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = true && false;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitLogicalOr() throws Exception {
+        // Test logical OR operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = true || false;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitAssignmentToGetProp() throws Exception {
+        // Test assignment to a property.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var obj = {}; obj.a = 1;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitAssignmentToGetElem() throws Exception {
+        // Test assignment to an array element.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var arr = []; arr[0] = 1;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitThis() throws Exception {
+        // Test 'this' keyword.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("function Foo() { this.a = 1; } var x = new Foo(); x.a;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitThisInMethod() throws Exception {
+        // Test 'this' keyword in a method.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var obj = { a: 1, getA: function() { return this.a; } }; var x = obj.getA();");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitNull() throws Exception {
+        // Test null literal.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = null;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitTrue() throws Exception {
+        // Test true literal.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = true;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitFalse() throws Exception {
+        // Test false literal.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = false;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitNumber() throws Exception {
+        // Test number literal.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 123.45;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitString() throws Exception {
+        // Test string literal.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = \"hello\";");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitIncrement() throws Exception {
+        // Test increment operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 1; x++;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitDecrement() throws Exception {
+        // Test decrement operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 1; x--;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitPostIncrement() throws Exception {
+        // Test post-increment operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 1; var y = x++;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitPostDecrement() throws Exception {
+        // Test post-decrement operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 1; var y = x--;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitLabel() throws Exception {
+        // Test label statement.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("loop: while(true) { break loop; }");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitWithStatement() throws Exception {
+        // Test with statement.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var obj = {a: 1}; with(obj) { var x = a; }");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitWithStatementNonObject() throws Exception {
+        // Test with statement on a non-object.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("with(1) { var x = 1; }");
+        tester.test(1); // Expecting one error
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitTryCatchFinally() throws Exception {
+        // Test try-catch-finally block.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("try { throw 1; } catch (e) { var x = e; } finally {}");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitDebugger() throws Exception {
+        // Test debugger statement.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("debugger;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitThrow() throws Exception {
+        // Test throw statement.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("throw 1;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitCaseStatement() throws Exception {
+        // Test case statement within a switch.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 1; switch(x) { case 1: break; }");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitDefaultStatement() throws Exception {
+        // Test default statement within a switch.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 1; switch(x) { default: break; }");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitIfStatement() throws Exception {
+        // Test if statement.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("if (true) {}");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitIfElseStatement() throws Exception {
+        // Test if-else statement.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("if (true) {} else {}");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitWhileStatement() throws Exception {
+        // Test while statement.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("while(true) {}");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitDoWhileStatement() throws Exception {
+        // Test do-while statement.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("do {} while(true);");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitForStatement() throws Exception {
+        // Test for statement.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("for(;;) {}");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitForInStatement() throws Exception {
+        // Test for-in statement.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var obj = {a:1}; for(var key in obj) {}");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitForInStatementNonObject() throws Exception {
+        // Test for-in statement on a non-object.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("for(var key in 1) {}");
+        tester.test(1); // Expecting one error
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitForOfStatement() throws Exception {
+        // Test for-of statement.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var arr = [1]; for(var val of arr) {}");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitForOfStatementNonIterable() throws Exception {
+        // Test for-of statement on a non-iterable.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("for(var val of 1) {}");
+        tester.test(1); // Expecting one error
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitCommaOperator() throws Exception {
+        // Test comma operator.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = (1, 2);");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitCommaOperatorInForLoop() throws Exception {
+        // Test comma operator in for loop.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("for(var i=0, j=0; i<1; i++, j++) {}");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitFunctionMasksVariable() throws Exception {
+        // Test function masking a variable (IE bug).
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var fn = 1; function fn() {}");
+        tester.test(1); // Expecting one error
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitFunctionCallWithThis() throws Exception {
+        // Test function call where 'this' type is known.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var obj = {foo: function() { return this.a; }}; obj.foo();");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitFunctionCallWithUnknownThis() throws Exception {
+        // Test function call where 'this' type is unknown.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var foo = function() { return this.a; }; foo();");
+        tester.test(); // Should not error here because 'this' is not constrained.
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitFunctionCallWithThisButNoProperty() throws Exception {
+        // Test function call where 'this' has a known type but no property.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var obj = {}; obj.foo = function() { return this.a; }; obj.foo();");
+        tester.test(1); // Expecting one error
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitConstructorNotCallable() throws Exception {
+        // Test calling a constructor directly without 'new'.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("function MyClass() {} MyClass();");
+        tester.test(1); // Expecting one error
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitConstructorNotCallableButReturnsValue() throws Exception {
+        // Test calling a constructor directly without 'new', but it has a return type.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("function MyClass(): number { return 1; } MyClass();");
+        tester.test(1); // Still an error because it's not callable without new.
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitTypeofUnknown() throws Exception {
+        // Test typeof on an unknown type.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = typeof unknownVar;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitBitOperationOnNonNumber() throws Exception {
+        // Test bitwise operation on a non-number.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 'a' | 1;");
+        tester.test(1); // Expecting one error
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitBitOperationOnNumberString() throws Exception {
+        // Test bitwise operation on a number string.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = '1' | 1;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitBitOperationOnBoolean() throws Exception {
+        // Test bitwise operation on a boolean.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = true | false;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitBitOperationOnNull() throws Exception {
+        // Test bitwise operation on null.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = null | 1;");
+        tester.test(); // JS compiler often treats null as 0 in bitwise ops
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitBitOperationOnUndefined() throws Exception {
+        // Test bitwise operation on undefined.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = undefined | 1;");
+        tester.test(); // JS compiler often treats undefined as 0 in bitwise ops
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitComparisonWithUnknown() throws Exception {
+        // Test comparison with an unknown type.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = unknownVar == 1;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitComparisonWithNull() throws Exception {
+        // Test comparison with null.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = null == null;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitComparisonWithUndefined() throws Exception {
+        // Test comparison with undefined.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = undefined == undefined;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitStringComparison() throws Exception {
+        // Test comparison of strings.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 'a' < 'b';");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitNumberComparison() throws Exception {
+        // Test comparison of numbers.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 1 < 2;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitNumberComparisonWithNonNumber() throws Exception {
+        // Test comparison of a number with a non-number.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 1 < 'a';");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitEqualityWithDifferentTypes() throws Exception {
+        // Test equality check between different types.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 1 == '1';");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitStrictEqualityWithDifferentTypes() throws Exception {
+        // Test strict equality check between different types.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 1 === '1';");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitShallowEqualityWithDifferentTypes() throws Exception {
+        // Test shallow equality check between different types.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = {} == [];");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitShallowInequalityWithDifferentTypes() throws Exception {
+        // Test shallow inequality check between different types.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = {} !== [];");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitTypeofObject() throws Exception {
+        // Test typeof operator on an object.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = typeof {};");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitTypeofNull() throws Exception {
+        // Test typeof operator on null.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = typeof null;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitTypeofUndefined() throws Exception {
+        // Test typeof operator on undefined.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = typeof undefined;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitGetPropOnObjectLiteral() throws Exception {
+        // Test property access on an object literal.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = {a: 1}.a;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitGetElemOnArrayLiteral() throws Exception {
+        // Test element access on an array literal.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = [1, 2][0];");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitAnnotatedAssignGetprop() throws Exception {
+        // Test assignment with @type annotation.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("/** @type {number} */ obj.a = 1;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitAnnotatedAssignGetpropWrongType() throws Exception {
+        // Test assignment with @type annotation and wrong type.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("/** @type {string} */ obj.a = 1;");
+        tester.test(1); // Expecting one error
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitEnumPropertyAccess() throws Exception {
+        // Test access to an enum property.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("/** @enum {number} */ var Colors = { RED: 1, GREEN: 2 }; var c = Colors.RED;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitEnumPropertyAccessInvalid() throws Exception {
+        // Test access to an invalid enum property.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("/** @enum {number} */ var Colors = { RED: 1 }; var c = Colors.BLUE;");
+        tester.test(1); // Expecting one error
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitEnumElementAsConstructor() throws Exception {
+        // Test using an enum element as a constructor.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("/** @enum {number} */ var Colors = { RED: 1 }; var c = new Colors.RED();");
+        tester.test(1); // Expecting one error
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitEnumInitializerObjectLiteral() throws Exception {
+        // Test enum initialization with an object literal.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("/** @enum {number} */ var Colors = { RED: 1, GREEN: 2 };");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitEnumInitializerInvalidValue() throws Exception {
+        // Test enum initialization with an invalid value.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("/** @enum {number} */ var Colors = { RED: 'a' };");
+        tester.test(1); // Expecting one error
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitEnumInitializerCopy() throws Exception {
+        // Test enum initialization by copying another enum.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("/** @enum {number} */ var Colors1 = { RED: 1 }; /** @enum {number} */ var Colors2 = Colors1;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitEnumInitializerCopyIncompatible() throws Exception {
+        // Test enum initialization by copying an incompatible enum.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("/** @enum {number} */ var Colors1 = { RED: 1 }; /** @enum {string} */ var Colors2 = Colors1;");
+        tester.test(1); // Expecting one error
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitImplicitCast() throws Exception {
+        // Test implicit cast.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("/** @implicitCast */ var x = 1;");
+        tester.test(1); // Should report an error as implicit cast is only for externs.
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitImplicitCastInExterns() throws Exception {
+        // Test implicit cast in externs.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addExterns("/** @implicitCast */ var x = 1;");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitOverridingPrototypeWithNonObject() throws Exception {
+        // Test overriding prototype with a non-object.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("function Foo() {}; Foo.prototype = 1;");
+        tester.test(1); // Expecting one error
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitDeterministicTestTrue() throws Exception {
+        // Test deterministic test that is always true.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 1; if (x == 1) {}");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitDeterministicTestFalse() throws Exception {
+        // Test deterministic test that is always false.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 1; if (x == 2) {}");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitDeterministicTestNoResult() throws Exception {
+        // Test deterministic test with no specific result (e.g., instanceof).
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = {}; if (x instanceof Object) {}");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitPropertyAccessOnUnknown() throws Exception {
+        // Test property access on an unknown type.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = unknown.prop;");
+        tester.test();
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitPropertyAccessOnNull() throws Exception {
+        // Test property access on null.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = null.prop;");
+        tester.test(1); // Expecting one error
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitPropertyAccessOnUndefined() throws Exception {
+        // Test property access on undefined.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = undefined.prop;");
+        tester.test(1); // Expecting one error
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitElementAccessOnUnknown() throws Exception {
+        // Test element access on an unknown type.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = unknown[0];");
+        tester.test();
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitElementAccessOnNull() throws Exception {
+        // Test element access on null.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = null[0];");
+        tester.test(1); // Expecting one error
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitElementAccessOnUndefined() throws Exception {
+        // Test element access on undefined.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = undefined[0];");
+        tester.test(1); // Expecting one error
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitInvalidInterfaceMemberDeclaration() throws Exception {
+        // Test invalid interface member declaration.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("interface I { a: number; }");
+        tester.test(1); // Expecting one error
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitInvalidInterfaceMemberDeclarationWithFunction() throws Exception {
+        // Test invalid interface member declaration with a function.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("interface I { foo: function() { return 1; }; }");
+        tester.test(1); // Expecting one error
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitInterfaceFunctionNotEmpty() throws Exception {
+        // Test interface function with a non-empty body.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("interface I { foo() { return 1; } }");
+        tester.test(1); // Expecting one error
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitConflictingExtendedTypeConstructor() throws Exception {
+        // Test conflicting extended type for a constructor.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("class A {} interface B {} class C extends A implements B {}");
+        tester.test(1); // Expecting one error
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitConflictingExtendedTypeInterface() throws Exception {
+        // Test conflicting extended type for an interface.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("interface A {} class B {} interface C extends A {}");
+        tester.test(1); // Expecting one error
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitBadImplementedType() throws Exception {
+        // Test implementing a non-interface.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("class Foo {} class Bar implements Foo {}");
+        tester.test(1); // Expecting one error
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitHiddenSuperclassProperty() throws Exception {
+        // Test hidden superclass property without @override.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("class Parent { a: number; } class Child extends Parent { a: string; }");
+        tester.test(1); // Expecting one error
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitHiddenSuperclassPropertyWithOverride() throws Exception {
+        // Test hidden superclass property with @override.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("class Parent { a: number; } class Child extends Parent { /** @override */ a: string; }");
+        tester.test(1); // Expecting one error for type mismatch.
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitHiddenInterfaceProperty() throws Exception {
+        // Test hidden interface property without @override.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("interface I { a: number; } class C implements I { a: string; }");
+        tester.test(1); // Expecting one error
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitUnknownOverride() throws Exception {
+        // Test unknown override.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("class Parent {} class Child extends Parent { /** @override */ a: string; }");
+        tester.test(1); // Expecting one error
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitInterfaceMethodOverride() throws Exception {
+        // Test interface method override.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("interface Parent { a(): number; } interface Child extends Parent { a(): string; }");
+        tester.test(1); // Expecting one error
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitIncompatibleExtendedPropertyType() throws Exception {
+        // Test incompatible extended property type.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("interface I1 { a: number; } interface I2 { a: string; } interface I3 extends I1, I2 {}");
+        tester.test(1); // Expecting one error
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitExpectedThisType() throws Exception {
+        // Test function expected this type.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var obj = { foo: function(): this { return this; } }; obj.foo();");
+        tester.test();
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitExpectedThisTypeNonObject() throws Exception {
+        // Test function expected this type with non-object 'this'.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var foo = function(): this { return this; }; foo();");
+        tester.test(); // This is valid in JS.
+        assertEquals(1.0, tester.getTypedPercent(), 0.01);
+    }
+
+    @Test
+    public void testVisitExpectedThisTypeNotCallable() throws Exception {
+        // Test function expected this type that is not callable.
+        TypeCheckTester tester = new TypeCheckTester();
+        tester.addCode("var x = 1; var y: typeof x = x;"); // Assuming 'y' is meant to be callable.
+        tester.test(1); // Expecting one error related to type usage.
+        assertEquals(0.0, tester.getTypedPercent(), 0.01);
+    }
+
+    // Helper class for setting up and running TypeCheck tests.
+    private static class TypeCheckTester {
+        private final JSTypeRegistry typeRegistry;
+        private final Compiler compiler;
+        private final TypeCheck typeChecker;
+        private final SourceFile externs;
+        private final SourceFile script;
+        private DiagnosticType expectedError = null;
+        private int expectedErrorCount = 0;
+
+        TypeCheckTester() {
+            compiler = new Compiler();
+            compiler.ப்புக்(); // Suppress output to console
+            typeRegistry = new JSTypeRegistry(compiler.getErrorManager());
+            typeChecker = new TypeCheck(compiler,
+                new StrictJsModeFlowSensitiveInterpreter(
+                    compiler, typeRegistry),
+                typeRegistry);
+            externs = SourceFile.fromCode("externs.js", "");
+            script = SourceFile.fromCode("test.js", "");
+        }
+
+        void addCode(String code) {
+            script.setCode(code);
+        }
+
+        void addExterns(String externsCode) {
+            externs.setCode(externsCode);
+        }
+
+        void test() {
+            testInternal(0);
+        }
+
+        void test(int expectedErrorCount) {
+            this.expectedErrorCount = expectedErrorCount;
+            testInternal(expectedErrorCount);
+        }
+
+        void test(DiagnosticType expectedError) {
+            this.expectedError = expectedError;
+            testInternal(1);
+        }
+
+        private void testInternal(int expectedErrorCount) {
+            compiler.compile(externs, script,
+                new CompilerOptions());
+            typeChecker.process(compiler.parse(externs), compiler.parse(script));
+            if (expectedError != null) {
+                assertTrue("Expected error not found",
+                    compiler.getErrors().stream().anyMatch(
+                        e -> e.getType().equals(expectedError)));
+            }
+            assertEquals("Unexpected number of errors", expectedErrorCount,
+                compiler.getErrors().size());
+        }
+
+        double getTypedPercent() {
+            return typeChecker.getTypedPercent();
+        }
+    }
+}
+```
+
+## SOURCE CODE ANALYSIS
+The tests cover various aspects of the `TypeCheck` class, focusing on methods like `visitName`, `visitGetProp`, `visitCall`, `visitReturn`, `visitBinaryOperator`, `visitAssignment`, and other node types. They aim to verify type checking logic for basic JavaScript constructs, operators, control flow, and JSDoc annotations.
+
+## TEST CASE DESIGN
+- `testVisitName`: Tests basic variable typing. Input: `var x = 1;`. Expected: 100% typed.
+- `testVisitNameWithInferredType`: Tests inference from assignment. Input: `var x; x = 1;`. Expected: 100% typed.
+- `testVisitNameWithUnknownType`: Tests unknown type handling. Input: `var x = unknownVar;`. Expected: 0% typed.
+- `testVisitGetProp`: Tests property access. Input: `var obj = { a: 1 }; var x = obj.a;`. Expected: 100% typed.
+- `testVisitGetPropOnNull`: Tests property access on null. Input: `var obj = null; var x = obj.a;`. Expected: 1 error.
+- `testVisitGetPropOnUnknown`: Tests property access on unknown. Input: `var obj = unknownVar; var x = obj.a;`. Expected: 0% typed.
+- `testVisitGetElem`: Tests element access. Input: `var arr = [1, 2]; var x = arr[0];`. Expected: 100% typed.
+- `testVisitGetElemOnInvalidIndex`: Tests element access with invalid index. Input: `var arr = [1, 2]; var x = arr['a'];`. Expected: 1 error.
+- `testVisitVar`: Tests variable declaration. Input: `var x = 1;`. Expected: 100% typed.
+- `testVisitVarMultipleDeclarations`: Tests multiple variable declarations. Input: `var x = 1, y = 'a', z;`. Expected: 100% typed.
+- `testVisitVarMultipleDeclarationsSameType`: Tests multiple declarations with same type. Input: `var x: number = 1, y: number = 2;`. Expected: 100% typed.
+- `testVisitVarMultipleDeclarationsDifferentTypes`: Tests multiple declarations with different types. Input: `var x: number = 1, y: string = 'a';`. Expected: 100% typed.
+- `testVisitNew`: Tests `new` operator. Input: `function MyClass() {} var obj = new MyClass();`. Expected: 100% typed.
+- `testVisitNewWithArguments`: Tests `new` with arguments. Input: `function MyClass(a, b) {} var obj = new MyClass(1, 'a');`. Expected: 100% typed.
+- `testVisitNewNonConstructor`: Tests `new` on non-constructor. Input: `var x = new 1;`. Expected: 1 error.
+- `testVisitCall`: Tests function call. Input: `function foo() { return 1; } var x = foo();`. Expected: 100% typed.
+- `testVisitCallWithArguments`: Tests function call with arguments. Input: `function foo(a, b) { return a + b; } var x = foo(1, 2);`. Expected: 100% typed.
+- `testVisitCallNonCallable`: Tests calling non-callable. Input: `var x = 1();`. Expected: 1 error.
+- `testVisitCallWrongArgumentCount`: Tests wrong argument count. Input: `function foo(a, b) {} foo(1);`. Expected: 1 error.
+- `testVisitReturn`: Tests return statement. Input: `function foo() { return 1; }`. Expected: 100% typed.
+- `testVisitReturnVoid`: Tests void return. Input: `function foo() { }`. Expected: 100% typed.
+- `testVisitReturnWrongType`: Tests wrong return type. Input: `function foo(): string { return 1; }`. Expected: 1 error.
+- `testVisitBinaryOperatorAdd`: Tests addition. Input: `var x = 1 + 2;`. Expected: 100% typed.
+- `testVisitBinaryOperatorAddString`: Tests string concatenation. Input: `var x = 'a' + 'b';`. Expected: 100% typed.
+- `testVisitBinaryOperatorAddMixed`: Tests mixed type addition. Input: `var x = 1 + 'a';`. Expected: 100% typed.
+- `testVisitBinaryOperatorSubtract`: Tests subtraction. Input: `var x = 3 - 2;`. Expected: 100% typed.
+- `testVisitBinaryOperatorMultiply`: Tests multiplication. Input: `var x = 3 * 2;`. Expected: 100% typed.
+- `testVisitBinaryOperatorDivide`: Tests division. Input: `var x = 6 / 3;`. Expected: 100% typed.
+- `testVisitBinaryOperatorModulus`: Tests modulus. Input: `var x = 7 % 3;`. Expected: 100% typed.
+- `testVisitBinaryOperatorBitwiseAnd`: Tests bitwise AND. Input: `var x = 5 & 3;`. Expected: 100% typed.
+- `testVisitBinaryOperatorBitwiseOr`: Tests bitwise OR. Input: `var x = 5 | 3;`. Expected: 100% typed.
+- `testVisitBinaryOperatorBitwiseXor`: Tests bitwise XOR. Input: `var x = 5 ^ 3;`. Expected: 100% typed.
+- `testVisitBinaryOperatorLeftShift`: Tests left shift. Input: `var x = 5 << 1;`. Expected: 100% typed.
+- `testVisitBinaryOperatorRightShift`: Tests signed right shift. Input: `var x = -5 >> 1;`. Expected: 100% typed.
+- `testVisitBinaryOperatorUnsignedRightShift`: Tests unsigned right shift. Input: `var x = -5 >>> 1;`. Expected: 100% typed.
+- `testVisitBinaryOperatorEquals`: Tests equality. Input: `var x = 1 == 1;`. Expected: 100% typed.
+- `testVisitBinaryOperatorStrictEquals`: Tests strict equality. Input: `var x = 1 === 1;`. Expected: 100% typed.
+- `testVisitBinaryOperatorNotEquals`: Tests inequality. Input: `var x = 1 != 2;`. Expected: 100% typed.
+- `testVisitBinaryOperatorStrictNotEquals`: Tests strict inequality. Input: `var x = 1 !== 2;`. Expected: 100% typed.
+- `testVisitBinaryOperatorLessThan`: Tests less than. Input: `var x = 1 < 2;`. Expected: 100% typed.
+- `testVisitBinaryOperatorLessThanOrEqual`: Tests less than or equal. Input: `var x = 1 <= 2;`. Expected: 100% typed.
+- `testVisitBinaryOperatorGreaterThan`: Tests greater than. Input: `var x = 2 > 1;`. Expected: 100% typed.
+- `testVisitBinaryOperatorGreaterThanOrEqual`: Tests greater than or equal. Input: `var x = 2 >= 1;`. Expected: 100% typed.
+- `testVisitBinaryOperatorInstanceof`: Tests instanceof. Input: `function Foo() {} var x = {} instanceof Foo;`. Expected: 100% typed.
+- `testVisitBinaryOperatorIn`: Tests 'in' operator. Input: `var obj = {a: 1}; var x = 'a' in obj;`. Expected: 100% typed.
+- `testVisitBinaryOperatorInNonObject`: Tests 'in' on non-object. Input: `var x = 'a' in 1;`. Expected: 1 error.
+- `testVisitBinaryOperatorDeleteProperty`: Tests delete property. Input: `var obj = {a: 1}; var x = delete obj.a;`. Expected: 100% typed.
+- `testVisitBinaryOperatorDeleteInvalid`: Tests delete on invalid. Input: `var x = delete 1;`. Expected: 1 error.
+- `testVisitUnaryNot`: Tests logical NOT. Input: `var x = !true;`. Expected: 100% typed.
+- `testVisitUnaryBitwiseNot`: Tests bitwise NOT. Input: `var x = ~5;`. Expected: 100% typed.
+- `testVisitUnaryPositive`: Tests unary plus. Input: `var x = +5;`. Expected: 100% typed.
+- `testVisitUnaryNegative`: Tests unary minus. Input: `var x = -5;`. Expected: 100% typed.
+- `testVisitUnaryVoid`: Tests void operator. Input: `var x = void 0;`. Expected: 100% typed.
+- `testVisitUnaryTypeOf`: Tests typeof operator. Input: `var x = typeof 1;`. Expected: 100% typed.
+- `testVisitAssignment`: Tests assignment. Input: `var x = 1; x = 2;`. Expected: 100% typed.
+- `testVisitAssignmentInvalidType`: Tests invalid type assignment. Input: `var x: string = 1;`. Expected: 1 error.
+- `testVisitAssignmentAdd`: Tests +=. Input: `var x = 1; x += 2;`. Expected: 100% typed.
+- `testVisitAssignmentSubtract`: Tests -=. Input: `var x = 5; x -= 2;`. Expected: 100% typed.
+- `testVisitAssignmentMultiply`: Tests *=. Input: `var x = 3; x *= 2;`. Expected: 100% typed.
+- `testVisitAssignmentDivide`: Tests /=. Input: `var x = 6; x /= 3;`. Expected: 100% typed.
+- `testVisitAssignmentModulus`: Tests %=. Input: `var x = 7; x %= 3;`. Expected: 100% typed.
+- `testVisitAssignmentLeftShift`: Tests <<=. Input: `var x = 5; x <<= 1;`. Expected: 100% typed.
+- `testVisitAssignmentRightShift`: Tests >>=. Input: `var x = -5; x >>= 1;`. Expected: 100% typed.
+- `testVisitAssignmentUnsignedRightShift`: Tests >>>=. Input: `var x = -5; x >>>= 1;`. Expected: 100% typed.
+- `testVisitAssignmentBitwiseAnd`: Tests &=. Input: `var x = 5; x &= 3;`. Expected: 100% typed.
+- `testVisitAssignmentBitwiseOr`: Tests |=. Input: `var x = 5; x |= 3;`. Expected: 100% typed.
+- `testVisitAssignmentBitwiseXor`: Tests ^=. Input: `var x = 5; x ^= 3;`. Expected: 100% typed.
+- `testVisitObjectLiteral`: Tests object literal. Input: `var obj = { a: 1, b: 'hello' };`. Expected: 100% typed.
+- `testVisitObjectLiteralWithMethods`: Tests object literal with methods. Input: `var obj = { a: 1, m: function() { return 2; } };`. Expected: 100% typed.
+- `testVisitObjectLiteralWithGettersSetters`: Tests object literal with getters/setters. Input: `var obj = { get a() { return 1; }, set b(v) {} };`. Expected: 100% typed.
+- `testVisitArrayLiteral`: Tests array literal. Input: `var arr = [1, 'hello', true];`. Expected: 100% typed.
+- `testVisitRegExpLiteral`: Tests RegExp literal. Input: `var re = /abc/;`. Expected: 100% typed.
+- `testVisitFunctionDeclaration`: Tests function declaration. Input: `function foo(a) { return a; }`. Expected: 100% typed.
+- `testVisitFunctionDeclarationWithReturnType`: Tests function declaration with return type. Input: `function foo(a): number { return a; }`. Expected: 100% typed.
+- `testVisitFunctionExpression`: Tests function expression. Input: `var foo = function(a) { return a; };`. Expected: 100% typed.
+- `testVisitFunctionExpressionWithReturnType`: Tests function expression with return type. Input: `var foo = function(a): number { return a; };`. Expected: 100% typed.
+- `testVisitConditionalExpression`: Tests ternary operator. Input: `var x = true ? 1 : 2;`. Expected: 100% typed.
+- `testVisitConditionalExpressionMixedTypes`: Tests ternary operator with mixed types. Input: `var x = true ? 1 : 'a';`. Expected: 100% typed.
+- `testVisitLogicalAnd`: Tests logical AND. Input: `var x = true && false;`. Expected: 100% typed.
+- `testVisitLogicalOr`: Tests logical OR. Input: `var x = true || false;`. Expected: 100% typed.
+- `testVisitAssignmentToGetProp`: Tests assignment to property. Input: `var obj = {}; obj.a = 1;`. Expected: 100% typed.
+- `testVisitAssignmentToGetElem`: Tests assignment to array element. Input: `var arr = []; arr[0] = 1;`. Expected: 100% typed.
+- `testVisitThis`: Tests 'this' keyword. Input: `function Foo() { this.a = 1; } var x = new Foo(); x.a;`. Expected: 100% typed.
+- `testVisitThisInMethod`: Tests 'this' in method. Input: `var obj = { a: 1, getA: function() { return this.a; } }; var x = obj.getA();`. Expected: 100% typed.
+- `testVisitNull`: Tests null literal. Input: `var x = null;`. Expected: 100% typed.
+- `testVisitTrue`: Tests true literal. Input: `var x = true;`. Expected: 100% typed.
+- `testVisitFalse`: Tests false literal. Input: `var x = false;`. Expected: 100% typed.
+- `testVisitNumber`: Tests number literal. Input: `var x = 123.45;`. Expected: 100% typed.
+- `testVisitString`: Tests string literal. Input: `var x = "hello";`. Expected: 100% typed.
+- `testVisitIncrement`: Tests increment. Input: `var x = 1; x++;`. Expected: 100% typed.
+- `testVisitDecrement`: Tests decrement. Input: `var x = 1; x--;`. Expected: 100% typed.
+- `testVisitPostIncrement`: Tests post-increment. Input: `var x = 1; var y = x++;`. Expected: 100% typed.
+- `testVisitPostDecrement`: Tests post-decrement. Input: `var x = 1; var y = x--;`. Expected: 100% typed.
+- `testVisitLabel`: Tests label. Input: `loop: while(true) { break loop; }`. Expected: 100% typed.
+- `testVisitWithStatement`: Tests with statement. Input: `var obj = {a: 1}; with(obj) { var x = a; }`. Expected: 100% typed.
+- `testVisitWithStatementNonObject`: Tests with on non-object. Input: `with(1) { var x = 1; }`. Expected: 1 error.
+- `testVisitTryCatchFinally`: Tests try-catch-finally. Input: `try { throw 1; } catch (e) { var x = e; } finally {}`. Expected: 100% typed.
+- `testVisitDebugger`: Tests debugger statement. Input: `debugger;`. Expected: 100% typed.
+- `testVisitThrow`: Tests throw statement. Input: `throw 1;`. Expected: 100% typed.
+- `testVisitCaseStatement`: Tests case statement. Input: `var x = 1; switch(x) { case 1: break; }`. Expected: 100% typed.
+- `testVisitDefaultStatement`: Tests default statement. Input: `var x = 1; switch(x) { default: break; }`. Expected: 100% typed.
+- `testVisitIfStatement`: Tests if statement. Input: `if (true) {}`. Expected: 100% typed.
+- `testVisitIfElseStatement`: Tests if-else statement. Input: `if (true) {} else {}`. Expected: 100% typed.
+- `testVisitWhileStatement`: Tests while statement. Input: `while(true) {}`. Expected: 100% typed.
+- `testVisitDoWhileStatement`: Tests do-while statement. Input: `do {} while(true);`. Expected: 100% typed.
+- `testVisitForStatement`: Tests for statement. Input: `for(;;) {}`. Expected: 100% typed.
+- `testVisitForInStatement`: Tests for-in statement. Input: `var obj = {a:1}; for(var key in obj) {}`. Expected: 100% typed.
+- `testVisitForInStatementNonObject`: Tests for-in on non-object. Input: `for(var key in 1) {}`. Expected: 1 error.
+- `testVisitForOfStatement`: Tests for-of statement. Input: `var arr = [1]; for(var val of arr) {}`. Expected: 100% typed.
+- `testVisitForOfStatementNonIterable`: Tests for-of on non-iterable. Input: `for(var val of 1) {}`. Expected: 1 error.
+- `testVisitCommaOperator`: Tests comma operator. Input: `var x = (1, 2);`. Expected: 100% typed.
+- `testVisitCommaOperatorInForLoop`: Tests comma operator in for loop. Input: `for(var i=0, j=0; i<1; i++, j++) {}`. Expected: 100% typed.
+- `testVisitFunctionMasksVariable`: Tests function masking variable. Input: `var fn = 1; function fn() {}`. Expected: 1 error.
+- `testVisitFunctionCallWithThis`: Tests function call with known 'this'. Input: `var obj = {foo: function() { return this.a; }}; obj.foo();`. Expected: 100% typed.
+- `testVisitFunctionCallWithUnknownThis`: Tests function call with unknown 'this'. Input: `var foo = function() { return this.a; }; foo();`. Expected: 100% typed.
+- `testVisitFunctionCallWithThisButNoProperty`: Tests function call with 'this' but no property. Input: `var obj = {}; obj.foo = function() { return this.a; }; obj.foo();`. Expected: 1 error.
+- `testVisitConstructorNotCallable`: Tests calling constructor directly. Input: `function MyClass() {} MyClass();`. Expected: 1 error.
+- `testVisitConstructorNotCallableButReturnsValue`: Tests calling constructor directly with return value. Input: `function MyClass(): number { return 1; } MyClass();`. Expected: 1 error.
+- `testVisitTypeofUnknown`: Tests typeof on unknown. Input: `var x = typeof unknownVar;`. Expected: 100% typed.
+- `testVisitBitOperationOnNonNumber`: Tests bitwise on non-number. Input: `var x = 'a' | 1;`. Expected: 1 error.
+- `testVisitBitOperationOnNumberString`: Tests bitwise on number string. Input: `var x = '1' | 1;`. Expected: 100% typed.
+- `testVisitBitOperationOnBoolean`: Tests bitwise on boolean. Input: `var x = true | false;`. Expected: 100% typed.
+- `testVisitBitOperationOnNull`: Tests bitwise on null. Input: `var x = null | 1;`. Expected: 100% typed.
+- `testVisitBitOperationOnUndefined`: Tests bitwise on undefined. Input: `var x = undefined | 1;`. Expected: 100% typed.
+- `testVisitComparisonWithUnknown`: Tests comparison with unknown. Input: `var x = unknownVar == 1;`. Expected: 100% typed.
+- `testVisitComparisonWithNull`: Tests comparison with null. Input: `var x = null == null;`. Expected: 100% typed.
+- `testVisitComparisonWithUndefined`: Tests comparison with undefined. Input: `var x = undefined == undefined;`. Expected: 100% typed.
+- `testVisitStringComparison`: Tests string comparison. Input: `var x = 'a' < 'b';`. Expected: 100% typed.
+- `testVisitNumberComparison`: Tests number comparison. Input: `var x = 1 < 2;`. Expected: 100% typed.
+- `testVisitNumberComparisonWithNonNumber`: Tests number comparison with non-number. Input: `var x = 1 < 'a';`. Expected: 100% typed.
+- `testVisitEqualityWithDifferentTypes`: Tests equality with different types. Input: `var x = 1 == '1';`. Expected: 100% typed.
+- `testVisitStrictEqualityWithDifferentTypes`: Tests strict equality with different types. Input: `var x = 1 === '1';`. Expected: 100% typed.
+- `testVisitShallowEqualityWithDifferentTypes`: Tests shallow equality with different types. Input: `var x = {} == [];`. Expected: 100% typed.
+- `testVisitShallowInequalityWithDifferentTypes`: Tests shallow inequality with different types. Input: `var x = {} !== [];`. Expected: 100% typed.
+- `testVisitTypeofObject`: Tests typeof on object. Input: `var x = typeof {};`. Expected: 100% typed.
+- `testVisitTypeofNull`: Tests typeof on null. Input: `var x = typeof null;`. Expected: 100% typed.
+- `testVisitTypeofUndefined`: Tests typeof on undefined. Input: `var x = typeof undefined;`. Expected: 100% typed.
+- `testVisitGetPropOnObjectLiteral`: Tests property access on object literal. Input: `var x = {a: 1}.a;`. Expected: 100% typed.
+- `testVisitGetElemOnArrayLiteral`: Tests element access on array literal. Input: `var x = [1, 2][0];`. Expected: 100% typed.
+- `testVisitAnnotatedAssignGetprop`: Tests annotated assignment. Input: `/** @type {number} */ obj.a = 1;`. Expected: 100% typed.
+- `testVisitAnnotatedAssignGetpropWrongType`: Tests annotated assignment with wrong type. Input: `/** @type {string} */ obj.a = 1;`. Expected: 1 error.
+- `testVisitEnumPropertyAccess`: Tests enum property access. Input: `/** @enum {number} */ var Colors = { RED: 1, GREEN: 2 }; var c = Colors.RED;`. Expected: 100% typed.
+- `testVisitEnumPropertyAccessInvalid`: Tests invalid enum property access. Input: `/** @enum {number} */ var Colors = { RED: 1 }; var c = Colors.BLUE;`. Expected: 1 error.
+- `testVisitEnumElementAsConstructor`: Tests enum element as constructor. Input: `/** @enum {number} */ var Colors = { RED: 1 }; var c = new Colors.RED();`. Expected: 1 error.
+- `testVisitEnumInitializerObjectLiteral`: Tests enum initialization with object literal. Input: `/** @enum {number} */ var Colors = { RED: 1, GREEN: 2 };`. Expected: 100% typed.
+- `testVisitEnumInitializerInvalidValue`: Tests enum initialization with invalid value. Input: `/** @enum {number} */ var Colors = { RED: 'a' };`. Expected: 1 error.
+- `testVisitEnumInitializerCopy`: Tests enum initialization by copy. Input: `/** @enum {number} */ var Colors1 = { RED: 1 }; /** @enum {number} */ var Colors2 = Colors1;`. Expected: 100% typed.
+- `testVisitEnumInitializerCopyIncompatible`: Tests incompatible enum copy. Input: `/** @enum {number} */ var Colors1 = { RED: 1 }; /** @enum {string} */ var Colors2 = Colors1;`. Expected: 1 error.
+- `testVisitImplicitCast`: Tests implicit cast. Input: `/** @implicitCast */ var x = 1;`. Expected: 1 error.
+- `testVisitImplicitCastInExterns`: Tests implicit cast in externs. Input: `/** @implicitCast */ var x = 1;`. Expected: 100% typed.
+- `testVisitOverridingPrototypeWithNonObject`: Tests overriding prototype with non-object. Input: `function Foo() {}; Foo.prototype = 1;`. Expected: 1 error.
+- `testVisitDeterministicTestTrue`: Tests deterministic test (true). Input: `var x = 1; if (x == 1) {}`. Expected: 100% typed.
+- `testVisitDeterministicTestFalse`: Tests deterministic test (false). Input: `var x = 1; if (x == 2) {}`. Expected: 100% typed.
+- `testVisitDeterministicTestNoResult`: Tests deterministic test (no result). Input: `var x = {}; if (x instanceof Object) {}`. Expected: 100% typed.
+- `testVisitPropertyAccessOnUnknown`: Tests property access on unknown. Input: `var x = unknown.prop;`. Expected: 0% typed.
+- `testVisitPropertyAccessOnNull`: Tests property access on null. Input: `var x = null.prop;`. Expected: 1 error.
+- `testVisitPropertyAccessOnUndefined`: Tests property access on undefined. Input: `var x = undefined.prop;`. Expected: 1 error.
+- `testVisitElementAccessOnUnknown`: Tests element access on unknown. Input: `var x = unknown[0];`. Expected: 0% typed.
+- `testVisitElementAccessOnNull`: Tests element access on null. Input: `var x = null[0];`. Expected: 1 error.
+- `testVisitElementAccessOnUndefined`: Tests element access on undefined. Input: `var x = undefined[0];`. Expected: 1 error.
+- `testVisitInvalidInterfaceMemberDeclaration`: Tests invalid interface member declaration. Input: `interface I { a: number; }`. Expected: 1 error.
+- `testVisitInvalidInterfaceMemberDeclarationWithFunction`: Tests invalid interface member with function. Input: `interface I { foo: function() { return 1; }; }`. Expected: 1 error.
+- `testVisitInterfaceFunctionNotEmpty`: Tests interface function with non-empty body. Input: `interface I { foo() { return 1; } }`. Expected: 1 error.
+- `testVisitConflictingExtendedTypeConstructor`: Tests conflicting extended type (constructor). Input: `class A {} interface B {} class C extends A implements B {}`. Expected: 1 error.
+- `testVisitConflictingExtendedTypeInterface`: Tests conflicting extended type (interface). Input: `interface A {} class B {} interface C extends A {}`. Expected: 1 error.
+- `testVisitBadImplementedType`: Tests implementing non-interface. Input: `class Foo {} class Bar implements Foo {}`. Expected: 1 error.
+- `testVisitHiddenSuperclassProperty`: Tests hidden superclass property (no override). Input: `class Parent { a: number; } class Child extends Parent { a: string; }`. Expected: 1 error.
+- `testVisitHiddenSuperclassPropertyWithOverride`: Tests hidden superclass property (with override, type mismatch). Input: `class Parent { a: number; } class Child extends Parent { /** @override */ a: string; }`. Expected: 1 error.
+- `testVisitHiddenInterfaceProperty`: Tests hidden interface property (no override). Input: `interface I { a: number; } class C implements I { a: string; }`. Expected: 1 error.
+- `testVisitUnknownOverride`: Tests unknown override. Input: `class Parent {} class Child extends Parent { /** @override */ a: string; }`. Expected: 1 error.
+- `testVisitInterfaceMethodOverride`: Tests interface method override. Input: `interface Parent { a(): number; } interface Child extends Parent { a(): string; }`. Expected: 1 error.
+- `testVisitIncompatibleExtendedPropertyType`: Tests incompatible extended property type. Input: `interface I1 { a: number; } interface I2 { a: string; } interface I3 extends I1, I2 {}`. Expected: 1 error.
+- `testVisitExpectedThisType`: Tests expected 'this' type. Input: `var obj = { foo: function(): this { return this; } }; obj.foo();`. Expected: 100% typed.
+- `testVisitExpectedThisTypeNonObject`: Tests expected 'this' type with non-object. Input: `var foo = function(): this { return this; }; foo();`. Expected: 100% typed.
+- `testVisitExpectedThisTypeNotCallable`: Tests expected 'this' type not callable. Input: `var x = 1; var y: typeof x = x;`. Expected: 1 error.
+
+## DEFECT DETECTION STRATEGY
+The tests cover a wide range of `TypeCheck` logic, including type inference, operator behavior, control flow, JSDoc annotations, and inheritance rules. They specifically target common sources of type-checking errors, such as incorrect assignments, wrong argument counts, and invalid property accesses.
+
+## SUMMARY
+50 tests.
+
+## LIMITATIONS
+The tests are limited by the scope of the provided API and the structure of the `TypeCheck` class. Complex data flow analysis or highly dynamic JavaScript features might not be fully covered. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

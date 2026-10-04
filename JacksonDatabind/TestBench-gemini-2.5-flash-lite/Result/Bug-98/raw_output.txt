@@ -1,0 +1,1005 @@
+```java
+package com.fasterxml.jackson.databind.deser.impl;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.io.IOException;
+import java.util.*;
+import com.fasterxml.jackson.core.*;
+import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.deser.SettableBeanProperty;
+import com.fasterxml.jackson.databind.jsontype.TypeDeserializer;
+import com.fasterxml.jackson.databind.util.TokenBuffer;
+import com.fasterxml.jackson.databind.type.SimpleType;
+import com.fasterxml.jackson.databind.deser.impl.BeanPropertyMap;
+import com.fasterxml.jackson.databind.deser.CreatorProperty;
+import com.fasterxml.jackson.databind.deser.DefaultDeserializationContext;
+import com.fasterxml.jackson.databind.deser.DeserializerFactory;
+import com.fasterxml.jackson.databind.deser.DeserializerCache;
+import com.fasterxml.jackson.databind.deser.impl.PropertyValueBuffer;
+import com.fasterxml.jackson.databind.deser.impl.PropertyBasedCreator;
+import com.fasterxml.jackson.databind.deser.ValueInstantiator;
+import com.fasterxml.jackson.databind.node.POJONode;
+import com.fasterxml.jackson.databind.util.TokenBuffer;
+
+public class ExternalTypeHandlerTest {
+
+    // Mock classes and objects to facilitate testing
+    private static class MockSettableBeanProperty extends SettableBeanProperty {
+        private static final long serialVersionUID = 1L;
+        private Object _value;
+        private final String _name;
+        private int _creatorIndex = -1;
+
+        protected MockSettableBeanProperty(String name, JavaType type, int index) {
+            super(name, type, null, null);
+            _name = name;
+            _creatorIndex = index;
+        }
+
+        protected MockSettableBeanProperty(String name, JavaType type) {
+            super(name, type, null, null);
+            _name = name;
+        }
+
+        @Override
+        public void set(Object instance, Object value) throws IOException {
+            this._value = value;
+        }
+
+        @Override
+        public Object setAndReturn(Object instance, Object value) throws IOException {
+            set(instance, value);
+            return value;
+        }
+
+        @Override
+        public boolean isRequired() {
+            return false;
+        }
+
+        @Override
+        public SettableBeanProperty withSimpleName(String newName) {
+            return new MockSettableBeanProperty(newName, getType(), _creatorIndex);
+        }
+
+        @Override
+        public void deserializeAndSet(JsonParser p, DeserializationContext ctxt, Object bean) throws IOException {
+            // For simplicity, just use the value from the buffer if available, otherwise null
+            // In a real scenario, this would involve deserialization.
+            if (_value != null) {
+                set(bean, _value);
+            } else {
+                set(bean, null);
+            }
+        }
+
+        @Override
+        public Object deserialize(JsonParser p, DeserializationContext ctxt) throws IOException {
+            // For simplicity, return the buffered value if set, otherwise null.
+            return _value;
+        }
+
+        @Override
+        public int getCreatorIndex() {
+            return _creatorIndex;
+        }
+
+        @Override
+        public String getName() {
+            return _name;
+        }
+
+        public void injectValue(Object value) throws IOException {
+            this._value = value;
+        }
+        
+        public Object getValue() {
+            return _value;
+        }
+    }
+
+    private static class MockTypeDeserializer extends TypeDeserializer {
+        private final String _propertyName;
+        private final Class<?> _defaultImpl;
+        private final TypeIdResolver _typeIdResolver;
+
+        protected MockTypeDeserializer(String propertyName, Class<?> defaultImpl, TypeIdResolver resolver) {
+            super(0, null);
+            _propertyName = propertyName;
+            _defaultImpl = defaultImpl;
+            _typeIdResolver = resolver;
+        }
+
+        @Override
+        public TypeDeserializer forProperty(BeanProperty prop) {
+            return this;
+        }
+
+        @Override
+        public As getTypeInclusion() {
+            return As.EXTERNAL_PROPERTY;
+        }
+
+        @Override
+        public String getPropertyName() {
+            return _propertyName;
+        }
+
+        @Override
+        public TypeIdResolver getTypeIdResolver() {
+            return _typeIdResolver;
+        }
+
+        @Override
+        public Class<?> getDefaultImpl() {
+            return _defaultImpl;
+        }
+
+        @Override
+        public Object deserializeTypedFromObject(JsonParser p, DeserializationContext ctxt) throws IOException {
+            return null;
+        }
+
+        @Override
+        public Object deserializeTypedFromArray(JsonParser p, DeserializationContext ctxt) throws IOException {
+            return null;
+        }
+
+        @Override
+        public Object deserializeTypedFromScalar(JsonParser p, DeserializationContext ctxt) throws IOException {
+            return null;
+        }
+
+        @Override
+        public Object deserializeTypedFromAny(JsonParser p, DeserializationContext ctxt) throws IOException {
+            return null;
+        }
+        
+        public static TypeIdResolver createMockResolver(String defaultId) {
+            return new TypeIdResolver() {
+                @Override
+                public String idFromValue(Object value) { return defaultId; }
+                @Override
+                public String idFromValueAndType(Object value, Class<?> type) { return defaultId; }
+                @Override
+                public String getMechanism() { return "test"; }
+                @Override
+                public JavaType typeFromId(DeserializationContext ctxt, String id) throws IOException { return null; }
+            };
+        }
+    }
+
+    private static class MockDeserializationContext extends DefaultDeserializationContext {
+        protected MockDeserializationContext(DeserializerCache cache, DeserializerFactory factory) {
+            super(cache, factory);
+        }
+        @Override
+        public void reportInputMismatch(Object valueToConvert, String format, Object... params) throws JsonMappingException {
+            throw new JsonMappingException(null, String.format(format, params));
+        }
+        @Override
+        public void reportInputMismatch(JavaType targetType, String message, Object... params) throws JsonMappingException {
+            throw new JsonMappingException(null, String.format(message, params));
+        }
+        @Override
+        public void reportInputMismatch(Class<?> targetType, String message, Object... params) throws JsonMappingException {
+            throw new JsonMappingException(null, String.format(message, params));
+        }
+    }
+
+    private static class MockObjectMapper extends ObjectMapper {
+        // Need a mock context and factory for complete() calls
+        private final DeserializationContext _mockContext;
+        private final DeserializerFactory _mockFactory;
+
+        public MockObjectMapper(DeserializerFactory factory) {
+            super();
+            _mockFactory = factory;
+            _mockContext = new MockDeserializationContext(new DeserializerCache(), factory);
+        }
+
+        public DeserializationContext getMockContext() {
+            return _mockContext;
+        }
+    }
+    
+    private static class MockValueInstantiator extends ValueInstantiator {
+        @Override
+        public boolean canCreateFromObjectWith() { return true; }
+        @Override
+        public Object createFromObjectWith(DeserializationContext ctxt, Object[] params) { return new Object(); }
+        @Override
+        public String getValueTypeDesc() { return "Object"; }
+    }
+
+    private static class MockPropertyBasedCreator extends PropertyBasedCreator {
+        public MockPropertyBasedCreator(DeserializationContext ctxt, ValueInstantiator valueInstantiator, SettableBeanProperty[] creatorProps) {
+            super(ctxt, valueInstantiator, creatorProps);
+        }
+    }
+    
+    private static class MockBeanPropertyMap extends BeanPropertyMap {
+        protected MockBeanPropertyMap(boolean caseInsensitive, Collection<SettableBeanProperty> props) {
+            super(caseInsensitive, props);
+        }
+        
+        public SettableBeanProperty find(String key) {
+            // Mock implementation: iterate and find by name
+            for (SettableBeanProperty prop : this) {
+                if (prop.getName().equals(key)) {
+                    return prop;
+                }
+            }
+            return null;
+        }
+    }
+
+    // --- Tests ---
+
+    @Test
+    public void testBuilderAndStart() throws Exception {
+        JavaType beanType = SimpleType.constructUnsafe(Object.class);
+        ExternalTypeHandler.Builder builder = ExternalTypeHandler.builder(beanType);
+        assertNotNull(builder);
+        
+        // Test start() which creates a blueprint copy
+        ExternalTypeHandler handler = new ExternalTypeHandler(beanType, new ExtTypedProperty[0], new HashMap<>(), null, null);
+        ExternalTypeHandler startedHandler = handler.start();
+        assertNotNull(startedHandler);
+        assertNotSame(handler, startedHandler);
+    }
+
+    @Test
+    public void testHandleTypePropertyValue_singleProperty() throws Exception {
+        JavaType beanType = SimpleType.constructUnsafe(Object.class);
+        MockSettableBeanProperty prop1 = new MockSettableBeanProperty("prop1", beanType);
+        MockTypeDeserializer typeDeser1 = new MockTypeDeserializer("type1", null, MockTypeDeserializer.createMockResolver("typeA"));
+        
+        ExternalTypeHandler.Builder builder = ExternalTypeHandler.builder(beanType);
+        builder.addExternal(prop1, typeDeser1);
+        
+        Map<String, Object> nameToPropIndex = new HashMap<>();
+        nameToPropIndex.put("prop1", 0);
+        nameToPropIndex.put("type1", 0);
+        
+        ExtTypedProperty[] extProps = new ExtTypedProperty[] { new ExtTypedProperty(prop1, typeDeser1) };
+        ExternalTypeHandler handler = new ExternalTypeHandler(beanType, extProps, nameToPropIndex, new String[1], new TokenBuffer[1]);
+        
+        TokenBuffer tb = new TokenBuffer(null, null);
+        tb.writeString("value1"); // Simulates a value
+        
+        // Simulate parsing "type1": "typeA"
+        JsonParser mockParser = createMockParserForValue("typeA");
+        DeserializationContext mockContext = new MockObjectMapper(null).getMockContext();
+        Object bean = new Object();
+
+        boolean handled = handler.handleTypePropertyValue(mockParser, mockContext, "type1", bean);
+        assertTrue(handled);
+        assertEquals("typeA", handler._typeIds[0]);
+        assertNull(handler._tokens[0]);
+    }
+
+    @Test
+    public void testHandleTypePropertyValue_listProperty() throws Exception {
+        JavaType beanType = SimpleType.constructUnsafe(Object.class);
+        MockSettableBeanProperty prop1 = new MockSettableBeanProperty("prop1", beanType);
+        MockTypeDeserializer typeDeser1 = new MockTypeDeserializer("type1", null, MockTypeDeserializer.createMockResolver("typeA"));
+        
+        ExternalTypeHandler.Builder builder = ExternalTypeHandler.builder(beanType);
+        builder.addExternal(prop1, typeDeser1);
+        
+        List<Integer> indices = new ArrayList<>();
+        indices.add(0);
+        indices.add(1);
+        Map<String, Object> nameToPropIndex = new HashMap<>();
+        nameToPropIndex.put("type1", indices);
+        
+        ExtTypedProperty[] extProps = new ExtTypedProperty[] { new ExtTypedProperty(prop1, typeDeser1), new ExtTypedProperty(prop1, typeDeser1) };
+        ExternalTypeHandler handler = new ExternalTypeHandler(beanType, extProps, nameToPropIndex, new String[2], new TokenBuffer[2]);
+        
+        JsonParser mockParser = createMockParserForValue("typeA");
+        DeserializationContext mockContext = new MockObjectMapper(null).getMockContext();
+        Object bean = new Object();
+
+        boolean handled = handler.handleTypePropertyValue(mockParser, mockContext, "type1", bean);
+        assertTrue(handled);
+        assertEquals("typeA", handler._typeIds[0]);
+        assertEquals("typeA", handler._typeIds[1]);
+    }
+
+    @Test
+    public void testHandlePropertyValue_typeIdOnly() throws Exception {
+        JavaType beanType = SimpleType.constructUnsafe(Object.class);
+        MockSettableBeanProperty prop1 = new MockSettableBeanProperty("prop1", beanType);
+        MockTypeDeserializer typeDeser1 = new MockTypeDeserializer("type1", null, MockTypeDeserializer.createMockResolver("typeA"));
+        
+        ExternalTypeHandler.Builder builder = ExternalTypeHandler.builder(beanType);
+        builder.addExternal(prop1, typeDeser1);
+        
+        Map<String, Object> nameToPropIndex = new HashMap<>();
+        nameToPropIndex.put("type1", 0);
+        
+        ExtTypedProperty[] extProps = new ExtTypedProperty[] { new ExtTypedProperty(prop1, typeDeser1) };
+        ExternalTypeHandler handler = new ExternalTypeHandler(beanType, extProps, nameToPropIndex, new String[1], new TokenBuffer[1]);
+        
+        // Simulate parsing "type1": "typeA"
+        JsonParser mockParser = createMockParserForValue("typeA");
+        DeserializationContext mockContext = new MockObjectMapper(null).getMockContext();
+        Object bean = new Object();
+        
+        boolean handled = handler.handlePropertyValue(mockParser, mockContext, "type1", bean);
+        assertTrue(handled);
+        assertEquals("typeA", handler._typeIds[0]);
+        assertNull(handler._tokens[0]);
+    }
+
+    @Test
+    public void testHandlePropertyValue_valueBuffered() throws Exception {
+        JavaType beanType = SimpleType.constructUnsafe(Object.class);
+        MockSettableBeanProperty prop1 = new MockSettableBeanProperty("prop1", beanType);
+        MockTypeDeserializer typeDeser1 = new MockTypeDeserializer("type1", null, MockTypeDeserializer.createMockResolver("typeA"));
+        
+        ExternalTypeHandler.Builder builder = ExternalTypeHandler.builder(beanType);
+        builder.addExternal(prop1, typeDeser1);
+        
+        Map<String, Object> nameToPropIndex = new HashMap<>();
+        nameToPropIndex.put("prop1", 0);
+        
+        ExtTypedProperty[] extProps = new ExtTypedProperty[] { new ExtTypedProperty(prop1, typeDeser1) };
+        ExternalTypeHandler handler = new ExternalTypeHandler(beanType, extProps, nameToPropIndex, new String[1], new TokenBuffer[1]);
+        
+        // Simulate parsing "prop1": { "a": 1 }
+        JsonParser mockParser = createMockParserForStructure("{\"a\": 1}");
+        DeserializationContext mockContext = new MockObjectMapper(null).getMockContext();
+        Object bean = new Object();
+        
+        boolean handled = handler.handlePropertyValue(mockParser, mockContext, "prop1", bean);
+        assertTrue(handled);
+        assertNull(handler._typeIds[0]);
+        assertNotNull(handler._tokens[0]);
+        
+        // Verify token buffer content
+        TokenBuffer bufferedTokens = handler._tokens[0];
+        assertNotNull(bufferedTokens);
+        JsonParser bufferedParser = bufferedTokens.asParserOnFirstToken();
+        assertNotNull(bufferedParser.nextToken()); // START_OBJECT
+        assertEquals("a", bufferedParser.nextFieldName());
+        assertEquals(1, bufferedParser.nextIntValue(-1));
+        assertNull(bufferedParser.nextToken()); // END_OBJECT
+    }
+
+    @Test
+    public void testHandlePropertyValue_deserializeAndSet_typeIdAndValuePresent() throws Exception {
+        JavaType beanType = SimpleType.constructUnsafe(Object.class);
+        MockSettableBeanProperty prop1 = new MockSettableBeanProperty("prop1", beanType);
+        MockTypeDeserializer typeDeser1 = new MockTypeDeserializer("type1", null, MockTypeDeserializer.createMockResolver("typeA"));
+        
+        ExternalTypeHandler.Builder builder = ExternalTypeHandler.builder(beanType);
+        builder.addExternal(prop1, typeDeser1);
+        
+        Map<String, Object> nameToPropIndex = new HashMap<>();
+        nameToPropIndex.put("prop1", 0);
+        nameToPropIndex.put("type1", 0);
+        
+        ExtTypedProperty[] extProps = new ExtTypedProperty[] { new ExtTypedProperty(prop1, typeDeser1) };
+        ExternalTypeHandler handler = new ExternalTypeHandler(beanType, extProps, nameToPropIndex, new String[1], new TokenBuffer[1]);
+        
+        // Set initial state: typeId and token buffer are populated
+        handler._typeIds[0] = "typeA";
+        TokenBuffer tb = new TokenBuffer(null, null);
+        tb.writeString("value1");
+        handler._tokens[0] = tb;
+        
+        // Simulate deserialization and setting
+        Object bean = new Object();
+        JsonParser mockParser = createMockParserForValue("dummy"); // parser will be wrapped by TokenBuffer
+        DeserializationContext mockContext = new MockObjectMapper(null).getMockContext();
+        
+        // Call handlePropertyValue to trigger deserializeAndSet
+        boolean handled = handler.handlePropertyValue(mockParser, mockContext, "prop1", bean);
+        assertTrue(handled);
+        
+        // Verify that prop1 was set and _typeIds and _tokens were cleared
+        assertNull(handler._typeIds[0]);
+        assertNull(handler._tokens[0]);
+        // In a real test, we'd check the bean's property value. For this mock, we check the prop's value.
+        // However, _deserializeAndSet in the original code directly calls prop.deserializeAndSet,
+        // which we've mocked to set _value. So we check that.
+        assertEquals("value1", prop1.getValue()); // This relies on the mock's behavior.
+    }
+    
+    @Test
+    public void testHandlePropertyValue_deserializeAndSet_typeIdAndValuePresent_list() throws Exception {
+        JavaType beanType = SimpleType.constructUnsafe(Object.class);
+        MockSettableBeanProperty prop1 = new MockSettableBeanProperty("prop1", beanType);
+        MockTypeDeserializer typeDeser1 = new MockTypeDeserializer("type1", null, MockTypeDeserializer.createMockResolver("typeA"));
+        
+        ExternalTypeHandler.Builder builder = ExternalTypeHandler.builder(beanType);
+        builder.addExternal(prop1, typeDeser1);
+        
+        List<Integer> indices = new ArrayList<>();
+        indices.add(0);
+        indices.add(1);
+        Map<String, Object> nameToPropIndex = new HashMap<>();
+        nameToPropIndex.put("prop1", indices);
+        nameToPropIndex.put("type1", indices);
+
+        ExtTypedProperty[] extProps = new ExtTypedProperty[] { new ExtTypedProperty(prop1, typeDeser1), new ExtTypedProperty(prop1, typeDeser1) };
+        ExternalTypeHandler handler = new ExternalTypeHandler(beanType, extProps, nameToPropIndex, new String[2], new TokenBuffer[2]);
+        
+        // Set initial state: typeId and token buffer are populated for both indices
+        handler._typeIds[0] = "typeA"; handler._typeIds[1] = "typeA";
+        TokenBuffer tb = new TokenBuffer(null, null);
+        tb.writeString("value1");
+        handler._tokens[0] = tb; handler._tokens[1] = tb;
+        
+        Object bean = new Object();
+        JsonParser mockParser = createMockParserForValue("dummy");
+        DeserializationContext mockContext = new MockObjectMapper(null).getMockContext();
+        
+        // Call handlePropertyValue for one of the properties mapped to the list
+        boolean handled = handler.handlePropertyValue(mockParser, mockContext, "prop1", bean);
+        assertTrue(handled);
+        
+        // Verify that _typeIds and _tokens were cleared for both indices
+        assertNull(handler._typeIds[0]);
+        assertNull(handler._typeIds[1]);
+        assertNull(handler._tokens[0]);
+        assertNull(handler._tokens[1]);
+    }
+
+    @Test
+    public void testComplete_allPresent() throws Exception {
+        JavaType beanType = SimpleType.constructUnsafe(Object.class);
+        MockSettableBeanProperty prop1 = new MockSettableBeanProperty("prop1", beanType);
+        MockTypeDeserializer typeDeser1 = new MockTypeDeserializer("type1", null, MockTypeDeserializer.createMockResolver("typeA"));
+        
+        ExternalTypeHandler.Builder builder = ExternalTypeHandler.builder(beanType);
+        builder.addExternal(prop1, typeDeser1);
+        
+        Map<String, Object> nameToPropIndex = new HashMap<>();
+        nameToPropIndex.put("prop1", 0);
+        nameToPropIndex.put("type1", 0);
+        
+        ExtTypedProperty[] extProps = new ExtTypedProperty[] { new ExtTypedProperty(prop1, typeDeser1) };
+        ExternalTypeHandler handler = new ExternalTypeHandler(beanType, extProps, nameToPropIndex, new String[1], new TokenBuffer[1]);
+        
+        handler._typeIds[0] = "typeA";
+        TokenBuffer tb = new TokenBuffer(null, null);
+        tb.writeString("value1");
+        handler._tokens[0] = tb;
+        
+        Object bean = new Object();
+        JsonParser mockParser = createMockParserForValue("dummy");
+        DeserializationContext mockContext = new MockObjectMapper(null).getMockContext();
+        
+        Object result = handler.complete(mockParser, mockContext, bean);
+        assertSame(bean, result);
+        // Verify that prop1 was set
+        assertEquals("value1", prop1.getValue());
+    }
+
+    @Test
+    public void testComplete_missingTypeId() throws Exception {
+        JavaType beanType = SimpleType.constructUnsafe(Object.class);
+        MockSettableBeanProperty prop1 = new MockSettableBeanProperty("prop1", beanType);
+        MockTypeDeserializer typeDeser1 = new MockTypeDeserializer("type1", null, MockTypeDeserializer.createMockResolver("typeA"));
+        
+        ExternalTypeHandler.Builder builder = ExternalTypeHandler.builder(beanType);
+        builder.addExternal(prop1, typeDeser1);
+        
+        Map<String, Object> nameToPropIndex = new HashMap<>();
+        nameToPropIndex.put("prop1", 0);
+        nameToPropIndex.put("type1", 0);
+        
+        ExtTypedProperty[] extProps = new ExtTypedProperty[] { new ExtTypedProperty(prop1, typeDeser1) };
+        ExternalTypeHandler handler = new ExternalTypeHandler(beanType, extProps, nameToPropIndex, new String[1], new TokenBuffer[1]);
+        
+        handler._typeIds[0] = null; // Missing typeId
+        TokenBuffer tb = new TokenBuffer(null, null);
+        tb.writeString("value1");
+        handler._tokens[0] = tb;
+        
+        Object bean = new Object();
+        JsonParser mockParser = createMockParserForValue("dummy");
+        DeserializationContext mockContext = new MockObjectMapper(null).getMockContext();
+        
+        try {
+            handler.complete(mockParser, mockContext, bean);
+            fail("Expected reportInputMismatch for missing type id");
+        } catch (JsonMappingException e) {
+            assertTrue(e.getMessage().contains("Missing external type id property"));
+        }
+    }
+
+    @Test
+    public void testComplete_missingProperty() throws Exception {
+        JavaType beanType = SimpleType.constructUnsafe(Object.class);
+        MockSettableBeanProperty prop1 = new MockSettableBeanProperty("prop1", beanType);
+        MockTypeDeserializer typeDeser1 = new MockTypeDeserializer("type1", null, MockTypeDeserializer.createMockResolver("typeA"));
+        
+        ExternalTypeHandler.Builder builder = ExternalTypeHandler.builder(beanType);
+        builder.addExternal(prop1, typeDeser1);
+        
+        Map<String, Object> nameToPropIndex = new HashMap<>();
+        nameToPropIndex.put("prop1", 0);
+        nameToPropIndex.put("type1", 0);
+        
+        ExtTypedProperty[] extProps = new ExtTypedProperty[] { new ExtTypedProperty(prop1, typeDeser1) };
+        ExternalTypeHandler handler = new ExternalTypeHandler(beanType, extProps, nameToPropIndex, new String[1], new TokenBuffer[1]);
+        
+        handler._typeIds[0] = "typeA";
+        handler._tokens[0] = null; // Missing property tokens
+        
+        Object bean = new Object();
+        JsonParser mockParser = createMockParserForValue("dummy");
+        DeserializationContext mockContext = new MockObjectMapper(null).getMockContext();
+        
+        try {
+            handler.complete(mockParser, mockContext, bean);
+            fail("Expected reportInputMismatch for missing property");
+        } catch (JsonMappingException e) {
+            assertTrue(e.getMessage().contains("Missing property 'prop1' for external type id 'type1'"));
+        }
+    }
+
+    @Test
+    public void testComplete_defaultImplPresent() throws Exception {
+        JavaType beanType = SimpleType.constructUnsafe(Object.class);
+        MockSettableBeanProperty prop1 = new MockSettableBeanProperty("prop1", beanType);
+        // Default implementation class
+        Class<?> defaultClass = Object.class;
+        MockTypeDeserializer typeDeser1 = new MockTypeDeserializer("type1", defaultClass, MockTypeDeserializer.createMockResolver("defaultTypeId"));
+        
+        ExternalTypeHandler.Builder builder = ExternalTypeHandler.builder(beanType);
+        builder.addExternal(prop1, typeDeser1);
+        
+        Map<String, Object> nameToPropIndex = new HashMap<>();
+        nameToPropIndex.put("prop1", 0);
+        nameToPropIndex.put("type1", 0);
+        
+        ExtTypedProperty[] extProps = new ExtTypedProperty[] { new ExtTypedProperty(prop1, typeDeser1) };
+        ExternalTypeHandler handler = new ExternalTypeHandler(beanType, extProps, nameToPropIndex, new String[1], new TokenBuffer[1]);
+        
+        handler._typeIds[0] = null; // Missing typeId, should use defaultImpl
+        TokenBuffer tb = new TokenBuffer(null, null);
+        tb.writeString("default_value");
+        handler._tokens[0] = tb;
+        
+        Object bean = new Object();
+        JsonParser mockParser = createMockParserForValue("dummy");
+        DeserializationContext mockContext = new MockObjectMapper(null).getMockContext();
+        
+        Object result = handler.complete(mockParser, mockContext, bean);
+        assertSame(bean, result);
+        // In this mock, _deserializeAndSet will use the token buffer. 
+        // The typeId used for deserialization will be "defaultTypeId".
+        // The actual property setting depends on _properties[i].getProperty().deserializeAndSet, 
+        // which we've mocked to use _value.
+        // So, checking prop1's value reflects the mocked behavior.
+        assertEquals("default_value", prop1.getValue());
+    }
+    
+    @Test
+    public void testComplete_defaultImplNaturalType() throws Exception {
+        JavaType beanType = SimpleType.constructUnsafe(String.class); // Natural type for String
+        MockSettableBeanProperty prop1 = new MockSettableBeanProperty("prop1", beanType);
+        Class<?> defaultClass = String.class; // String is natural type
+        MockTypeDeserializer typeDeser1 = new MockTypeDeserializer("type1", defaultClass, MockTypeDeserializer.createMockResolver("defaultTypeId"));
+        
+        ExternalTypeHandler.Builder builder = ExternalTypeHandler.builder(beanType);
+        builder.addExternal(prop1, typeDeser1);
+        
+        Map<String, Object> nameToPropIndex = new HashMap<>();
+        nameToPropIndex.put("prop1", 0);
+        nameToPropIndex.put("type1", 0);
+        
+        ExtTypedProperty[] extProps = new ExtTypedProperty[] { new ExtTypedProperty(prop1, typeDeser1) };
+        ExternalTypeHandler handler = new ExternalTypeHandler(beanType, extProps, nameToPropIndex, new String[1], new TokenBuffer[1]);
+        
+        handler._typeIds[0] = null; // Missing typeId
+        // Token buffer with a scalar value that is a natural type
+        TokenBuffer tb = new TokenBuffer(null, null);
+        tb.writeString("natural_string_value");
+        handler._tokens[0] = tb;
+        
+        Object bean = new Object();
+        JsonParser mockParser = createMockParserForValue("dummy");
+        DeserializationContext mockContext = new MockObjectMapper(null).getMockContext();
+        
+        Object result = handler.complete(mockParser, mockContext, bean);
+        assertSame(bean, result);
+        
+        // The _deserializeIfNatural call in complete would directly set the value if successful.
+        // Since our mock prop1.set() captures the value, we check that.
+        // The behavior for natural types involves a direct deserialization and setting.
+        assertEquals("natural_string_value", prop1.getValue());
+    }
+
+    @Test
+    public void testComplete_bothMissing() throws Exception {
+        JavaType beanType = SimpleType.constructUnsafe(Object.class);
+        MockSettableBeanProperty prop1 = new MockSettableBeanProperty("prop1", beanType);
+        MockTypeDeserializer typeDeser1 = new MockTypeDeserializer("type1", null, MockTypeDeserializer.createMockResolver("typeA"));
+        
+        ExternalTypeHandler.Builder builder = ExternalTypeHandler.builder(beanType);
+        builder.addExternal(prop1, typeDeser1);
+        
+        Map<String, Object> nameToPropIndex = new HashMap<>();
+        nameToPropIndex.put("prop1", 0);
+        nameToPropIndex.put("type1", 0);
+        
+        ExtTypedProperty[] extProps = new ExtTypedProperty[] { new ExtTypedProperty(prop1, typeDeser1) };
+        ExternalTypeHandler handler = new ExternalTypeHandler(beanType, extProps, nameToPropIndex, new String[1], new TokenBuffer[1]);
+        
+        handler._typeIds[0] = null; // Missing typeId
+        handler._tokens[0] = null; // Missing property tokens
+        
+        Object bean = new Object();
+        JsonParser mockParser = createMockParserForValue("dummy");
+        DeserializationContext mockContext = new MockObjectMapper(null).getMockContext();
+        
+        // According to the code, if both are null, it should continue.
+        Object result = handler.complete(mockParser, mockContext, bean);
+        assertSame(bean, result);
+        assertNull(prop1.getValue()); // Property should not have been set.
+    }
+
+    @Test
+    public void testComplete_handlePropertyValue_typeIdAndValuePresent_again() throws Exception {
+        JavaType beanType = SimpleType.constructUnsafe(Object.class);
+        MockSettableBeanProperty prop1 = new MockSettableBeanProperty("prop1", beanType);
+        MockTypeDeserializer typeDeser1 = new MockTypeDeserializer("type1", null, MockTypeDeserializer.createMockResolver("typeA"));
+        
+        ExternalTypeHandler.Builder builder = ExternalTypeHandler.builder(beanType);
+        builder.addExternal(prop1, typeDeser1);
+        
+        Map<String, Object> nameToPropIndex = new HashMap<>();
+        nameToPropIndex.put("prop1", 0);
+        nameToPropIndex.put("type1", 0);
+        
+        ExtTypedProperty[] extProps = new ExtTypedProperty[] { new ExtTypedProperty(prop1, typeDeser1) };
+        ExternalTypeHandler handler = new ExternalTypeHandler(beanType, extProps, nameToPropIndex, new String[1], new TokenBuffer[1]);
+        
+        // Simulate parsing "type1": "typeA" first, then "prop1": { "a": 1 }
+        handler._typeIds[0] = "typeA"; // Set type ID first
+        
+        JsonParser mockParserProp = createMockParserForStructure("{\"a\": 1}");
+        DeserializationContext mockContext = new MockObjectMapper(null).getMockContext();
+        
+        // Call handlePropertyValue for the property
+        boolean handled = handler.handlePropertyValue(mockParserProp, mockContext, "prop1", new Object());
+        assertTrue(handled);
+        
+        // Now call complete
+        Object bean = new Object();
+        JsonParser mockParserComplete = createMockParserForValue("dummy");
+        
+        Object result = handler.complete(mockParserComplete, mockContext, bean);
+        assertSame(bean, result);
+        // Check that the property was set using the buffered value and type ID
+        // The _deserializeAndSet logic in complete will be triggered.
+        // Based on our mock _deserializeAndSet, it uses the token buffer.
+        // If _typeIds[0] was NOT null, it would try to deserialize with that type ID.
+        // Since we simulated handlePropertyValue for 'prop1', _tokens[0] should be populated.
+        // _typeIds[0] will be null after handlePropertyValue if it triggered deserializeAndSet.
+        // This test case is tricky because handlePropertyValue already tries to deserialize.
+        // The `complete` method's logic for `_tokens[i] != null` and `_typeIds[i] != null` needs careful consideration.
+        // If `handlePropertyValue` already called `_deserializeAndSet`, `_typeIds[0]` would be null and `_tokens[0]` would be null.
+        // This scenario is more about testing the initial `handlePropertyValue` which triggers the immediate deserialize.
+        // For `complete`, we are testing the case where `_typeIds` and `_tokens` might be present *at the end*.
+        // Let's re-evaluate the scenario for `complete`:
+        // If `handlePropertyValue` was called for `type1`, `_typeIds[0]` is set.
+        // If `handlePropertyValue` was called for `prop1`, `_tokens[0]` is set.
+        // If `handlePropertyValue` for `prop1` was called *after* `type1`, AND it resulted in `canDeserialize` being true, it would have already called `_deserializeAndSet`.
+        // This test is more to verify the `complete` method's handling when properties are left partially handled.
+        // Let's assume a scenario where `handlePropertyValue` for `prop1` was called and it *buffered* the value because `_typeIds[0]` was null at that time.
+        // Then, in `complete`, we want to see what happens.
+        
+        // Reset state for a clearer test of `complete`
+        handler = new ExternalTypeHandler(beanType, extProps, nameToPropIndex, new String[1], new TokenBuffer[1]);
+        handler._typeIds[0] = "typeA"; // Type ID set
+        TokenBuffer tb = new TokenBuffer(null, null);
+        tb.writeString("value1");
+        handler._tokens[0] = tb; // Token buffer set
+        
+        Object bean2 = new Object();
+        JsonParser mockParserComplete2 = createMockParserForValue("dummy");
+        
+        Object result2 = handler.complete(mockParserComplete2, mockContext, bean2);
+        assertSame(bean2, result2);
+        // _deserializeAndSet should be called by complete, using typeA and value1
+        assertEquals("value1", prop1.getValue());
+    }
+    
+    @Test
+    public void testComplete_propertyBasedCreator_allValuesPresent() throws Exception {
+        JavaType beanType = SimpleType.constructUnsafe(Object.class);
+        
+        // Creator properties
+        MockSettableBeanProperty creatorProp1 = new MockSettableBeanProperty("creator1", beanType, 0);
+        MockSettableBeanProperty creatorProp2 = new MockSettableBeanProperty("creator2", beanType, 1);
+        SettableBeanProperty[] creatorProps = new SettableBeanProperty[] { creatorProp1, creatorProp2 };
+
+        // External properties
+        MockSettableBeanProperty externalProp1 = new MockSettableBeanProperty("external1", beanType);
+        MockTypeDeserializer typeDeser1 = new MockTypeDeserializer("type1", null, MockTypeDeserializer.createMockResolver("typeA"));
+        
+        ExternalTypeHandler.Builder builder = ExternalTypeHandler.builder(beanType);
+        builder.addExternal(externalProp1, typeDeser1);
+        
+        Map<String, Object> nameToPropIndex = new HashMap<>();
+        nameToPropIndex.put("external1", 0);
+        nameToPropIndex.put("type1", 0);
+        
+        ExtTypedProperty[] extProps = new ExtTypedProperty[] { new ExtTypedProperty(externalProp1, typeDeser1) };
+        
+        // Mocking the necessary components for PropertyBasedCreator and PropertyValueBuffer
+        MockObjectMapper mockObjectMapper = new MockObjectMapper(null);
+        ValueInstantiator mockValueInstantiator = new MockValueInstantiator();
+        PropertyBasedCreator pbc = new MockPropertyBasedCreator(mockObjectMapper.getMockContext(), mockValueInstantiator, creatorProps);
+        
+        // Initialize ExternalTypeHandler
+        ExternalTypeHandler handler = new ExternalTypeHandler(beanType, extProps, nameToPropIndex, new String[1], new TokenBuffer[1]);
+        
+        // Simulate setting typeId and token buffer for external property
+        handler._typeIds[0] = "typeA";
+        TokenBuffer tb = new TokenBuffer(null, null);
+        tb.writeString("external_value");
+        handler._tokens[0] = tb;
+        
+        // Simulate the PropertyValueBuffer
+        PropertyValueBuffer buffer = pbc.startBuilding(null, mockObjectMapper.getMockContext(), null);
+        buffer.assignParameter(creatorProp1, "creator_value1");
+        buffer.assignParameter(creatorProp2, "creator_value2");
+        
+        // Call complete with PropertyBasedCreator
+        Object bean = new Object(); // This is actually the result of creator.build()
+        JsonParser mockParser = createMockParserForValue("dummy");
+        
+        // The complete method for PropertyBasedCreator first calls creator.build(ctxt, buffer)
+        // and then assigns non-creator properties.
+        // We need to ensure that `_deserialize` is called within `complete` for the external property.
+        
+        Object result = handler.complete(mockParser, mockObjectMapper.getMockContext(), buffer, pbc);
+        
+        // The return value of complete in this context is the built bean.
+        // In the real Jackson, creator.build() would be called, then properties set.
+        // Our mock `PropertyBasedCreator.build` would return a new Object.
+        // We then check if externalProp1 was set on that object.
+        // For this test, we assume the builder passed to `complete` is used and then `_deserialize` is called.
+        // We will check the value of externalProp1 which should be set.
+        
+        // Check that externalProp1 was set.
+        assertEquals("external_value", externalProp1.getValue());
+    }
+    
+    @Test
+    public void testBuilder_addExternal_singleProperty() throws Exception {
+        JavaType beanType = SimpleType.constructUnsafe(Object.class);
+        MockSettableBeanProperty prop1 = new MockSettableBeanProperty("prop1", beanType);
+        MockTypeDeserializer typeDeser1 = new MockTypeDeserializer("type1", null, MockTypeDeserializer.createMockResolver("typeA"));
+        
+        ExternalTypeHandler.Builder builder = ExternalTypeHandler.builder(beanType);
+        builder.addExternal(prop1, typeDeser1);
+        
+        assertNotNull(builder._properties);
+        assertEquals(1, builder._properties.size());
+        assertEquals(prop1, builder._properties.get(0).getProperty());
+        
+        assertNotNull(builder._nameToPropertyIndex);
+        assertEquals(2, builder._nameToPropertyIndex.size());
+        assertEquals(0, builder._nameToPropertyIndex.get("prop1"));
+        assertEquals(0, builder._nameToPropertyIndex.get("type1"));
+    }
+
+    @Test
+    public void testBuilder_addExternal_multiplePropertiesSameName() throws Exception {
+        JavaType beanType = SimpleType.constructUnsafe(Object.class);
+        MockSettableBeanProperty prop1 = new MockSettableBeanProperty("prop1", beanType);
+        MockTypeDeserializer typeDeser1 = new MockTypeDeserializer("type1", null, MockTypeDeserializer.createMockResolver("typeA"));
+        MockSettableBeanProperty prop2 = new MockSettableBeanProperty("prop1", beanType); // Same name as prop1
+        MockTypeDeserializer typeDeser2 = new MockTypeDeserializer("type1", null, MockTypeDeserializer.createMockResolver("typeB")); // Same type property name
+        
+        ExternalTypeHandler.Builder builder = ExternalTypeHandler.builder(beanType);
+        builder.addExternal(prop1, typeDeser1);
+        builder.addExternal(prop2, typeDeser2);
+        
+        assertNotNull(builder._properties);
+        assertEquals(2, builder._properties.size());
+        assertEquals(prop1, builder._properties.get(0).getProperty());
+        assertEquals(prop2, builder._properties.get(1).getProperty());
+        
+        assertNotNull(builder._nameToPropertyIndex);
+        assertEquals(2, builder._nameToPropertyIndex.size());
+        
+        Object propNameIndex = builder._nameToPropertyIndex.get("prop1");
+        assertTrue(propNameIndex instanceof List);
+        List<?> propList = (List<?>) propNameIndex;
+        assertEquals(2, propList.size());
+        assertEquals(0, propList.get(0));
+        assertEquals(1, propList.get(1));
+
+        Object typeNameIndex = builder._nameToPropertyIndex.get("type1");
+        assertTrue(typeNameIndex instanceof List);
+        List<?> typeList = (List<?>) typeNameIndex;
+        assertEquals(2, typeList.size());
+        assertEquals(0, typeList.get(0));
+        assertEquals(1, typeList.get(1));
+    }
+    
+    @Test
+    public void testBuilder_build_withOtherProps() throws Exception {
+        JavaType beanType = SimpleType.constructUnsafe(Object.class);
+        MockSettableBeanProperty prop1 = new MockSettableBeanProperty("prop1", beanType);
+        MockTypeDeserializer typeDeser1 = new MockTypeDeserializer("type1", null, MockTypeDeserializer.createMockResolver("typeA"));
+        
+        ExternalTypeHandler.Builder builder = ExternalTypeHandler.builder(beanType);
+        builder.addExternal(prop1, typeDeser1);
+        
+        // Mocking otherProps to link the type property
+        MockSettableBeanProperty typeProp = new MockSettableBeanProperty("type1", beanType);
+        BeanPropertyMap otherProps = new MockBeanPropertyMap(false, Arrays.asList(typeProp));
+        
+        ExternalTypeHandler handler = builder.build(otherProps);
+        
+        assertNotNull(handler);
+        assertNotNull(handler._properties);
+        assertEquals(1, handler._properties.length);
+        
+        ExtTypedProperty extTypedProp = handler._properties[0];
+        assertNotNull(extTypedProp);
+        assertEquals(prop1, extTypedProp.getProperty());
+        assertEquals(typeProp, extTypedProp.getTypeProperty()); // Type property should be linked
+    }
+    
+    @Test
+    public void testExtTypedProperty_linkTypeProperty() throws Exception {
+        JavaType beanType = SimpleType.constructUnsafe(Object.class);
+        MockSettableBeanProperty prop1 = new MockSettableBeanProperty("prop1", beanType);
+        MockTypeDeserializer typeDeser1 = new MockTypeDeserializer("type1", null, MockTypeDeserializer.createMockResolver("typeA"));
+        ExtTypedProperty extTypedProp = new ExtTypedProperty(prop1, typeDeser1);
+        
+        MockSettableBeanProperty typeProp = new MockSettableBeanProperty("type1", beanType);
+        extTypedProp.linkTypeProperty(typeProp);
+        
+        assertEquals(typeProp, extTypedProp.getTypeProperty());
+    }
+
+    @Test
+    public void testExtTypedProperty_hasTypePropertyName() {
+        JavaType beanType = SimpleType.constructUnsafe(Object.class);
+        MockSettableBeanProperty prop1 = new MockSettableBeanProperty("prop1", beanType);
+        MockTypeDeserializer typeDeser1 = new MockTypeDeserializer("type1", null, MockTypeDeserializer.createMockResolver("typeA"));
+        ExtTypedProperty extTypedProp = new ExtTypedProperty(prop1, typeDeser1);
+        
+        assertTrue(extTypedProp.hasTypePropertyName("type1"));
+        assertFalse(extTypedProp.hasTypePropertyName("otherName"));
+    }
+
+    @Test
+    public void testExtTypedProperty_hasDefaultType_whenPresent() {
+        JavaType beanType = SimpleType.constructUnsafe(Object.class);
+        MockSettableBeanProperty prop1 = new MockSettableBeanProperty("prop1", beanType);
+        MockTypeDeserializer typeDeser1 = new MockTypeDeserializer("type1", Object.class, MockTypeDeserializer.createMockResolver("typeA")); // Default impl present
+        ExtTypedProperty extTypedProp = new ExtTypedProperty(prop1, typeDeser1);
+        
+        assertTrue(extTypedProp.hasDefaultType());
+    }
+
+    @Test
+    public void testExtTypedProperty_hasDefaultType_whenAbsent() {
+        JavaType beanType = SimpleType.constructUnsafe(Object.class);
+        MockSettableBeanProperty prop1 = new MockSettableBeanProperty("prop1", beanType);
+        MockTypeDeserializer typeDeser1 = new MockTypeDeserializer("type1", null, MockTypeDeserializer.createMockResolver("typeA")); // No default impl
+        ExtTypedProperty extTypedProp = new ExtTypedProperty(prop1, typeDeser1);
+        
+        assertFalse(extTypedProp.hasDefaultType());
+    }
+
+    @Test
+    public void testExtTypedProperty_getDefaultTypeId_whenPresent() {
+        JavaType beanType = SimpleType.constructUnsafe(Object.class);
+        MockSettableBeanProperty prop1 = new MockSettableBeanProperty("prop1", beanType);
+        // Default implementation class and type ID resolver
+        MockTypeDeserializer typeDeser1 = new MockTypeDeserializer("type1", Object.class, MockTypeDeserializer.createMockResolver("defaultTypeId"));
+        ExtTypedProperty extTypedProp = new ExtTypedProperty(prop1, typeDeser1);
+        
+        assertEquals("defaultTypeId", extTypedProp.getDefaultTypeId());
+    }
+
+    @Test
+    public void testExtTypedProperty_getDefaultTypeId_whenAbsent() {
+        JavaType beanType = SimpleType.constructUnsafe(Object.class);
+        MockSettableBeanProperty prop1 = new MockSettableBeanProperty("prop1", beanType);
+        MockTypeDeserializer typeDeser1 = new MockTypeDeserializer("type1", null, MockTypeDeserializer.createMockResolver("typeA")); // No default impl
+        ExtTypedProperty extTypedProp = new ExtTypedProperty(prop1, typeDeser1);
+        
+        assertNull(extTypedProp.getDefaultTypeId());
+    }
+
+    @Test
+    public void testExtTypedProperty_getTypePropertyName() {
+        JavaType beanType = SimpleType.constructUnsafe(Object.class);
+        MockSettableBeanProperty prop1 = new MockSettableBeanProperty("prop1", beanType);
+        MockTypeDeserializer typeDeser1 = new MockTypeDeserializer("type1", null, MockTypeDeserializer.createMockResolver("typeA"));
+        ExtTypedProperty extTypedProp = new ExtTypedProperty(prop1, typeDeser1);
+        
+        assertEquals("type1", extTypedProp.getTypePropertyName());
+    }
+
+    @Test
+    public void testExtTypedProperty_getProperty() {
+        JavaType beanType = SimpleType.constructUnsafe(Object.class);
+        MockSettableBeanProperty prop1 = new MockSettableBeanProperty("prop1", beanType);
+        MockTypeDeserializer typeDeser1 = new MockTypeDeserializer("type1", null, MockTypeDeserializer.createMockResolver("typeA"));
+        ExtTypedProperty extTypedProp = new ExtTypedProperty(prop1, typeDeser1);
+        
+        assertEquals(prop1, extTypedProp.getProperty());
+    }
+    
+    @Test
+    public void testExtTypedProperty_getTypeProperty() {
+        JavaType beanType = SimpleType.constructUnsafe(Object.class);
+        MockSettableBeanProperty prop1 = new MockSettableBeanProperty("prop1", beanType);
+        MockTypeDeserializer typeDeser1 = new MockTypeDeserializer("type1", null, MockTypeDeserializer.createMockResolver("typeA"));
+        ExtTypedProperty extTypedProp = new ExtTypedProperty(prop1, typeDeser1);
+        
+        assertNull(extTypedProp.getTypeProperty()); // Not linked initially
+        
+        MockSettableBeanProperty typeProp = new MockSettableBeanProperty("type1", beanType);
+        extTypedProp.linkTypeProperty(typeProp);
+        assertEquals(typeProp, extTypedProp.getTypeProperty());
+    }
+
+    // Helper method to create a mock JsonParser for a scalar value
+    private JsonParser createMockParserForValue(String value) throws IOException {
+        TokenBuffer tb = new TokenBuffer(null, null);
+        tb.writeString(value);
+        JsonParser p = tb.asParserOnFirstToken();
+        p.nextToken(); // Move to the actual token
+        return p;
+    }
+    
+    // Helper method to create a mock JsonParser for a structure
+    private JsonParser createMockParserForStructure(String jsonString) throws IOException {
+        ObjectMapper mapper = new ObjectMapper();
+        JsonParser p = mapper.getFactory().createParser(jsonString);
+        return p;
+    }
+}
+```
+
+SOURCE CODE ANALYSIS - The tests cover the `ExternalTypeHandler` class, focusing on its `builder`, `start`, `handleTypePropertyValue`, `handlePropertyValue`, and `complete` methods. They also test helper methods within `ExtTypedProperty`.
+TEST CASE DESIGN -
+- `testBuilderAndStart`: Verifies `builder()` and `start()` methods. Input: `JavaType`. Expected: Non-null builder and started handler. Derived from method signatures and expected usage.
+- `testHandleTypePropertyValue_singleProperty`: Tests `handleTypePropertyValue` with a single mapped property. Input: Property name "type1", value "typeA". Expected: `_typeIds[0]` set to "typeA". Derived from code logic.
+- `testHandleTypePropertyValue_listProperty`: Tests `handleTypePropertyValue` with multiple properties mapped to the same name. Input: Property name "type1", value "typeA". Expected: Both `_typeIds[0]` and `_typeIds[1]` set to "typeA". Derived from code logic.
+- `testHandlePropertyValue_typeIdOnly`: Tests `handlePropertyValue` when only a type ID is encountered. Input: Property name "type1", value "typeA". Expected: `_typeIds[0]` set to "typeA", `_tokens[0]` null. Derived from code logic.
+- `testHandlePropertyValue_valueBuffered`: Tests `handlePropertyValue` when a value is encountered and buffered. Input: Property name "prop1", structure `{"a": 1}`. Expected: `_tokens[0]` contains the structure, `_typeIds[0]` null. Derived from code logic.
+- `testHandlePropertyValue_deserializeAndSet_typeIdAndValuePresent`: Tests `handlePropertyValue` when both type ID and value are available, triggering immediate deserialization. Input: Type ID "typeA", value "value1". Expected: `_typeIds[0]` and `_tokens[0]` cleared, property set. Derived from code logic.
+- `testHandlePropertyValue_deserializeAndSet_typeIdAndValuePresent_list`: Tests `handlePropertyValue` with list mapping when both type ID and value are present, triggering immediate deserialization. Input: Type ID "typeA", value "value1", mapped to multiple properties. Expected: `_typeIds` and `_tokens` cleared for all mapped indices. Derived from code logic.
+- `testComplete_allPresent`: Tests `complete` when all required data (type ID and token buffer) is present. Input: Type ID "typeA", value "value1". Expected: Property set. Derived from code logic.
+- `testComplete_missingTypeId`: Tests `complete` when `_typeIds` is missing. Input: `_typeIds[0]` is null, `_tokens[0]` is present. Expected: `JsonMappingException` with "Missing external type id property". Derived from code logic.
+- `testComplete_missingProperty`: Tests `complete` when `_tokens` is missing. Input: `_typeIds[0]` is present, `_tokens[0]` is null. Expected: `JsonMappingException` with "Missing property". Derived from code logic.
+- `testComplete_defaultImplPresent`: Tests `complete` when `_typeIds` is missing but `defaultImpl` is available. Input: `_typeIds[0]` null, `_tokens[0]` present. Expected: Property set using default type ID. Derived from code logic.
+- `testComplete_defaultImplNaturalType`: Tests `complete` when `defaultImpl` is a natural type and its value is present in the token buffer. Input: `_typeIds[0]` null, scalar value in `_tokens[0]`. Expected: Property set directly with the scalar value. Derived from code logic.
+- `testComplete_bothMissing`: Tests `complete` when both `_typeIds` and `_tokens` are missing. Input: Both null. Expected: No exception, property not set. Derived from code logic.
+- `testComplete_handlePropertyValue_typeIdAndValuePresent_again`: Verifies `complete` method's behavior when `handlePropertyValue` has already processed some data. Input: Type ID "typeA", token buffer present. Expected: Property set. Derived from code logic.
+- `testComplete_propertyBasedCreator_allValuesPresent`: Tests `complete` with `PropertyBasedCreator` when all necessary values are present. Input: Creator and external properties populated. Expected: Bean built and external property set. Derived from `complete` method logic with `PropertyValueBuffer`.
+- `testBuilder_addExternal_singleProperty`: Tests `Builder.addExternal` for a single property. Input: Property name "prop1", type property "type1". Expected: `_properties` size 1, `_nameToPropertyIndex` maps to index 0. Derived from `addExternal` and `_addPropertyIndex`.
+- `testBuilder_addExternal_multiplePropertiesSameName`: Tests `Builder.addExternal` when multiple properties share the same name. Input: Two properties with name "prop1" and two with type property "type1". Expected: `_nameToPropertyIndex` maps to a `List` of indices. Derived from `_addPropertyIndex` logic.
+- `testBuilder_build_withOtherProps`: Tests `Builder.build` linking the type property. Input: `BeanPropertyMap` containing the type property. Expected: `ExtTypedProperty.linkTypeProperty` called, `getTypeProperty()` returns the linked property. Derived from `build` method logic.
+- `testExtTypedProperty_linkTypeProperty`: Tests `ExtTypedProperty.linkTypeProperty`. Input: A `SettableBeanProperty` for the type property. Expected: `getTypeProperty()` returns the linked property. Derived from method signature.
+- `testExtTypedProperty_hasTypePropertyName`: Tests `ExtTypedProperty.hasTypePropertyName`. Input: Property name "type1". Expected: `true` for "type1", `false` otherwise. Derived from method logic.
+- `testExtTypedProperty_hasDefaultType_whenPresent`: Tests `ExtTypedProperty.hasDefaultType` when default implementation is set. Input: `TypeDeserializer` with default impl. Expected: `true`. Derived from `TypeDeserializer.getDefaultImpl()`.
+- `testExtTypedProperty_hasDefaultType_whenAbsent`: Tests `ExtTypedProperty.hasDefaultType` when default implementation is absent. Input: `TypeDeserializer` without default impl. Expected: `false`. Derived from `TypeDeserializer.getDefaultImpl()`.
+- `testExtTypedProperty_getDefaultTypeId_whenPresent`: Tests `ExtTypedProperty.getDefaultTypeId` when default implementation is present. Input: `TypeDeserializer` with default impl and resolver. Expected: `defaultTypeId`. Derived from `TypeDeserializer.getDefaultTypeId()`.
+- `testExtTypedProperty_getDefaultTypeId_whenAbsent`: Tests `ExtTypedProperty.getDefaultTypeId` when default implementation is absent. Input: `TypeDeserializer` without default impl. Expected: `null`. Derived from `TypeDeserializer.getDefaultImpl()`.
+- `testExtTypedProperty_getTypePropertyName`: Tests `ExtTypedProperty.getTypePropertyName`. Input: `TypeDeserializer` with property name "type1". Expected: "type1". Derived from method.
+- `testExtTypedProperty_getProperty`: Tests `ExtTypedProperty.getProperty`. Input: `SettableBeanProperty` "prop1". Expected: "prop1". Derived from method.
+- `testExtTypedProperty_getTypeProperty`: Tests `ExtTypedProperty.getTypeProperty` before and after linking. Input: None initially, then linked type property. Expected: null, then the linked property. Derived from method.
+DEFECT DETECTION STRATEGY - These tests aim to cover various code paths within `ExternalTypeHandler` and its helper classes. They focus on correct state management (type IDs, token buffers), handling of different property mappings (single, list), and the logic for deserializing and setting properties, especially in the `complete` method under different conditions (missing data, default implementations, property-based creators).
+SUMMARY - 26 tests.
+LIMITATIONS - Mock objects are used extensively for dependencies like `JsonParser`, `DeserializationContext`, and `SettableBeanProperty`. The tests primarily verify the control flow and state changes within `ExternalTypeHandler` based on its own logic, rather than fully exercising the underlying deserialization process. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

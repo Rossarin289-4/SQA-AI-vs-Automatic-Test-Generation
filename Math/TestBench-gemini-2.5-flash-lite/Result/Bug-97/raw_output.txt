@@ -1,0 +1,471 @@
+```java
+package org.apache.commons.math.analysis;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import org.apache.commons.math.FunctionEvaluationException;
+import org.apache.commons.math.MaxIterationsExceededException;
+
+public class BrentSolverTest {
+    // test methods (as many as the instructions ask for), each exactly in this form:
+    //     @Test
+    //     public void testWhatItChecks() throws Exception { ... }
+
+    @Test
+    public void testSolveWithBracketingEndpoints() throws Exception {
+        UnivariateRealFunction f = new SinFunction(); // Example function
+        BrentSolver solver = new BrentSolver(f);
+        // sin(pi) = 0. Interval [3, 4], initial guess 3.14
+        // Values at endpoints: sin(3) approx -0.14, sin(4) approx -0.75. No, this doesn't bracket.
+        // Let's use a function where endpoints do bracket.
+        // x^2 - 4. Roots are -2 and 2.
+        // Interval [0, 3], initial 1. f(0) = -4, f(3) = 5. Brackets root 2.
+        // f(1) = -3.
+        // solve(0, 5, 1) should find 2.
+        // solve(0, 5) should find 2.
+        // solve(min, yMin, max, yMax, initial, yInitial) is the private helper.
+        // The public solve(min, max) calls the private one with initial set to min.
+        // solve(0, 5) will call solve(0, -4, 5, 5, 0, -4)
+        UnivariateRealFunction quadratic = new UnivariateRealFunction() {
+            public double value(double x) throws FunctionEvaluationException {
+                return x * x - 4;
+            }
+        };
+        BrentSolver solver2 = new BrentSolver(quadratic);
+        // f(1) = -3, f(3) = 5. Root is 2.
+        assertEquals(2.0, solver2.solve(1.0, 3.0), 1E-6);
+    }
+
+    @Test
+    public void testSolveWithBracketingMinInitial() throws Exception {
+        UnivariateRealFunction quadratic = new UnivariateRealFunction() {
+            public double value(double x) throws FunctionEvaluationException {
+                return x * x - 4;
+            }
+        };
+        BrentSolver solver = new BrentSolver(quadratic);
+        // f(min) = f(0) = -4. f(initial) = f(1) = -3. f(max) = f(3) = 5.
+        // The condition `yInitial * yMin < 0` is false.
+        // It should call `solve(min, yMin, max, yMax, initial, yInitial)` which is `solve(0, -4, 3, 5, 1, -3)`
+        // This path seems to be for when initial guess is between min and max, and the root is between min and initial.
+        // This test case from the original implementation is a bit confusing without the trace.
+        // Let's try to construct a case for `return solve(min, yMin, initial, yInitial, min, yMin);`
+        // Here yMin and yInitial must bracket the root.
+        // x^2 - 4. Root at 2.
+        // min = 0, yMin = -4. initial = 3, yInitial = 5. This bracketing is yMin * yInitial < 0.
+        // If we call solve(0, 3, 1), it checks endpoints, yMin=-4, yMax=5. Brackets.
+        // Then it checks initial=1, yInitial=-3.
+        // if yInitial * yMin < 0 (-3 * -4 > 0) false
+        // if yInitial * yMax < 0 (-3 * 5 < 0) true. calls solve(1, -3, 3, 5, 1, -3).
+        // This is one of the private solve calls.
+
+        // Let's test the case: "reduce interval if min and initial bracket the root"
+        // This means yMin * yInitial < 0.
+        // Consider f(x) = x - 2. Root at 2.
+        // min = 0, yMin = -2. initial = 3, yInitial = 1. yMin * yInitial < 0 is true.
+        // Calls solve(0, -2, 3, 1, 0, -2). This is the private method.
+        // For the public method solve(min, max, initial):
+        UnivariateRealFunction linear = new UnivariateRealFunction() {
+            public double value(double x) throws FunctionEvaluationException {
+                return x - 2;
+            }
+        };
+        BrentSolver solver3 = new BrentSolver(linear);
+        // min=0, max=3, initial=1. yMin=-2, yMax=1, yInitial=-1.
+        // yInitial * yMin = (-1) * (-2) = 2 > 0.
+        // yInitial * yMax = (-1) * (1) = -1 < 0. Calls solve(1, -1, 3, 1, 1, -1)
+        // This is the `solve(initial, yInitial, max, yMax, initial, yInitial)` branch.
+        // Let's construct the scenario for `solve(min, yMin, initial, yInitial, min, yMin)`
+        // This is called when yMin * yInitial < 0.
+        // min = 0, yMin = -2. initial = 3, yInitial = 1.
+        // So, call solve(0, 3, 1) with f(x) = x - 2.
+        // yMin = -2, yMax = 1, yInitial = -1.
+        // Check `yInitial * yMin < 0` which is `(-1) * (-2) < 0` -> `2 < 0` which is false.
+        // Check `yInitial * yMax < 0` which is `(-1) * (1) < 0` -> `-1 < 0` which is true.
+        // It calls `solve(initial, yInitial, max, yMax, initial, yInitial)` which is `solve(1, -1, 3, 1, 1, -1)`.
+
+        // Let's try the actual public method that calls the helper: `solve(min, max)`
+        // The requirement is that `yMin * yMax < 0`.
+        // For f(x) = x - 2, solve(0, 3). yMin=-2, yMax=1. Signs are opposite.
+        // It should call `solve(min, yMin, max, yMax, min, yMin)` -> `solve(0, -2, 3, 1, 0, -2)`.
+        assertEquals(2.0, solver3.solve(0.0, 3.0), 1E-6);
+    }
+    
+    @Test
+    public void testSolveWithBracketingInitialMax() throws Exception {
+        UnivariateRealFunction linear = new UnivariateRealFunction() {
+            public double value(double x) throws FunctionEvaluationException {
+                return x - 2;
+            }
+        };
+        BrentSolver solver = new BrentSolver(linear);
+        // min=1, max=3, initial=2.5. yMin= -1, yMax=1, yInitial=0.5.
+        // yInitial is close to 0.
+        // Let's use initial=2.1, yInitial = 0.1.
+        // min=1, max=3, initial=2.1. yMin=-1, yMax=1, yInitial=0.1.
+        // yInitial * yMin = 0.1 * -1 = -0.1 < 0.
+        // This calls `solve(initial, yInitial, max, yMax, initial, yInitial)`
+        // which is `solve(2.1, 0.1, 3.0, 1.0, 2.1, 0.1)`.
+        assertEquals(2.0, solver.solve(1.0, 3.0, 2.1), 1E-6);
+    }
+
+    @Test
+    public void testSolveWhenInitialIsRoot() throws Exception {
+        UnivariateRealFunction linear = new UnivariateRealFunction() {
+            public double value(double x) throws FunctionEvaluationException {
+                return x - 2;
+            }
+        };
+        BrentSolver solver = new BrentSolver(linear);
+        // initial is root
+        assertEquals(2.0, solver.solve(0.0, 3.0, 2.0), 1E-6);
+    }
+
+    @Test
+    public void testSolveWhenMinIsRoot() throws Exception {
+        UnivariateRealFunction linear = new UnivariateRealFunction() {
+            public double value(double x) throws FunctionEvaluationException {
+                return x - 2;
+            }
+        };
+        BrentSolver solver = new BrentSolver(linear);
+        // min is root
+        assertEquals(2.0, solver.solve(2.0, 3.0, 2.5), 1E-6);
+    }
+
+    @Test
+    public void testSolveWhenMaxIsRoot() throws Exception {
+        UnivariateRealFunction linear = new UnivariateRealFunction() {
+            public double value(double x) throws FunctionEvaluationException {
+                return x - 2;
+            }
+        };
+        BrentSolver solver = new BrentSolver(linear);
+        // max is root
+        assertEquals(2.0, solver.solve(0.0, 2.0, 1.0), 1E-6);
+    }
+
+    @Test
+    public void testSolveWithMaxIterationsExceeded() {
+        UnivariateRealFunction constantOne = new UnivariateRealFunction() {
+            public double value(double x) throws FunctionEvaluationException {
+                return 1.0; // Never zero
+            }
+        };
+        BrentSolver solver = new BrentSolver(constantOne);
+        solver.setMaximalIterationCount(10); // Low iteration count to trigger exception
+        try {
+            solver.solve(0.0, 1.0);
+            fail("Expected MaxIterationsExceededException");
+        } catch (MaxIterationsExceededException e) {
+            // Expected
+        } catch (FunctionEvaluationException e) {
+            fail("Unexpected FunctionEvaluationException: " + e.getMessage());
+        }
+    }
+
+    @Test
+    public void testSolveWithFunctionEvaluationException() {
+        UnivariateRealFunction errorFunction = new UnivariateRealFunction() {
+            public double value(double x) throws FunctionEvaluationException {
+                if (x > 0.5) {
+                    throw new FunctionEvaluationException(x);
+                }
+                return x - 0.2; // Root at 0.2
+            }
+        };
+        BrentSolver solver = new BrentSolver(errorFunction);
+        try {
+            solver.solve(0.0, 1.0); // Interval [0, 1] where x > 0.5 will cause error
+            fail("Expected FunctionEvaluationException");
+        } catch (FunctionEvaluationException e) {
+            // Expected
+            assertEquals(0.0, e.getArgument(), 1E-9); // The first evaluation point is 0.0
+        } catch (MaxIterationsExceededException e) {
+            fail("Unexpected MaxIterationsExceededException: " + e.getMessage());
+        }
+    }
+
+    @Test
+    public void testSolveInvalidInitialGuessTooLow() {
+        UnivariateRealFunction f = new SinFunction();
+        BrentSolver solver = new BrentSolver(f);
+        try {
+            solver.solve(0.0, 1.0, -1.0); // initial < min
+            fail("Expected IllegalArgumentException");
+        } catch (IllegalArgumentException e) {
+            // Expected
+            assertTrue(e.getMessage().contains("Initial guess is not in search interval."));
+        } catch (Exception e) {
+            fail("Unexpected exception: " + e.getMessage());
+        }
+    }
+
+    @Test
+    public void testSolveInvalidInitialGuessTooHigh() {
+        UnivariateRealFunction f = new SinFunction();
+        BrentSolver solver = new BrentSolver(f);
+        try {
+            solver.solve(0.0, 1.0, 2.0); // initial > max
+            fail("Expected IllegalArgumentException");
+        } catch (IllegalArgumentException e) {
+            // Expected
+            assertTrue(e.getMessage().contains("Initial guess is not in search interval."));
+        } catch (Exception e) {
+            fail("Unexpected exception: " + e.getMessage());
+        }
+    }
+
+    @Test
+    public void testSolveInvalidIntervalMinNotLessThanMax() {
+        UnivariateRealFunction f = new SinFunction();
+        BrentSolver solver = new BrentSolver(f);
+        try {
+            solver.solve(1.0, 0.0); // min > max
+            fail("Expected IllegalArgumentException");
+        } catch (IllegalArgumentException e) {
+            // Expected
+            assertTrue(e.getMessage().contains("interval."));
+        } catch (Exception e) {
+            fail("Unexpected exception: " + e.getMessage());
+        }
+    }
+
+    @Test
+    public void testSolveInvalidIntervalMinEqualsMax() {
+        UnivariateRealFunction f = new SinFunction();
+        BrentSolver solver = new BrentSolver(f);
+        try {
+            solver.solve(1.0, 1.0); // min == max
+            fail("Expected IllegalArgumentException");
+        } catch (IllegalArgumentException e) {
+            // Expected
+            assertTrue(e.getMessage().contains("interval."));
+        } catch (Exception e) {
+            fail("Unexpected exception: " + e.getMessage());
+        }
+    }
+
+    @Test
+    public void testSolveNoBracketing() {
+        UnivariateRealFunction constantPositive = new UnivariateRealFunction() {
+            public double value(double x) throws FunctionEvaluationException {
+                return 5.0;
+            }
+        };
+        BrentSolver solver = new BrentSolver(constantPositive);
+        try {
+            solver.solve(0.0, 1.0); // f(0)=5, f(1)=5. No bracketing.
+            fail("Expected IllegalArgumentException");
+        } catch (IllegalArgumentException e) {
+            // Expected
+            assertTrue(e.getMessage().contains("Function values at endpoints do not have different signs."));
+        } catch (Exception e) {
+            fail("Unexpected exception: " + e.getMessage());
+        }
+    }
+
+    @Test
+    public void testSolveWithInitialGuessCloserToRoot() {
+        UnivariateRealFunction quadratic = new UnivariateRealFunction() {
+            public double value(double x) throws FunctionEvaluationException {
+                return x * x - 4; // Root at 2
+            }
+        };
+        BrentSolver solver = new BrentSolver(quadratic);
+        // Interval [0, 5]. Root is at 2.
+        // Initial guess 2.1 is closer to 2 than 0.
+        assertEquals(2.0, solver.solve(0.0, 5.0, 2.1), 1E-6);
+    }
+
+    @Test
+    public void testSolveWithInitialGuessFartherFromRoot() {
+        UnivariateRealFunction quadratic = new UnivariateRealFunction() {
+            public double value(double x) throws FunctionEvaluationException {
+                return x * x - 4; // Root at 2
+            }
+        };
+        BrentSolver solver = new BrentSolver(quadratic);
+        // Interval [0, 5]. Root is at 2.
+        // Initial guess 4.0 is farther from 2 than 0.
+        assertEquals(2.0, solver.solve(0.0, 5.0, 4.0), 1E-6);
+    }
+
+    @Test
+    public void testSolveWithNegativeRoot() {
+        UnivariateRealFunction quadratic = new UnivariateRealFunction() {
+            public double value(double x) throws FunctionEvaluationException {
+                return x * x - 4; // Roots at -2 and 2
+            }
+        };
+        BrentSolver solver = new BrentSolver(quadratic);
+        // Interval [-5, 0]. Root is at -2.
+        assertEquals(-2.0, solver.solve(-5.0, 0.0), 1E-6);
+    }
+    
+    @Test
+    public void testSolveWithInitialGuessForNegativeRoot() {
+        UnivariateRealFunction quadratic = new UnivariateRealFunction() {
+            public double value(double x) throws FunctionEvaluationException {
+                return x * x - 4; // Roots at -2 and 2
+            }
+        };
+        BrentSolver solver = new BrentSolver(quadratic);
+        // Interval [-5, 0]. Root is at -2.
+        // Initial guess -1.0, yInitial = -3.
+        // min = -5, yMin = 21. max = 0, yMax = -4.
+        // yInitial * yMin = -3 * 21 < 0. This is not the case for this branch.
+        // Let's try solve(-5, 0, -1).
+        // yMin=21, yMax=-4, yInitial=-3.
+        // yInitial * yMin < 0. true. Calls `solve(min, yMin, initial, yInitial, min, yMin)` which is `solve(-5, 21, -1, -3, -5, 21)`.
+        assertEquals(-2.0, solver.solve(-5.0, 0.0, -1.0), 1E-6);
+    }
+
+    @Test
+    public void testSolveWithSmallIntervalAndRoot() {
+        UnivariateRealFunction linear = new UnivariateRealFunction() {
+            public double value(double x) throws FunctionEvaluationException {
+                return x - 2.0000001;
+            }
+        };
+        BrentSolver solver = new BrentSolver(linear);
+        solver.setFunctionValueAccuracy(1e-8); // Lower accuracy to ensure it finds the root
+        assertEquals(2.0000001, solver.solve(2.0, 2.0000002), 1E-9);
+    }
+
+    @Test
+    public void testSolveWithVerySmallValues() {
+        UnivariateRealFunction smallLinear = new UnivariateRealFunction() {
+            public double value(double x) throws FunctionEvaluationException {
+                return x * 1e-10; // Root at 0
+            }
+        };
+        BrentSolver solver = new BrentSolver(smallLinear);
+        solver.setAbsoluteAccuracy(1e-15);
+        solver.setRelativeAccuracy(1e-15);
+        solver.setFunctionValueAccuracy(1e-15);
+        assertEquals(0.0, solver.solve(-1e-9, 1e-9), 1E-15);
+    }
+    
+    @Test
+    public void testSolveWithLargeValues() {
+        UnivariateRealFunction largeLinear = new UnivariateRealFunction() {
+            public double value(double x) throws FunctionEvaluationException {
+                return x * 1e10 - 1e10; // Root at 1
+            }
+        };
+        BrentSolver solver = new BrentSolver(largeLinear);
+        solver.setAbsoluteAccuracy(1e-10);
+        solver.setRelativeAccuracy(1e-10);
+        solver.setFunctionValueAccuracy(1e-10);
+        assertEquals(1.0, solver.solve(0.0, 2.0), 1E-10);
+    }
+    
+    @Test
+    public void testSolveWithZeroAtMin() {
+        UnivariateRealFunction linear = new UnivariateRealFunction() {
+            public double value(double x) throws FunctionEvaluationException {
+                return x - 1.0;
+            }
+        };
+        BrentSolver solver = new BrentSolver(linear);
+        solver.setFunctionValueAccuracy(1E-12);
+        assertEquals(1.0, solver.solve(1.0, 5.0), 1E-9);
+    }
+
+    @Test
+    public void testSolveWithZeroAtMax() {
+        UnivariateRealFunction linear = new UnivariateRealFunction() {
+            public double value(double x) throws FunctionEvaluationException {
+                return x - 1.0;
+            }
+        };
+        BrentSolver solver = new BrentSolver(linear);
+        solver.setFunctionValueAccuracy(1E-12);
+        assertEquals(1.0, solver.solve(0.0, 1.0), 1E-9);
+    }
+
+    @Test
+    public void testSolveWithHighMaximalIterationCount() throws Exception {
+        UnivariateRealFunction quadratic = new UnivariateRealFunction() {
+            public double value(double x) throws FunctionEvaluationException {
+                return x * x - 4;
+            }
+        };
+        BrentSolver solver = new BrentSolver(quadratic);
+        // Set a high iteration count to ensure it doesn't fail due to too few iterations for a complex function
+        solver.setMaximalIterationCount(1000); 
+        assertEquals(2.0, solver.solve(0.0, 5.0), 1E-6);
+    }
+
+    @Test
+    public void testSolveWithDefaultValues() throws Exception {
+        UnivariateRealFunction quadratic = new UnivariateRealFunction() {
+            public double value(double x) throws FunctionEvaluationException {
+                return x * x - 4;
+            }
+        };
+        BrentSolver solver = new BrentSolver(quadratic);
+        // Default constructor sets default values for accuracy and iterations.
+        // 100 iterations, 1E-6 accuracy.
+        assertEquals(2.0, solver.solve(0.0, 5.0), 1E-6);
+    }
+    
+    @Test
+    public void testSolveWithSinFunction() throws Exception {
+        UnivariateRealFunction sin = new SinFunction();
+        BrentSolver solver = new BrentSolver(sin);
+        // sin(pi) = 0. pi is approximately 3.1415926535...
+        // solve(3.0, 3.5) should find pi.
+        assertEquals(Math.PI, solver.solve(3.0, 3.5), 1E-6);
+    }
+
+    @Test
+    public void testSolveWithSinFunctionNegative() throws Exception {
+        UnivariateRealFunction sin = new SinFunction();
+        BrentSolver solver = new BrentSolver(sin);
+        // sin(-pi) = 0. -pi is approximately -3.1415926535...
+        // solve(-3.5, -3.0) should find -pi.
+        assertEquals(-Math.PI, solver.solve(-3.5, -3.0), 1E-6);
+    }
+}
+
+// Helper class for tests
+class SinFunction implements UnivariateRealFunction {
+    public double value(double x) throws FunctionEvaluationException {
+        return Math.sin(x);
+    }
+}
+```
+
+1. SOURCE CODE ANALYSIS - The `solve(double min, double max, double initial)` and `solve(double min, double max)` methods are tested. The private `solve` method is indirectly tested through the public methods. Focus is on bracketing, initial guess handling, boundary conditions, and exception scenarios.
+2. TEST CASE DESIGN -
+   - `testSolveWithBracketingEndpoints`: Tests `solve(min, max)` where endpoints bracket the root. Input: [1.0, 3.0], Function: x^2-4. Expected: 2.0. Derived from f(1)=-3, f(3)=5, root at 2.
+   - `testSolveWithBracketingMinInitial`: Tests `solve(min, max)` when yMin*yMax < 0. Input: [0.0, 3.0], Function: x-2. Expected: 2.0. Derived from f(0)=-2, f(3)=1, root at 2.
+   - `testSolveWithBracketingInitialMax`: Tests `solve(min, max, initial)` where initial and max bracket. Input: [1.0, 3.0], initial 2.1, Function: x-2. Expected: 2.0. Derived from f(1)=-1, f(3)=1, f(2.1)=0.1, root at 2.
+   - `testSolveWhenInitialIsRoot`: Tests `solve(min, max, initial)` when initial guess is the root. Input: [0.0, 3.0], initial 2.0, Function: x-2. Expected: 2.0. Derived from f(2)=0.
+   - `testSolveWhenMinIsRoot`: Tests `solve(min, max, initial)` when min endpoint is the root. Input: [2.0, 3.0], initial 2.5, Function: x-2. Expected: 2.0. Derived from f(2)=0.
+   - `testSolveWhenMaxIsRoot`: Tests `solve(min, max, initial)` when max endpoint is the root. Input: [0.0, 2.0], initial 1.0, Function: x-2. Expected: 2.0. Derived from f(2)=0.
+   - `testSolveWithMaxIterationsExceeded`: Tests exception for exceeding max iterations. Input: [0.0, 1.0], Function: constant 1. Expected: MaxIterationsExceededException. Derived from function never reaching 0.
+   - `testSolveWithFunctionEvaluationException`: Tests exception during function evaluation. Input: [0.0, 1.0], Function throws exception for x > 0.5. Expected: FunctionEvaluationException. Derived from function's conditional throw.
+   - `testSolveInvalidInitialGuessTooLow`: Tests `solve(min, max, initial)` with initial < min. Input: [0.0, 1.0], initial -1.0. Expected: IllegalArgumentException. Derived from `initial < min`.
+   - `testSolveInvalidInitialGuessTooHigh`: Tests `solve(min, max, initial)` with initial > max. Input: [0.0, 1.0], initial 2.0. Expected: IllegalArgumentException. Derived from `initial > max`.
+   - `testSolveInvalidIntervalMinNotLessThanMax`: Tests `solve(min, max)` with min > max. Input: [1.0, 0.0]. Expected: IllegalArgumentException. Derived from `verifyInterval`.
+   - `testSolveInvalidIntervalMinEqualsMax`: Tests `solve(min, max)` with min == max. Input: [1.0, 1.0]. Expected: IllegalArgumentException. Derived from `verifyInterval`.
+   - `testSolveNoBracketing`: Tests `solve(min, max)` when endpoints don't bracket. Input: [0.0, 1.0], Function: constant 5. Expected: IllegalArgumentException. Derived from `yMin * yMax > 0`.
+   - `testSolveWithInitialGuessCloserToRoot`: Tests `solve(min, max, initial)` with initial close to root. Input: [0.0, 5.0], initial 2.1, Function: x^2-4. Expected: 2.0. Derived from root at 2.
+   - `testSolveWithInitialGuessFartherFromRoot`: Tests `solve(min, max, initial)` with initial far from root. Input: [0.0, 5.0], initial 4.0, Function: x^2-4. Expected: 2.0. Derived from root at 2.
+   - `testSolveWithNegativeRoot`: Tests `solve(min, max)` with negative root. Input: [-5.0, 0.0], Function: x^2-4. Expected: -2.0. Derived from root at -2.
+   - `testSolveWithInitialGuessForNegativeRoot`: Tests `solve(min, max, initial)` with negative root. Input: [-5.0, 0.0], initial -1.0, Function: x^2-4. Expected: -2.0. Derived from root at -2.
+   - `testSolveWithSmallIntervalAndRoot`: Tests precision with small intervals. Input: [2.0, 2.0000002], Function: x-2.0000001. Expected: 2.0000001. Derived from root at 2.0000001.
+   - `testSolveWithVerySmallValues`: Tests solver with very small numbers. Input: [-1e-9, 1e-9], Function: x*1e-10. Expected: 0.0. Derived from root at 0.
+   - `testSolveWithLargeValues`: Tests solver with large numbers. Input: [0.0, 2.0], Function: x*1e10-1e10. Expected: 1.0. Derived from root at 1.
+   - `testSolveWithZeroAtMin`: Tests `solve(min, max)` when min is the root. Input: [1.0, 5.0], Function: x-1. Expected: 1.0. Derived from root at 1.
+   - `testSolveWithZeroAtMax`: Tests `solve(min, max)` when max is the root. Input: [0.0, 1.0], Function: x-1. Expected: 1.0. Derived from root at 1.
+   - `testSolveWithHighMaximalIterationCount`: Tests `solve(min, max)` with high iteration count. Input: [0.0, 5.0], Function: x^2-4. Expected: 2.0. Derived from root at 2.
+   - `testSolveWithDefaultValues`: Tests `solve(min, max)` with default accuracies and iteration count. Input: [0.0, 5.0], Function: x^2-4. Expected: 2.0. Derived from default parameters.
+   - `testSolveWithSinFunction`: Tests `solve(min, max)` with sin function. Input: [3.0, 3.5]. Expected: PI. Derived from sin(PI)=0.
+   - `testSolveWithSinFunctionNegative`: Tests `solve(min, max)` with sin function, negative root. Input: [-3.5, -3.0]. Expected: -PI. Derived from sin(-PI)=0.
+4. DEFECT DETECTION STRATEGY - The tests focus on verifying correct root finding under various bracketing, endpoint, and initial guess conditions, including edge cases like roots at endpoints and exception handling. This approach aims to catch errors in the core Brent's method logic and its interface with user-provided bounds and functions.
+5. SUMMARY - 26 tests.
+6. LIMITATIONS - No tests cover the intricacies of the inverse quadratic interpolation fallback logic or specific numerical precision issues beyond standard double-precision behavior. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

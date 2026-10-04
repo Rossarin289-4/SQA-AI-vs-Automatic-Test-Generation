@@ -1,0 +1,237 @@
+package org.apache.commons.cli;
+
+import junit.framework.TestCase;
+import java.io.PrintWriter;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.Iterator;
+import java.util.List;
+
+public class HelpFormatterTest extends TestCase {
+    public void testWidthSetterAndGetterEdges() throws Exception {
+        HelpFormatter formatter = new HelpFormatter();
+        formatter.setWidth(0);
+        assertEquals(0, formatter.getWidth());
+        formatter.setWidth(-1);
+        assertEquals(-1, formatter.getWidth());
+        formatter.setWidth(Integer.MAX_VALUE);
+        assertEquals(Integer.MAX_VALUE, formatter.getWidth());
+        formatter.setWidth(Integer.MIN_VALUE);
+        assertEquals(Integer.MIN_VALUE, formatter.getWidth());
+    }
+
+    public void testPaddingSetterAndGetterEdges() throws Exception {
+        HelpFormatter formatter = new HelpFormatter();
+        formatter.setLeftPadding(0);
+        assertEquals(0, formatter.getLeftPadding());
+        formatter.setLeftPadding(-1);
+        assertEquals(-1, formatter.getLeftPadding());
+        formatter.setLeftPadding(Integer.MAX_VALUE);
+        assertEquals(Integer.MAX_VALUE, formatter.getLeftPadding());
+        formatter.setLeftPadding(Integer.MIN_VALUE);
+        assertEquals(Integer.MIN_VALUE, formatter.getLeftPadding());
+        formatter.setDescPadding(0);
+        assertEquals(0, formatter.getDescPadding());
+        formatter.setDescPadding(-1);
+        assertEquals(-1, formatter.getDescPadding());
+    }
+
+    public void testStringConfigurationAccessors() throws Exception {
+        HelpFormatter formatter = new HelpFormatter();
+        formatter.setSyntaxPrefix("run ");
+        assertEquals("run ", formatter.getSyntaxPrefix());
+        formatter.setNewLine("\n");
+        assertEquals("\n", formatter.getNewLine());
+        formatter.setOptPrefix("/");
+        assertEquals("/", formatter.getOptPrefix());
+        formatter.setLongOptPrefix("++");
+        assertEquals("++", formatter.getLongOptPrefix());
+        formatter.setArgName("file");
+        assertEquals("file", formatter.getArgName());
+    }
+
+    public void testComparatorDefaultAndReset() throws Exception {
+        HelpFormatter formatter = new HelpFormatter();
+        Comparator comparator = formatter.getOptionComparator();
+        assertTrue(comparator.compare(new Option("a", "a"), new Option("B", "b")) < 0);
+        formatter.setOptionComparator(null);
+        assertTrue(formatter.getOptionComparator().compare(
+                new Option("a", "a"), new Option("B", "b")) < 0);
+    }
+
+    public void testComparatorCanBeReplaced() throws Exception {
+        HelpFormatter formatter = new HelpFormatter();
+        Comparator reverse = new Comparator() {
+            public int compare(Object first, Object second) {
+                return ((Option) second).getOpt().compareTo(((Option) first).getOpt());
+            }
+        };
+        formatter.setOptionComparator(reverse);
+        assertSame(reverse, formatter.getOptionComparator());
+        assertTrue(formatter.getOptionComparator().compare(
+                new Option("a", "a"), new Option("b", "b")) > 0);
+    }
+
+    public void testPrintUsageWithConfiguredPrefix() throws Exception {
+        HelpFormatter formatter = new HelpFormatter();
+        formatter.setSyntaxPrefix("run: ");
+        StringBuffer output = new StringBuffer();
+        formatter.printUsage(new PrintWriter(new BufferWriter(output)), 74, "app -x");
+        assertEquals("run: app -x" + formatter.getNewLine(), output.toString());
+    }
+
+    public void testPrintUsageWrapsAtWhitespace() throws Exception {
+        HelpFormatter formatter = new HelpFormatter();
+        StringBuffer output = new StringBuffer();
+        formatter.printUsage(new PrintWriter(new BufferWriter(output)), 12, "app one two");
+        assertEquals("usage: app\n       one\ntwo" + formatter.getNewLine(),
+                output.toString());
+    }
+
+    public void testPrintUsageWithNoArguments() throws Exception {
+        HelpFormatter formatter = new HelpFormatter();
+        StringBuffer output = new StringBuffer();
+        formatter.printUsage(new PrintWriter(new BufferWriter(output)), 74, "app");
+        assertEquals("usage: app" + formatter.getNewLine(), output.toString());
+    }
+
+    public void testPrintOptionsWithSeveralConfiguredOptions() throws Exception {
+        HelpFormatter formatter = new HelpFormatter();
+        Options options = new Options();
+        options.addOption(new Option("b", "beta", false, "second"));
+        options.addOption(new Option("a", "alpha", false, "first"));
+        StringBuffer output = new StringBuffer();
+        formatter.printOptions(new PrintWriter(new BufferWriter(output)), 74, options, 1, 2);
+        assertEquals(" -a,--alpha  first" + formatter.getNewLine()
+                + " -b,--beta   second" + formatter.getNewLine(), output.toString());
+    }
+
+    public void testPrintOptionsArgumentNameAndLongOnlyOption() throws Exception {
+        HelpFormatter formatter = new HelpFormatter();
+        Options options = new Options();
+        Option shortOption = new Option("x", "execute", true, "run it");
+        shortOption.setArgName("file");
+        options.addOption(shortOption);
+        options.addOption(new Option(null, "verbose", false, "more"));
+        StringBuffer output = new StringBuffer();
+        formatter.printOptions(new PrintWriter(new BufferWriter(output)), 74, options, 0, 1);
+        assertEquals("-x,--execute <file> run it" + formatter.getNewLine()
+                + "   --verbose       more" + formatter.getNewLine(), output.toString());
+    }
+
+    public void testPrintOptionsEmptyCollection() throws Exception {
+        HelpFormatter formatter = new HelpFormatter();
+        StringBuffer output = new StringBuffer();
+        formatter.printOptions(new PrintWriter(new BufferWriter(output)), 74,
+                new Options(), 1, 3);
+        assertEquals(formatter.getNewLine(), output.toString());
+    }
+
+    public void testPrintWrappedWithoutWrap() throws Exception {
+        HelpFormatter formatter = new HelpFormatter();
+        StringBuffer output = new StringBuffer();
+        formatter.printWrapped(new PrintWriter(new BufferWriter(output)), 10, "abc");
+        assertEquals("abc" + formatter.getNewLine(), output.toString());
+    }
+
+    public void testPrintWrappedAtExactWidthAndOneOver() throws Exception {
+        HelpFormatter formatter = new HelpFormatter();
+        StringBuffer exact = new StringBuffer();
+        formatter.printWrapped(new PrintWriter(new BufferWriter(exact)), 3, "abc");
+        assertEquals("abc" + formatter.getNewLine(), exact.toString());
+
+        StringBuffer over = new StringBuffer();
+        formatter.printWrapped(new PrintWriter(new BufferWriter(over)), 3, "ab cd");
+        assertEquals("ab" + formatter.getNewLine() + "cd" + formatter.getNewLine(),
+                over.toString());
+    }
+
+    public void testPrintWrappedHonorsNextLineTabStop() throws Exception {
+        HelpFormatter formatter = new HelpFormatter();
+        StringBuffer output = new StringBuffer();
+        formatter.printWrapped(new PrintWriter(new BufferWriter(output)), 8, 3, "aa bb cc");
+        assertEquals("aa bb" + formatter.getNewLine() + "   cc"
+                + formatter.getNewLine(), output.toString());
+    }
+
+    public void testPrintWrappedHandlesNewline() throws Exception {
+        HelpFormatter formatter = new HelpFormatter();
+        StringBuffer output = new StringBuffer();
+        formatter.printWrapped(new PrintWriter(new BufferWriter(output)), 20, "one\ntwo");
+        assertEquals("one" + formatter.getNewLine() + "two" + formatter.getNewLine(),
+                output.toString());
+    }
+
+    public void testPrintHelpRejectsNullSyntax() throws Exception {
+        HelpFormatter formatter = new HelpFormatter();
+        try {
+            formatter.printHelp(new PrintWriter(new BufferWriter(new StringBuffer())),
+                    74, null, null, new Options(), 1, 3, null, false);
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) {
+        }
+    }
+
+    public void testPrintHelpRejectsEmptySyntax() throws Exception {
+        HelpFormatter formatter = new HelpFormatter();
+        try {
+            formatter.printHelp(new PrintWriter(new BufferWriter(new StringBuffer())),
+                    74, "", null, new Options(), 1, 3, null, false);
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) {
+        }
+    }
+
+    public void testPrintHelpIncludesUsageAndOption() throws Exception {
+        HelpFormatter formatter = new HelpFormatter();
+        Options options = new Options();
+        options.addOption(new Option("x", "execute", false, "run"));
+        StringBuffer output = new StringBuffer();
+        formatter.printHelp(new PrintWriter(new BufferWriter(output)), 74, "app",
+                null, options, 1, 3, null, false);
+        assertEquals("usage: app" + formatter.getNewLine()
+                + " -x,--execute   run" + formatter.getNewLine(),
+                output.toString());
+    }
+
+    public void testCreatePaddingBoundaries() throws Exception {
+        HelpFormatter formatter = new HelpFormatter();
+        assertEquals("", formatter.createPadding(0));
+        assertEquals(" ", formatter.createPadding(1));
+        assertEquals("   ", formatter.createPadding(3));
+    }
+
+    public void testRtrimEmptyAndTrailingWhitespace() throws Exception {
+        HelpFormatter formatter = new HelpFormatter();
+        assertEquals("", formatter.rtrim(""));
+        assertEquals("abc", formatter.rtrim("abc  "));
+        assertEquals("a", formatter.rtrim("a\t"));
+    }
+
+    public void testFindWrapPositionAtWidthBoundary() throws Exception {
+        HelpFormatter formatter = new HelpFormatter();
+        assertEquals(-1, formatter.findWrapPos("abc", 3, 0));
+        assertEquals(2, formatter.findWrapPos("ab cd", 3, 0));
+        assertEquals(3, formatter.findWrapPos("ab\ncd", 5, 0));
+    }
+
+    private static class BufferWriter extends java.io.Writer {
+        private final StringBuffer buffer;
+
+        BufferWriter(StringBuffer buffer) {
+            this.buffer = buffer;
+        }
+
+        public void write(char[] chars, int offset, int length) {
+            buffer.append(chars, offset, length);
+        }
+
+        public void flush() {
+        }
+
+        public void close() {
+        }
+    }
+}

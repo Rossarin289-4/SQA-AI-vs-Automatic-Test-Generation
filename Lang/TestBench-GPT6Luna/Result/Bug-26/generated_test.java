@@ -1,0 +1,200 @@
+package org.apache.commons.lang3.time;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.text.DateFormat;
+import java.text.DateFormatSymbols;
+import java.text.FieldPosition;
+import java.text.Format;
+import java.text.ParsePosition;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.Date;
+import java.util.GregorianCalendar;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.TimeZone;
+import org.apache.commons.lang3.Validate;
+
+public class FastDateFormatTest {
+    @Test
+    public void testPatternAndLiteralFormatting() throws Exception {
+        FastDateFormat f = FastDateFormat.getInstance("yyyy-MM-dd 'at' HH:mm", TimeZone.getTimeZone("UTC"), Locale.US);
+        assertEquals("1970-01-01 at 00:00", f.format(0L));
+        assertEquals("yyyy-MM-dd 'at' HH:mm", f.getPattern());
+    }
+
+    @Test
+    public void testUnpaddedAndPaddedMonthEdges() throws Exception {
+        FastDateFormat f = FastDateFormat.getInstance("M MM", TimeZone.getTimeZone("UTC"), Locale.US);
+        assertEquals("1 01", f.format(0L));
+        assertEquals("11 11", f.format(new GregorianCalendar(1970, Calendar.NOVEMBER, 1).getTime()));
+    }
+
+    @Test
+    public void testTwelveHourMidnightAndNoon() throws Exception {
+        FastDateFormat f = FastDateFormat.getInstance("h a", TimeZone.getTimeZone("UTC"), Locale.US);
+        assertEquals("12 AM", f.format(0L));
+        assertEquals("12 PM", f.format(12L * 60 * 60 * 1000));
+    }
+
+    @Test
+    public void testTwentyFourHourMidnightAndLastHour() throws Exception {
+        FastDateFormat f = FastDateFormat.getInstance("k HH", TimeZone.getTimeZone("UTC"), Locale.US);
+        assertEquals("24 00", f.format(0L));
+        assertEquals("23 23", f.format(23L * 60 * 60 * 1000));
+    }
+
+    @Test
+    public void testTimezoneNumericFormatsAtZeroAndOffset() throws Exception {
+        FastDateFormat f = FastDateFormat.getInstance("Z ZZ", TimeZone.getTimeZone("GMT+05:30"), Locale.US);
+        assertEquals("+0530 +05:30", f.format(0L));
+        FastDateFormat utc = FastDateFormat.getInstance("Z ZZ", TimeZone.getTimeZone("UTC"), Locale.US);
+        assertEquals("+0000 +00:00", utc.format(0L));
+    }
+
+    @Test
+    public void testFormatOverloadsAgreeForDateAndLong() throws Exception {
+        FastDateFormat f = FastDateFormat.getInstance("yyyyMMdd", TimeZone.getTimeZone("UTC"), Locale.US);
+        Date date = new Date(0L);
+        assertEquals(f.format(0L), f.format(date));
+        StringBuffer buf = new StringBuffer("x");
+        assertSame(buf, f.format(date, buf));
+        assertEquals("x19700101", buf.toString());
+    }
+
+    @Test
+    public void testCalendarTimezoneIsPreservedWithoutForcedZone() throws Exception {
+        FastDateFormat f = FastDateFormat.getInstance("HH", Locale.US);
+        Calendar c = new GregorianCalendar(TimeZone.getTimeZone("GMT+02:00"), Locale.US);
+        c.setTimeInMillis(0L);
+        assertEquals("02", f.format(c));
+        assertFalse(f.getTimeZoneOverridesCalendar());
+    }
+
+    @Test
+    public void testCalendarTimezoneIsOverriddenWhenForced() throws Exception {
+        FastDateFormat f = FastDateFormat.getInstance("HH", TimeZone.getTimeZone("UTC"), Locale.US);
+        Calendar c = new GregorianCalendar(TimeZone.getTimeZone("GMT+02:00"), Locale.US);
+        c.setTimeInMillis(0L);
+        assertEquals("00", f.format(c));
+        assertTrue(f.getTimeZoneOverridesCalendar());
+    }
+
+    @Test
+    public void testFormatObjectDateLongAndCalendar() throws Exception {
+        FastDateFormat f = FastDateFormat.getInstance("yyyy", TimeZone.getTimeZone("UTC"), Locale.US);
+        FieldPosition pos = new FieldPosition(0);
+        assertEquals("1970", f.format((Object) new Date(0L), new StringBuffer(), pos).toString());
+        assertEquals("1970", f.format((Object) Long.valueOf(0L), new StringBuffer(), pos).toString());
+        Calendar c = new GregorianCalendar(TimeZone.getTimeZone("UTC"));
+        c.setTimeInMillis(0L);
+        assertEquals("1970", f.format((Object) c, new StringBuffer(), pos).toString());
+    }
+
+    @Test
+    public void testFormatObjectRejectsUnsupportedType() throws Exception {
+        FastDateFormat f = FastDateFormat.getInstance("yyyy");
+        try {
+            f.format((Object) "text", new StringBuffer(), new FieldPosition(0));
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) { }
+    }
+
+    @Test
+    public void testFormatObjectRejectsNull() throws Exception {
+        FastDateFormat f = FastDateFormat.getInstance("yyyy");
+        try {
+            f.format((Object) null, new StringBuffer(), new FieldPosition(0));
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) { }
+    }
+
+    @Test
+    public void testParseObjectResetsPositionAndReturnsNull() throws Exception {
+        FastDateFormat f = FastDateFormat.getInstance("yyyy");
+        ParsePosition pos = new ParsePosition(4);
+        pos.setErrorIndex(7);
+        assertNull(f.parseObject("1970", pos));
+        assertEquals(0, pos.getIndex());
+        assertEquals(0, pos.getErrorIndex());
+    }
+
+    @Test
+    public void testAccessorsAndStringRepresentation() throws Exception {
+        TimeZone zone = TimeZone.getTimeZone("UTC");
+        FastDateFormat f = FastDateFormat.getInstance("yyyy", zone, Locale.US);
+        assertSame(zone, f.getTimeZone());
+        assertEquals(Locale.US, f.getLocale());
+        assertEquals("FastDateFormat[yyyy]", f.toString());
+        assertEquals(4, f.getMaxLengthEstimate());
+    }
+
+    @Test
+    public void testEqualityAndHashCodeForSameConfiguration() throws Exception {
+        FastDateFormat a = FastDateFormat.getInstance("yyyy-MM", TimeZone.getTimeZone("UTC"), Locale.US);
+        FastDateFormat b = FastDateFormat.getInstance("yyyy-MM", TimeZone.getTimeZone("UTC"), Locale.US);
+        assertEquals(a, b);
+        assertEquals(a.hashCode(), b.hashCode());
+    }
+
+    @Test
+    public void testEqualityDistinguishesPatternAndConfiguration() throws Exception {
+        FastDateFormat a = FastDateFormat.getInstance("yyyy", TimeZone.getTimeZone("UTC"), Locale.US);
+        FastDateFormat b = FastDateFormat.getInstance("MM", TimeZone.getTimeZone("UTC"), Locale.US);
+        FastDateFormat c = FastDateFormat.getInstance("yyyy", TimeZone.getTimeZone("GMT+01:00"), Locale.US);
+        assertFalse(a.equals(b));
+        assertFalse(a.equals(c));
+        assertFalse(a.equals(null));
+    }
+
+    @Test
+    public void testLocalizedDateTimeFactoriesReturnFormattedValue() throws Exception {
+        FastDateFormat date = FastDateFormat.getDateInstance(FastDateFormat.SHORT, Locale.US);
+        FastDateFormat time = FastDateFormat.getTimeInstance(FastDateFormat.SHORT, Locale.US);
+        FastDateFormat both = FastDateFormat.getDateTimeInstance(FastDateFormat.SHORT, FastDateFormat.SHORT, Locale.US);
+        Date sample = new GregorianCalendar(1970, Calendar.JANUARY, 1, 0, 0).getTime();
+        assertEquals(new SimpleDateFormat(date.getPattern(), Locale.US).format(sample), date.format(sample));
+        assertEquals(new SimpleDateFormat(time.getPattern(), Locale.US).format(sample), time.format(sample));
+        assertEquals(new SimpleDateFormat(both.getPattern(), Locale.US).format(sample), both.format(sample));
+    }
+
+    @Test
+    public void testGetInstanceWithoutArgumentsHasUsablePattern() throws Exception {
+        FastDateFormat f = FastDateFormat.getInstance();
+        assertNotNull(f.getPattern());
+        assertEquals(f.getPattern(), f.getPattern());
+        assertEquals(f.format(0L).length() <= f.getMaxLengthEstimate(), true);
+    }
+
+    @Test
+    public void testFourDigitYearPaddingAndExpandedValue() throws Exception {
+        FastDateFormat f = FastDateFormat.getInstance("yyyy", TimeZone.getTimeZone("UTC"), Locale.US);
+        assertEquals("1970", f.format(0L));
+        Calendar c = new GregorianCalendar(TimeZone.getTimeZone("UTC"));
+        c.clear();
+        c.set(Calendar.YEAR, 10000);
+        assertEquals("10000", f.format(c));
+    }
+
+    @Test
+    public void testThreeDigitDayOfYearAndMillisecondFields() throws Exception {
+        FastDateFormat f = FastDateFormat.getInstance("DDD SSS", TimeZone.getTimeZone("UTC"), Locale.US);
+        Calendar c = new GregorianCalendar(TimeZone.getTimeZone("UTC"));
+        c.clear();
+        c.set(1970, Calendar.DECEMBER, 31, 0, 0, 0);
+        c.set(Calendar.MILLISECOND, 7);
+        assertEquals("365 007", f.format(c));
+    }
+
+    @Test
+    public void testQuotedApostropheAndLiteralRun() throws Exception {
+        FastDateFormat f = FastDateFormat.getInstance("'' yyyy 'X'", TimeZone.getTimeZone("UTC"), Locale.US);
+        assertEquals("' 1970 X", f.format(0L));
+    }
+}

@@ -1,0 +1,271 @@
+```java
+package org.joda.time.tz;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.io.BufferedReader;
+import java.io.DataOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.FileReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.StringTokenizer;
+import java.util.TreeMap;
+import java.util.Map.Entry;
+import org.joda.time.Chronology;
+import org.joda.time.DateTime;
+import org.joda.time.DateTimeField;
+import org.joda.time.DateTimeZone;
+import org.joda.time.LocalDate;
+import org.joda.time.MutableDateTime;
+import org.joda.time.chrono.ISOChronology;
+import org.joda.time.chrono.LenientChronology;
+import org.joda.time.format.DateTimeFormatter;
+import org.joda.time.format.ISODateTimeFormat;
+
+public class ZoneInfoCompilerTest {
+    @Test
+    public void testVerboseDefaultsToFalse() throws Exception {
+        assertFalse(ZoneInfoCompiler.verbose());
+    }
+
+    @Test
+    public void testParseDataFileAcceptsCommentAndBlankLines() throws Exception {
+        ZoneInfoCompiler compiler = new ZoneInfoCompiler();
+        compiler.parseDataFile(new BufferedReader(new java.io.StringReader("# note\n\n")));
+        assertTrue(compiler.compile(null, null).isEmpty());
+    }
+
+    @Test
+    public void testCompileWithNoSourcesIsEmpty() throws Exception {
+        assertTrue(new ZoneInfoCompiler().compile(null, null).isEmpty());
+    }
+
+    @Test
+    public void testParseDataFileBuildsFixedZone() throws Exception {
+        ZoneInfoCompiler compiler = new ZoneInfoCompiler();
+        compiler.parseDataFile(new BufferedReader(
+                new java.io.StringReader("Zone Test/One 1:00 - TST\n")));
+        Map<String, DateTimeZone> zones = compiler.compile(null, null);
+        assertEquals(1, zones.size());
+        assertEquals("Test/One", zones.get("Test/One").getID());
+        assertEquals(3600000, zones.get("Test/One").getOffset(0));
+    }
+
+    @Test
+    public void testFixedZoneWithZeroOffset() throws Exception {
+        ZoneInfoCompiler compiler = new ZoneInfoCompiler();
+        compiler.parseDataFile(new BufferedReader(
+                new java.io.StringReader("Zone Test/Zero 0 - Z\n")));
+        DateTimeZone zone = compiler.compile(null, null).get("Test/Zero");
+        assertEquals(0, zone.getOffset(0));
+        assertEquals("Test/Zero", zone.getID());
+    }
+
+    @Test
+    public void testZoneContinuationChangesOffsetAfterCutover() throws Exception {
+        ZoneInfoCompiler compiler = new ZoneInfoCompiler();
+        compiler.parseDataFile(new BufferedReader(new java.io.StringReader(
+                "Zone Test/Chain 0 - A 2000 Jan 1 0\n"
+              + "  1:00 - B\n")));
+        DateTimeZone zone = compiler.compile(null, null).get("Test/Chain");
+        long before = new org.joda.time.DateTime(1999, 1, 1, 0, 0,
+                ISOChronology.getInstanceUTC()).getMillis();
+        long after = new org.joda.time.DateTime(2001, 1, 1, 0, 0,
+                ISOChronology.getInstanceUTC()).getMillis();
+        assertEquals(0, zone.getOffset(before));
+        assertEquals(3600000, zone.getOffset(after));
+    }
+
+    @Test
+    public void testLinkAddsAliasForCompiledZone() throws Exception {
+        ZoneInfoCompiler compiler = new ZoneInfoCompiler();
+        compiler.parseDataFile(new BufferedReader(new java.io.StringReader(
+                "Zone Test/Base 0 - BASE\nLink Test/Base Test/Alias\n")));
+        Map<String, DateTimeZone> zones = compiler.compile(null, null);
+        assertEquals(2, zones.size());
+        assertSame(zones.get("Test/Base"), zones.get("Test/Alias"));
+    }
+
+    @Test
+    public void testRuleSetProvidesDaylightSavings() throws Exception {
+        ZoneInfoCompiler compiler = new ZoneInfoCompiler();
+        compiler.parseDataFile(new BufferedReader(new java.io.StringReader(
+                "Rule R 2000 only - Mar 1 0:00 1:00 D\n"
+              + "Zone Test/Rule 0 R R%s\n")));
+        DateTimeZone zone = compiler.compile(null, null).get("Test/Rule");
+        long instant = new org.joda.time.DateTime(2000, 6, 1, 0, 0,
+                ISOChronology.getInstanceUTC()).getMillis();
+        assertEquals(3600000, zone.getOffset(instant));
+    }
+
+    @Test
+    public void testCompileRejectsNonexistentSource() throws Exception {
+        try {
+            new ZoneInfoCompiler().compile(null, new File[] {new File("no-such-zone-file")});
+            fail("expected IOException");
+        } catch (IOException expected) {
+        }
+        assertTrue(true);
+    }
+
+    @Test
+    public void testParseDataFileIgnoresUnknownDirectiveWithoutAddingZone() throws Exception {
+        ZoneInfoCompiler compiler = new ZoneInfoCompiler();
+        compiler.parseDataFile(new BufferedReader(new java.io.StringReader("Other data\n")));
+        assertTrue(compiler.compile(null, null).isEmpty());
+    }
+
+    @Test
+    public void testToStringShowsDefaultDateTimeOfYear() throws Exception {
+        ZoneInfoCompiler.DateTimeOfYear date = new ZoneInfoCompiler.DateTimeOfYear();
+        String text = date.toString();
+        assertTrue(text.contains("MonthOfYear: 1"));
+        assertTrue(text.contains("DayOfMonth: 1"));
+        assertTrue(text.contains("MillisOfDay: 0"));
+    }
+
+    @Test
+    public void testToStringShowsParsedDateTimeOfYear() throws Exception {
+        ZoneInfoCompiler.DateTimeOfYear date =
+                new ZoneInfoCompiler.DateTimeOfYear(new StringTokenizer("Mar 15 2:30"));
+        String text = date.toString();
+        assertTrue(text.contains("MonthOfYear: 3"));
+        assertTrue(text.contains("DayOfMonth: 15"));
+        assertTrue(text.contains("MillisOfDay: 9000000"));
+    }
+
+    @Test
+    public void testToStringShowsLastWeekdayRule() throws Exception {
+        ZoneInfoCompiler.DateTimeOfYear date =
+                new ZoneInfoCompiler.DateTimeOfYear(new StringTokenizer("Oct lastSun 0:00"));
+        String text = date.toString();
+        assertTrue(text.contains("MonthOfYear: 10"));
+        assertTrue(text.contains("DayOfMonth: -1"));
+        assertTrue(text.contains("DayOfWeek: 7"));
+        assertTrue(text.contains("AdvanceDayOfWeek: false"));
+    }
+
+    @Test
+    public void testToStringShowsAtOrAfterRule() throws Exception {
+        ZoneInfoCompiler.DateTimeOfYear date =
+                new ZoneInfoCompiler.DateTimeOfYear(new StringTokenizer("Mar Sun>=8 0:00"));
+        String text = date.toString();
+        assertTrue(text.contains("DayOfMonth: 8"));
+        assertTrue(text.contains("DayOfWeek: 7"));
+        assertTrue(text.contains("AdvanceDayOfWeek: true"));
+    }
+
+    @Test
+    public void testToStringShowsAtOrBeforeRule() throws Exception {
+        ZoneInfoCompiler.DateTimeOfYear date =
+                new ZoneInfoCompiler.DateTimeOfYear(new StringTokenizer("Oct Sun<=25 0:00"));
+        String text = date.toString();
+        assertTrue(text.contains("DayOfMonth: 25"));
+        assertTrue(text.contains("DayOfWeek: 7"));
+        assertTrue(text.contains("AdvanceDayOfWeek: false"));
+    }
+
+    @Test
+    public void testToStringParsesNegativeTime() throws Exception {
+        ZoneInfoCompiler.DateTimeOfYear date =
+                new ZoneInfoCompiler.DateTimeOfYear(new StringTokenizer("Mar 1 -1:30"));
+        assertTrue(date.toString().contains("MillisOfDay: -5400000"));
+    }
+
+    @Test
+    public void testToStringMapsStandardTimeSuffix() throws Exception {
+        ZoneInfoCompiler.DateTimeOfYear date =
+                new ZoneInfoCompiler.DateTimeOfYear(new StringTokenizer("Mar 1 2:00s"));
+        assertTrue(date.toString().contains("ZoneChar: s"));
+    }
+
+    @Test
+    public void testToStringMapsUtcSuffix() throws Exception {
+        ZoneInfoCompiler.DateTimeOfYear date =
+                new ZoneInfoCompiler.DateTimeOfYear(new StringTokenizer("Mar 1 2:00g"));
+        assertTrue(date.toString().contains("ZoneChar: u"));
+    }
+
+    @Test
+    public void testToStringDefaultsUnknownSuffixToWallTime() throws Exception {
+        ZoneInfoCompiler.DateTimeOfYear date =
+                new ZoneInfoCompiler.DateTimeOfYear(new StringTokenizer("Mar 1 2:00x"));
+        assertTrue(date.toString().contains("ZoneChar: w"));
+    }
+
+    @Test
+    public void testToStringAdvancesDateAtTwentyFourHundred() throws Exception {
+        ZoneInfoCompiler.DateTimeOfYear date =
+                new ZoneInfoCompiler.DateTimeOfYear(new StringTokenizer("Jan 31 24:00"));
+        String text = date.toString();
+        assertTrue(text.contains("MonthOfYear: 2"));
+        assertTrue(text.contains("DayOfMonth: 1"));
+        assertTrue(text.contains("AdvanceDayOfWeek: true"));
+        assertTrue(text.contains("MillisOfDay: 0"));
+    }
+
+    @Test
+    public void testToStringParsesYearEndTwentyFourHundred() throws Exception {
+        ZoneInfoCompiler.DateTimeOfYear date =
+                new ZoneInfoCompiler.DateTimeOfYear(new StringTokenizer("Dec 31 24:00"));
+        String text = date.toString();
+        assertTrue(text.contains("MonthOfYear: 1"));
+        assertTrue(text.contains("DayOfMonth: 1"));
+    }
+
+    @Test
+    public void testParseDataFileStripsTrailingComment() throws Exception {
+        ZoneInfoCompiler compiler = new ZoneInfoCompiler();
+        compiler.parseDataFile(new BufferedReader(
+                new java.io.StringReader("Zone Test/Comment 0 - C # ignored\n")));
+        Map<String, DateTimeZone> zones = compiler.compile(null, null);
+        assertEquals(1, zones.size());
+        assertEquals("Test/Comment", zones.get("Test/Comment").getID());
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+Method selection is exploratory because no target method was specified. Tests exercise `compile` and `parseDataFile` with fixed zones, continuations, rules, links, and input filtering, plus `DateTimeOfYear` parsing branches and formatting.
+
+### 2. TEST CASE DESIGN
+- `testVerboseDefaultsToFalse`: initial verbosity is false, as the thread-local initial value specifies.
+- `testParseDataFileAcceptsCommentAndBlankLines`: comment and blank lines add no zones; the compiled map is empty.
+- `testCompileWithNoSourcesIsEmpty`: null sources create no zones, yielding an empty map.
+- `testParseDataFileBuildsFixedZone`: a one-hour fixed offset yields the same ID and 3,600,000 ms offset.
+- `testFixedZoneWithZeroOffset`: zero offset compiles to offset 0 and preserves the ID.
+- `testZoneContinuationChangesOffsetAfterCutover`: before the 2000 cutover offset is zero; after it the continuation sets one hour.
+- `testLinkAddsAliasForCompiledZone`: the alias is added and maps to the compiled zone instance.
+- `testRuleSetProvidesDaylightSavings`: the 2000 March rule applies one hour of savings by June.
+- `testCompileRejectsNonexistentSource`: opening a missing input file throws `IOException`.
+- `testParseDataFileIgnoresUnknownDirectiveWithoutAddingZone`: an unrecognized directive adds no zone.
+- `testToStringShowsDefaultDateTimeOfYear`: default fields are January 1 at zero milliseconds.
+- `testToStringShowsParsedDateTimeOfYear`: March 15 at 02:30 converts to 9,000,000 ms.
+- `testToStringShowsLastWeekdayRule`: `lastSun` maps to day -1 and ISO Sunday 7.
+- `testToStringShowsAtOrAfterRule`: `Sun>=8` sets day 8, weekday 7, and advance true.
+- `testToStringShowsAtOrBeforeRule`: `Sun<=25` sets day 25, weekday 7, and advance false.
+- `testToStringParsesNegativeTime`: -1:30 converts to -5,400,000 ms.
+- `testToStringMapsStandardTimeSuffix`: suffix `s` yields standard mode `s`.
+- `testToStringMapsUtcSuffix`: suffix `g` yields UTC mode `u`.
+- `testToStringDefaultsUnknownSuffixToWallTime`: unrecognized suffix maps to wall mode `w`.
+- `testToStringAdvancesDateAtTwentyFourHundred`: Jan 31 at 24:00 advances to February 1.
+- `testToStringParsesYearEndTwentyFourHundred`: Dec 31 at 24:00 rolls to January 1.
+- `testParseDataFileStripsTrailingComment`: trailing comment text is removed, leaving one correctly named zone.
+
+### 4. DEFECT DETECTION STRATEGY
+The assertions pin parser branch outcomes, parsed date/time fields, and compiled zone mappings and offsets. Actual outcomes on the faulty version have not been measured.
+
+### 5. SUMMARY
+22 independent test methods.
+
+### 6. LIMITATIONS
+Coverage is exploratory and depends on the project’s Joda-Time classes behaving as used by the reference source. No result has been run or observed. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

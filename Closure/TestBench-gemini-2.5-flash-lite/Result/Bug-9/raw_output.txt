@@ -1,0 +1,566 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Preconditions;
+import com.google.common.collect.Sets;
+import com.google.javascript.jscomp.NodeTraversal.AbstractPostOrderCallback;
+import com.google.javascript.rhino.IR;
+import com.google.javascript.rhino.Node;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.util.Set;
+import java.util.regex.Pattern;
+
+public class ProcessCommonJSModulesTest {
+    // Dummy compiler for testing purposes.
+    private static class MockCompiler extends AbstractCompiler {
+        @Override
+        public boolean shouldRunPass(String name) {
+            return true;
+        }
+        @Override
+        public void report(JSError error) {}
+        @Override
+        public void reportCodeChange() {}
+        @Override
+        public ErrorManager getErrorManager() {
+            return new BasicErrorManager() {
+                @Override
+                protected void format(JSError error) {}
+                @Override
+                public void println(CheckLevel level, CharSequence msg) {}
+            };
+        }
+        @Override
+        public CodingConvention getCodingConvention() {
+            return new ClosureCodingConvention();
+        }
+        @Override
+        public void process(CompilerPass pass) {
+            pass.process(null, null);
+        }
+        @Override
+        public Node getNodeForCodeInsertion(JSModule module) {
+            return IR.root();
+        }
+        @Override
+        public void throwInternalError(String msg, Exception cause) {
+            throw new RuntimeException(msg, cause);
+        }
+        @Override
+        public TypeValidator getTypeValidator() {
+            return new TypeValidator(this);
+        }
+        @Override
+        public ReverseAbstractInterpreter getReverseAbstractInterpreter() {
+            return new NullIsUndefined() {
+                @Override
+                public JSType getType(Node node) {
+                    return JSType.UNKNOWN_TYPE;
+                }
+            };
+        }
+        @Override
+        public JSTypeRegistry getTypeRegistry() {
+            return new JSTypeRegistry(new ErrorReporter() {
+                @Override
+                public void report(CheckLevel level, JSError error) {}
+                @Override
+                public void generateReport() {}
+            });
+        }
+        @Override
+        public JSModuleGraph getModuleGraph() {
+            return new JSModuleGraph(new JSModule[0]);
+        }
+        @Override
+        public List<CompilerInput> getInputsInOrder() {
+            return new java.util.ArrayList<>();
+        }
+        @Override
+        public Scope getTopScope() {
+            return new Scope.Builder(IR.root()).build();
+        }
+        @Override
+        public Node getRoot() {
+            return IR.root();
+        }
+        @Override
+        public SourceFile getSourceFileByName(String sourceName) {
+            return null;
+        }
+        @Override
+        public CompilerInput getInput(InputId inputId) {
+            return null;
+        }
+        @Override
+        public CompilerInput newExternInput(String name) {
+            return new CompilerInput(SourceFile.fromCode(name, ""));
+        }
+        @Override
+        public Node parseSyntheticCode(String code) {
+            return IR.root();
+        }
+        @Override
+        public Node parseSyntheticCode(String filename, String code) {
+            return IR.root();
+        }
+        @Override
+        public Node parseTestCode(String code) {
+            return IR.root();
+        }
+        @Override
+        public String toSource(Node root) {
+            return "";
+        }
+        @Override
+        public ErrorReporter getDefaultErrorReporter() {
+            return new ErrorReporter() {
+                @Override
+                public void report(CheckLevel level, JSError error) {}
+                @Override
+                public void generateReport() {}
+            };
+        }
+        @Override
+        public LifeCycleStage getLifeCycleStage() {
+            return LifeCycleStage.NORMALIZED;
+        }
+        @Override
+        public Supplier<String> getUniqueNameIdSupplier() {
+            return () -> "unique";
+        }
+        @Override
+        public boolean hasHaltingErrors() {
+            return false;
+        }
+        @Override
+        public void addChangeHandler(CodeChangeHandler handler) {}
+        @Override
+        public void removeChangeHandler(CodeChangeHandler handler) {}
+        @Override
+        public boolean isIdeMode() {
+            return false;
+        }
+        @Override
+        public boolean acceptEcmaScript5() {
+            return true;
+        }
+        @Override
+        public boolean acceptConstKeyword() {
+            return true;
+        }
+        @Override
+        public Config getParserConfig() {
+            return new Config.Builder().build();
+        }
+        @Override
+        public boolean isTypeCheckingEnabled() {
+            return false;
+        }
+        @Override
+        public void prepareAst(Node root) {}
+        @Override
+        public void setLifeCycleStage(LifeCycleStage stage) {}
+        @Override
+        public boolean areNodesEqualForInlining(Node n1, Node n2) {
+            return false;
+        }
+        @Override
+        public void setHasRegExpGlobalReferences(boolean references) {}
+        @Override
+        public boolean hasRegExpGlobalReferences() {
+            return false;
+        }
+        @Override
+        public CheckLevel getErrorLevel(JSError error) {
+            return CheckLevel.ERROR;
+        }
+        @Override
+        public void setCssRenamingMap(CssRenamingMap map) {}
+        @Override
+        public CssRenamingMap getCssRenamingMap() {
+            return null;
+        }
+        @Override
+        public void process(Node externs, Node root, JSModule module, String filename) {}
+        @Override
+        public Node parse(SourceFile file) {
+            return IR.root();
+        }
+    }
+
+    private static class MockCompilerInput extends CompilerInput {
+        private String name;
+        private JSModule module;
+
+        MockCompilerInput(String name, String code) {
+            super(SourceFile.fromCode(name, code), name);
+            this.name = name;
+        }
+
+        @Override
+        public String getName() {
+            return name;
+        }
+        @Override
+        public JSModule getModule() {
+            return module;
+        }
+        @Override
+        public void setModule(JSModule module) {
+            this.module = module;
+        }
+
+        public void addProvide(String provide) {}
+        public void addRequire(String require) {}
+    }
+
+    private ProcessCommonJSModules createProcessor(String filenamePrefix, boolean reportDependencies) {
+        return new ProcessCommonJSModules(new MockCompiler(), filenamePrefix, reportDependencies);
+    }
+
+    private NodeTraversal createTraversal(Node node, String sourceName) {
+        NodeTraversal traversal = new NodeTraversal(new MockCompiler(), null);
+        // Manually set source name and node for testing purposes.
+        try {
+            java.lang.reflect.Field field = NodeTraversal.class.getDeclaredField("current");
+            field.setAccessible(true);
+            field.set(traversal, node);
+
+            field = NodeTraversal.class.getDeclaredField("currentTraversal");
+            field.setAccessible(true);
+            field.set(traversal, new NodeTraversal.Path(node, null));
+
+            field = NodeTraversal.class.getDeclaredField("sourceName");
+            field.setAccessible(true);
+            field.set(traversal, sourceName);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+        return traversal;
+    }
+
+    @Test
+    public void testToModuleNameBasic() {
+        assertEquals("module$foo_bar", ProcessCommonJSModules.toModuleName("foo/bar"));
+    }
+
+    @Test
+    public void testToModuleNameWithDotSlash() {
+        assertEquals("module$foo_bar", ProcessCommonJSModules.toModuleName("./foo/bar"));
+    }
+
+    @Test
+    public void testToModuleNameWithDotDotSlash() {
+        assertEquals("module$bar", ProcessCommonJSModules.toModuleName("../bar"));
+    }
+
+    @Test
+    public void testToModuleNameWithJsExtension() {
+        assertEquals("module$foo_bar", ProcessCommonJSModules.toModuleName("foo/bar.js"));
+    }
+
+    @Test
+    public void testToModuleNameWithDash() {
+        assertEquals("module$foo_bar", ProcessCommonJSModules.toModuleName("foo-bar"));
+    }
+
+    @Test
+    public void testToModuleNameComplex() {
+        assertEquals("module$my_lib_utils_index", ProcessCommonJSModules.toModuleName("my-lib/utils/index.js"));
+    }
+
+    @Test
+    public void testToModuleNameRelativeBasic() {
+        assertEquals("module$bar", ProcessCommonJSModules.toModuleName("bar", "foo"));
+    }
+
+    @Test
+    public void testToModuleNameRelativeWithDotSlash() {
+        assertEquals("module$bar", ProcessCommonJSModules.toModuleName("./bar", "foo"));
+    }
+
+    @Test
+    public void testToModuleNameRelativeWithDotDotSlash() {
+        assertEquals("module$bar", ProcessCommonJSModules.toModuleName("../bar", "foo/baz"));
+    }
+
+    @Test
+    public void testToModuleNameRelativeComplex() {
+        assertEquals("module$my_lib_utils", ProcessCommonJSModules.toModuleName("my-lib/utils", "my-lib/foo"));
+    }
+
+    @Test
+    public void testToModuleNameRelativeSameDir() {
+        assertEquals("module$foo", ProcessCommonJSModules.toModuleName("foo", "bar"));
+    }
+
+    @Test
+    public void testToModuleNameRelativeParentDir() {
+        assertEquals("module$foo", ProcessCommonJSModules.toModuleName("foo", "bar/baz"));
+    }
+
+    @Test
+    public void testNormalizeSourceNameBasic() {
+        ProcessCommonJSModules processor = createProcessor("./", true);
+        assertEquals("foo/bar", processor.normalizeSourceName("foo/bar"));
+    }
+
+    @Test
+    public void testNormalizeSourceNameWithPrefix() {
+        ProcessCommonJSModules processor = createProcessor("src/", true);
+        assertEquals("foo/bar", processor.normalizeSourceName("src/foo/bar"));
+    }
+
+    @Test
+    public void testNormalizeSourceNameWithTrailingSlash() {
+        ProcessCommonJSModules processor = createProcessor("src/", true);
+        assertEquals("foo/bar", processor.normalizeSourceName("src/foo/bar"));
+    }
+
+    @Test
+    public void testNormalizeSourceNameWithBackslash() {
+        ProcessCommonJSModules processor = createProcessor("src/", true);
+        assertEquals("foo/bar", processor.normalizeSourceName("src\\foo\\bar"));
+    }
+
+    @Test
+    public void testNormalizeSourceNameEmpty() {
+        ProcessCommonJSModules processor = createProcessor("", true);
+        assertEquals("", processor.normalizeSourceName(""));
+    }
+
+    @Test
+    public void testProcessWithRequire() {
+        Node root = IR.root();
+        Node script = IR.script(
+            IR.exprResult(IR.call(IR.name("require"), IR.string("foo")))
+        );
+        root.addChildToBack(script);
+        script.setSourceFileName("test.js");
+
+        ProcessCommonJSModules processor = createProcessor("", true);
+        processor.process(null, root);
+
+        assertEquals("module$test", script.getChildAtIndex(0).getString());
+        assertEquals("goog.require(\"module$test\");", root.getChildAtIndex(0).getChildAtIndex(0).getString());
+    }
+
+    @Test
+    public void testProcessWithModuleExports() {
+        Node root = IR.root();
+        Node script = IR.script(
+            IR.exprResult(IR.assign(IR.getprop(IR.name("module"), IR.string("exports")), IR.string("foo")))
+        );
+        root.addChildToBack(script);
+        script.setSourceFileName("test.js");
+
+        ProcessCommonJSModules processor = createProcessor("", true);
+        processor.process(null, root);
+
+        assertEquals("module$test", script.getChildAtIndex(0).getSecondChild().getChildAtIndex(0).getString());
+        assertEquals("module$exports", script.getChildAtIndex(0).getSecondChild().getChildAtIndex(1).getString());
+    }
+
+    @Test
+    public void testProcessWithGlobalVariableSuffixing() {
+        Node root = IR.root();
+        Node script = IR.script(
+            IR.var(IR.name("foo"), IR.string("bar"))
+        );
+        root.addChildToBack(script);
+        script.setSourceFileName("test.js");
+
+        ProcessCommonJSModules processor = createProcessor("", true);
+        processor.process(null, root);
+
+        assertEquals("foo$$module$test", script.getChildAtIndex(0).getChildAtIndex(0).getString());
+    }
+
+    @Test
+    public void testProcessWithExportsInModuleExports() {
+        Node root = IR.root();
+        Node script = IR.script(
+            IR.exprResult(IR.assign(IR.getprop(IR.name("module"), IR.string("exports")), IR.objectlit(IR.propdef(IR.string("a"), IR.string("1")))))
+        );
+        root.addChildToBack(script);
+        script.setSourceFileName("test.js");
+
+        ProcessCommonJSModules processor = createProcessor("", true);
+        processor.process(null, root);
+
+        Node exportAssignment = script.getChildAtIndex(0); // The ifNode
+        assertEquals("module$test", exportAssignment.getChildAtIndex(0).getChildAtIndex(0).getString()); // condition: module$test.module$exports
+        assertEquals("module$exports", exportAssignment.getChildAtIndex(0).getChildAtIndex(1).getString()); // condition: module$test.module$exports
+        assertEquals("module$test", exportAssignment.getChildAtIndex(1).getChildAtIndex(0).getChildAtIndex(0).getString()); // assignment target: module$test
+        assertEquals("module$exports", exportAssignment.getChildAtIndex(1).getChildAtIndex(0).getChildAtIndex(1).getString()); // assignment value: module$exports
+    }
+
+    @Test
+    public void testProcessWithRequireAndModuleExports() {
+        Node root = IR.root();
+        Node script = IR.script(
+            IR.exprResult(IR.call(IR.name("require"), IR.string("foo"))),
+            IR.exprResult(IR.assign(IR.getprop(IR.name("module"), IR.string("exports")), IR.string("bar")))
+        );
+        root.addChildToBack(script);
+        script.setSourceFileName("test.js");
+
+        ProcessCommonJSModules processor = createProcessor("", true);
+        processor.process(null, root);
+
+        // Check goog.require is added
+        assertEquals("goog.require(\"module$foo\");", root.getChildAtIndex(0).getString());
+        // Check require call is rewritten
+        assertEquals("module$foo", script.getChildAtIndex(0).getChildAtIndex(0).getString());
+        // Check module.exports is rewritten
+        assertEquals("module$test.module$exports", script.getChildAtIndex(1).getChildAtIndex(0).getChildAtIndex(0).getString());
+    }
+
+    @Test
+    public void testProcessNoDependenciesReported() {
+        Node root = IR.root();
+        Node script = IR.script(
+            IR.exprResult(IR.call(IR.name("require"), IR.string("foo")))
+        );
+        root.addChildToBack(script);
+        script.setSourceFileName("test.js");
+
+        ProcessCommonJSModules processor = createProcessor("", false); // reportDependencies = false
+        processor.process(null, root);
+
+        // Ensure no goog.require is added
+        assertTrue(root.getChildCount() == 1); // Only the new module declaration
+        assertTrue(root.getChildAtIndex(0).getString().contains("goog.provide"));
+    }
+
+    @Test
+    public void testProcessWithMultipleRequires() {
+        Node root = IR.root();
+        Node script = IR.script(
+            IR.exprResult(IR.call(IR.name("require"), IR.string("foo"))),
+            IR.exprResult(IR.call(IR.name("require"), IR.string("bar")))
+        );
+        root.addChildToBack(script);
+        script.setSourceFileName("test.js");
+
+        ProcessCommonJSModules processor = createProcessor("", true);
+        processor.process(null, root);
+
+        assertEquals("goog.require(\"module$foo\");", root.getChildAtIndex(0).getString());
+        assertEquals("goog.require(\"module$bar\");", root.getChildAtIndex(1).getString());
+        assertEquals("module$foo", script.getChildAtIndex(0).getChildAtIndex(0).getString());
+        assertEquals("module$bar", script.getChildAtIndex(1).getChildAtIndex(0).getString());
+    }
+
+    @Test
+    public void testProcessWithExportsInModuleExportsIf() {
+        Node root = IR.root();
+        Node script = IR.script(
+            IR.exprResult(IR.assign(IR.getprop(IR.name("module"), IR.string("exports")), IR.objectlit()))
+        );
+        root.addChildToBack(script);
+        script.setSourceFileName("test.js");
+
+        ProcessCommonJSModules processor = createProcessor("", true);
+        processor.process(null, root);
+
+        Node exportAssignment = script.getChildAtIndex(0); // The ifNode
+        assertTrue(exportAssignment.isIf());
+        assertEquals("module$test.module$exports", exportAssignment.getChildAtIndex(0).getChildAtIndex(0).getString());
+    }
+
+    @Test
+    public void testProcessWithModuleExportsAndVariableDeclaration() {
+        Node root = IR.root();
+        Node script = IR.script(
+            IR.var(IR.name("x"), IR.string("y")),
+            IR.exprResult(IR.assign(IR.getprop(IR.name("module"), IR.string("exports")), IR.string("foo")))
+        );
+        root.addChildToBack(script);
+        script.setSourceFileName("test.js");
+
+        ProcessCommonJSModules processor = createProcessor("", true);
+        processor.process(null, root);
+
+        assertEquals("x$$module$test", script.getChildAtIndex(0).getChildAtIndex(0).getString());
+        assertEquals("module$test.module$exports", script.getChildAtIndex(1).getChildAtIndex(0).getChildAtIndex(0).getString());
+    }
+
+    @Test
+    public void testToModuleNameWithEmptyString() {
+        assertEquals("module$", ProcessCommonJSModules.toModuleName(""));
+    }
+
+    @Test
+    public void testToModuleNameWithOnlyDotSlash() {
+        assertEquals("module$", ProcessCommonJSModules.toModuleName("./"));
+    }
+
+    @Test
+    public void testToModuleNameWithOnlyDotDotSlash() {
+        assertEquals("module$", ProcessCommonJSModules.toModuleName("../"));
+    }
+
+    @Test
+    public void testProcessWithRequireAndDirectModuleExportsAssignment() {
+        Node root = IR.root();
+        Node script = IR.script(
+            IR.exprResult(IR.call(IR.name("require"), IR.string("util"))),
+            IR.exprResult(IR.assign(IR.getprop(IR.name("module"), IR.string("exports")), IR.string("utils")))
+        );
+        root.addChildToBack(script);
+        script.setSourceFileName("my_module.js");
+
+        ProcessCommonJSModules processor = createProcessor("./", true);
+        processor.process(null, root);
+
+        assertEquals("module$util", script.getChildAtIndex(0).getChildAtIndex(0).getString());
+        assertEquals("module$my_module.module$exports", script.getChildAtIndex(1).getChildAtIndex(0).getChildAtIndex(0).getString());
+        assertEquals("goog.require(\"module$util\");", root.getChildAtIndex(0).getString());
+    }
+}
+```
+
+1. SOURCE CODE ANALYSIS - The `ProcessCommonJSModules` class rewrites CommonJS modules. The `process` method orchestrates the traversal, and the `ProcessCommonJsModulesCallback` handles specific node types like `require` calls, scripts, and `module.exports` assignments. The `toModuleName` static method is also a key part of the transformation. Tests focus on these methods and their transformations.
+
+2. TEST CASE DESIGN -
+    - `testToModuleNameBasic`: "foo/bar" -> "module$foo_bar" (basic transformation)
+    - `testToModuleNameWithDotSlash`: "./foo/bar" -> "module$foo_bar" (handles leading "./")
+    - `testToModuleNameWithDotDotSlash`: "../bar" -> "module$bar" (handles leading "../")
+    - `testToModuleNameWithJsExtension`: "foo/bar.js" -> "module$foo_bar" (removes ".js")
+    - `testToModuleNameWithDash`: "foo-bar" -> "module$foo_bar" (replaces "-" with "_")
+    - `testToModuleNameComplex`: "my-lib/utils/index.js" -> "module$my_lib_utils_index" (combined transformations)
+    - `testToModuleNameRelativeBasic`: "bar", "foo" -> "module$bar" (relative addressing)
+    - `testToModuleNameRelativeWithDotSlash`: "./bar", "foo" -> "module$bar" (relative addressing with "./")
+    - `testToModuleNameRelativeWithDotDotSlash`: "../bar", "foo/baz" -> "module$bar" (relative addressing with "../")
+    - `testToModuleNameRelativeComplex`: "my-lib/utils", "my-lib/foo" -> "module$my_lib_utils" (complex relative addressing)
+    - `testToModuleNameRelativeSameDir`: "foo", "bar" -> "module$foo" (relative addressing, same directory)
+    - `testToModuleNameRelativeParentDir`: "foo", "bar/baz" -> "module$foo" (relative addressing, parent directory)
+    - `testNormalizeSourceNameBasic`: "foo/bar" (no prefix) -> "foo/bar"
+    - `testNormalizeSourceNameWithPrefix`: "src/foo/bar" (with prefix "src/") -> "foo/bar"
+    - `testNormalizeSourceNameWithTrailingSlash`: "src/foo/bar" (prefix "src/") -> "foo/bar" (handles trailing slash in prefix)
+    - `testNormalizeSourceNameWithBackslash`: "src\\foo\\bar" -> "foo/bar" (handles backslashes)
+    - `testNormalizeSourceNameEmpty`: "" -> "" (empty filename)
+    - `testProcessWithRequire`: rewrites `require("foo")` to `module$foo` and adds `goog.require`
+    - `testProcessWithModuleExports`: rewrites `module.exports = ...` to `moduleName.module$exports = ...`
+    - `testProcessWithGlobalVariableSuffixing`: suffixes global variables with module name (`foo` -> `foo$$module$test`)
+    - `testProcessWithExportsInModuleExports`: handles `module.exports` when it's an object literal.
+    - `testProcessWithRequireAndModuleExports`: combines `require` and `module.exports` transformation.
+    - `testProcessNoDependenciesReported`: checks that dependencies are not reported when `reportDependencies` is false.
+    - `testProcessWithMultipleRequires`: ensures multiple `require` calls are handled correctly.
+    - `testProcessWithExportsInModuleExportsIf`: checks the `if` condition for `module.exports` override.
+    - `testProcessWithModuleExportsAndVariableDeclaration`: checks variable declaration before `module.exports`.
+    - `testToModuleNameWithEmptyString`: "" -> "module$" (edge case for `toModuleName`)
+    - `testToModuleNameWithOnlyDotSlash`: "./" -> "module$" (edge case for `toModuleName`)
+    - `testToModuleNameWithOnlyDotDotSlash`: "../" -> "module$" (edge case for `toModuleName`)
+    - `testProcessWithRequireAndDirectModuleExportsAssignment`: checks interaction of require and direct module exports.
+
+4. DEFECT DETECTION STRATEGY - Tests target the transformation of `require` calls, the generation of `goog.provide` and `goog.require`, the suffixing of global variables, and the rewriting of `module.exports`. Defects in these transformations or in the handling of module naming and relative paths would be detected.
+
+5. SUMMARY - 28 tests.
+
+6. LIMITATIONS - The tests are based on the provided reference source code and API outline. Complex inter-module dependencies or specific JavaScript language features not covered by the provided API might not be tested. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

@@ -1,0 +1,418 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.javascript.rhino.Node;
+
+public class CodeConsumerTest {
+
+    // Helper method to create a dummy CodeConsumer.
+    private CodeConsumer createDummyConsumer() {
+        return new CodeConsumer() {
+            private StringBuilder buffer = new StringBuilder();
+
+            @Override
+            char getLastChar() {
+                if (buffer.length() == 0) {
+                    return '\0'; // Null character as a default
+                }
+                return buffer.charAt(buffer.length() - 1);
+            }
+
+            @Override
+            void append(String str) {
+                buffer.append(str);
+            }
+
+            @Override
+            void startNewLine() {
+                buffer.append("\n");
+            }
+
+            @Override
+            void maybeCutLine() {
+                // No-op for dummy
+            }
+
+            @Override
+            void endLine() {
+                // No-op for dummy
+            }
+
+            @Override
+            void notePreferredLineBreak() {
+                // No-op for dummy
+            }
+
+            // Overriding other abstract/overridable methods to avoid compilation errors
+            // and to simplify the test by focusing on append and getLastChar.
+            @Override
+            void appendOp(String op, boolean binOp) {
+                append(op);
+            }
+
+            // Add dummy implementations for methods that are called internally by CodeConsumer methods
+            // that we want to test.
+            @Override
+            void maybeEndStatement() {
+                // This is a simplified version; in the real CodeConsumer, it handles
+                // statement completion logic. For testing specific append behavior,
+                // we can make it a no-op or add minimal logic if needed.
+                // For now, let's assume it just calls append.
+                if (statementNeedsEnded) {
+                    append(";");
+                    maybeLineBreak();
+                    endLine();
+                    statementNeedsEnded = false;
+                }
+                statementStarted = true;
+            }
+
+            @Override
+            void maybeCutLine() {
+                // no-op
+            }
+
+            @Override
+            void endLine() {
+                // no-op
+            }
+
+            @Override
+            void notePreferredLineBreak() {
+                // no-op
+            }
+
+            @Override
+            void add(String newcode) {
+                maybeEndStatement();
+
+                if (newcode.length() == 0) {
+                    return;
+                }
+
+                char c = newcode.charAt(0);
+                if ((isWordChar(c) || c == '\\') &&
+                    isWordChar(getLastChar())) {
+                    append(" ");
+                } else if (c == '/' && getLastChar() == '/') {
+                    append(" ");
+                }
+
+                append(newcode);
+            }
+        };
+    }
+
+    @Test
+    public void testAddIdentifierAppendsCorrectly() throws Exception {
+        CodeConsumer consumer = createDummyConsumer();
+        consumer.addIdentifier("test");
+        assertEquals("test", consumer.buffer.toString());
+    }
+
+    @Test
+    public void testAddIdentifierWithSpaceNeeded() throws Exception {
+        CodeConsumer consumer = createDummyConsumer();
+        consumer.append("abc");
+        consumer.addIdentifier("def");
+        assertEquals("abc def", consumer.buffer.toString());
+    }
+
+    @Test
+    public void testAddIdentifierWithNoSpaceNeeded() throws Exception {
+        CodeConsumer consumer = createDummyConsumer();
+        consumer.append("abc");
+        consumer.addIdentifier("123");
+        assertEquals("abc123", consumer.buffer.toString());
+    }
+
+    @Test
+    public void testAddIdentifierWithForwardSlash() throws Exception {
+        CodeConsumer consumer = createDummyConsumer();
+        consumer.append("a/");
+        consumer.addIdentifier("/b");
+        assertEquals("a/ /b", consumer.buffer.toString());
+    }
+
+    @Test
+    public void testAppendBlockStart() throws Exception {
+        CodeConsumer consumer = createDummyConsumer();
+        consumer.appendBlockStart();
+        assertEquals("{", consumer.buffer.toString());
+    }
+
+    @Test
+    public void testAppendBlockEnd() throws Exception {
+        CodeConsumer consumer = createDummyConsumer();
+        consumer.appendBlockEnd();
+        assertEquals("}", consumer.buffer.toString());
+    }
+
+    @Test
+    public void testBeginBlockAddsSemicolonIfNecessary() throws Exception {
+        CodeConsumer consumer = createDummyConsumer();
+        consumer.statementNeedsEnded = true;
+        consumer.beginBlock();
+        assertTrue(consumer.buffer.toString().startsWith(";"));
+        assertTrue(consumer.buffer.toString().endsWith("{"));
+    }
+
+    @Test
+    public void testBeginBlockWithoutSemicolon() throws Exception {
+        CodeConsumer consumer = createDummyConsumer();
+        consumer.statementNeedsEnded = false;
+        consumer.beginBlock();
+        assertEquals("{", consumer.buffer.toString());
+    }
+
+    @Test
+    public void testEndBlockAddsLineBreakIfRequested() throws Exception {
+        CodeConsumer consumer = createDummyConsumer();
+        consumer.endBlock(true);
+        assertTrue(consumer.buffer.toString().endsWith("\n"));
+        assertTrue(consumer.buffer.toString().startsWith("}"));
+    }
+
+    @Test
+    public void testEndBlockWithoutLineBreak() throws Exception {
+        CodeConsumer consumer = createDummyConsumer();
+        consumer.endBlock(false);
+        assertEquals("}", consumer.buffer.toString());
+    }
+
+    @Test
+    public void testListSeparatorAddsCommaAndLineBreak() throws Exception {
+        CodeConsumer consumer = createDummyConsumer();
+        consumer.listSeparator();
+        assertTrue(consumer.buffer.toString().startsWith(","));
+        assertTrue(consumer.buffer.toString().contains("\n"));
+    }
+
+    @Test
+    public void testEndStatementAddsSemicolonAndLineBreak() throws Exception {
+        CodeConsumer consumer = createDummyConsumer();
+        consumer.endStatement(true);
+        assertTrue(consumer.buffer.toString().startsWith(";"));
+        assertTrue(consumer.buffer.toString().contains("\n"));
+    }
+
+    @Test
+    public void testEndStatementWithoutSemicolonButStarted() throws Exception {
+        CodeConsumer consumer = createDummyConsumer();
+        consumer.statementStarted = true;
+        consumer.endStatement(false);
+        assertEquals("", consumer.buffer.toString());
+        assertTrue(consumer.statementNeedsEnded);
+    }
+
+    @Test
+    public void testEndStatementWithoutSemicolonAndNotStarted() throws Exception {
+        CodeConsumer consumer = createDummyConsumer();
+        consumer.statementStarted = false;
+        consumer.endStatement(false);
+        assertEquals("", consumer.buffer.toString());
+        assertFalse(consumer.statementNeedsEnded);
+    }
+
+    @Test
+    public void testMaybeEndStatementAddsSemicolonIfNecessary() throws Exception {
+        CodeConsumer consumer = createDummyConsumer();
+        consumer.statementNeedsEnded = true;
+        consumer.maybeEndStatement();
+        assertTrue(consumer.buffer.toString().startsWith(";"));
+        assertTrue(consumer.buffer.toString().contains("\n"));
+        assertFalse(consumer.statementNeedsEnded);
+        assertTrue(consumer.statementStarted);
+    }
+
+    @Test
+    public void testMaybeEndStatementDoesNothingIfNotNeeded() throws Exception {
+        CodeConsumer consumer = createDummyConsumer();
+        consumer.statementNeedsEnded = false;
+        consumer.maybeEndStatement();
+        assertEquals("", consumer.buffer.toString());
+        assertFalse(consumer.statementNeedsEnded);
+        assertTrue(consumer.statementStarted);
+    }
+
+    @Test
+    public void testEndFunctionSetsFlag() throws Exception {
+        CodeConsumer consumer = createDummyConsumer();
+        consumer.endFunction();
+        assertTrue(consumer.sawFunction);
+    }
+
+    @Test
+    public void testEndFunctionWithStatementContextAddsLineBreak() throws Exception {
+        CodeConsumer consumer = createDummyConsumer();
+        consumer.endFunction(true);
+        assertTrue(consumer.sawFunction);
+        assertTrue(consumer.buffer.toString().contains("\n"));
+    }
+
+    @Test
+    public void testBeginCaseBodyAddsColon() throws Exception {
+        CodeConsumer consumer = createDummyConsumer();
+        consumer.beginCaseBody();
+        assertEquals(":", consumer.buffer.toString());
+    }
+
+    @Test
+    public void testAddWithEmptyStringDoesNothing() throws Exception {
+        CodeConsumer consumer = createDummyConsumer();
+        consumer.append("existing");
+        consumer.add("");
+        assertEquals("existing", consumer.buffer.toString());
+    }
+
+    @Test
+    public void testAddNumberHandlesNegativeZero() throws Exception {
+        CodeConsumer consumer = createDummyConsumer();
+        consumer.addNumber(0.0);
+        // When 0.0 is appended, it's not negative zero.
+        assertEquals("0.0", consumer.buffer.toString());
+
+        consumer.buffer.setLength(0); // Clear buffer
+        consumer.addNumber(-0.0);
+        // The actual string representation of -0.0 is "0.0" or "-0.0" depending on context.
+        // String.valueOf(-0.0) produces "0.0". We check if it starts with "-".
+        // The reference implementation has special handling for negative zero.
+        // Let's simulate that logic:
+        // If isNegativeZero(x) is true, and prev is '-', add " ".
+        // Then add String.valueOf(x) which is "0.0".
+        // The check `(x < 0 || negativeZero) && prev == '-'` is critical.
+        // If we call addNumber(-0.0) without any preceding character, it should just be "0.0".
+        // If we call addNumber(-0.0) after a '-', it should add " 0.0".
+        // Let's test the direct addition of negative zero.
+        assertEquals("0.0", consumer.buffer.toString()); // String.valueOf(-0.0) is "0.0"
+    }
+
+    @Test
+    public void testAddNumberHandlesLargeIntegersWithoutExponent() throws Exception {
+        CodeConsumer consumer = createDummyConsumer();
+        consumer.addNumber(123.0);
+        assertEquals("123", consumer.buffer.toString());
+    }
+
+    @Test
+    public void testAddNumberHandlesLargeIntegersWithExponent() throws Exception {
+        CodeConsumer consumer = createDummyConsumer();
+        consumer.addNumber(1234567890123.0); // This will be treated as a long
+        // The code seems to convert to long if possible.
+        // If x >= 100, it tries to find an exponent.
+        // For 1234567890123.0, it's treated as a long.
+        // mantissa = 1234567890123, exp = 0.
+        // mantissa / 10 * 10^(exp+1) = 123456789012 * 10^1 = 1234567890120. This is not equal to value.
+        // So it should print Long.toString(value)
+        assertEquals("1234567890123", consumer.buffer.toString());
+    }
+
+    @Test
+    public void testAddNumberHandlesFloatingPoint() throws Exception {
+        CodeConsumer consumer = createDummyConsumer();
+        consumer.addNumber(1.5);
+        assertEquals("1.5", consumer.buffer.toString());
+    }
+
+    @Test
+    public void testAddNumberHandlesScientificNotation() throws Exception {
+        CodeConsumer consumer = createDummyConsumer();
+        consumer.addNumber(1.23e5); // 123000.0
+        // The code checks for (long)x == x. This is true for 123000.0.
+        // mantissa = 123000, exp = 0.
+        // mantissa/10*10^(exp+1) = 12300 * 10^1 = 123000. This is equal to value.
+        // mantissa becomes 12300, exp becomes 1.
+        // mantissa/10*10^(exp+1) = 1230 * 10^2 = 123000. This is equal to value.
+        // mantissa becomes 1230, exp becomes 2.
+        // mantissa/10*10^(exp+1) = 123 * 10^3 = 123000. This is equal to value.
+        // mantissa becomes 123, exp becomes 3.
+        // mantissa/10*10^(exp+1) = 12 * 10^4 = 120000. Not equal.
+        // So it should print "123E3".
+        assertEquals("123E3", consumer.buffer.toString());
+    }
+
+    @Test
+    public void testAddNumberHandlesNegativeValueWhenPreviousCharIsMinus() throws Exception {
+        CodeConsumer consumer = createDummyConsumer();
+        consumer.append("-");
+        consumer.addNumber(-5.0);
+        assertEquals("- -5", consumer.buffer.toString()); // Adds space before "-5"
+    }
+
+    @Test
+    public void testAddOpHandlesPlusPlusCase() throws Exception {
+        CodeConsumer consumer = createDummyConsumer();
+        consumer.append("+");
+        consumer.addOp("+", true);
+        assertEquals("+ +", consumer.buffer.toString());
+    }
+
+    @Test
+    public void testAddOpHandlesMinusMinusCase() throws Exception {
+        CodeConsumer consumer = createDummyConsumer();
+        consumer.append("-");
+        consumer.addOp("-", true);
+        assertEquals("- -", consumer.buffer.toString());
+    }
+
+    @Test
+    public void testAddOpHandlesArrowCase() throws Exception {
+        CodeConsumer consumer = createDummyConsumer();
+        consumer.append("-");
+        consumer.addOp(">", true);
+        assertEquals("- >", consumer.buffer.toString());
+    }
+
+    @Test
+    public void testAddOpHandlesWordCharAfterOp() throws Exception {
+        CodeConsumer consumer = createDummyConsumer();
+        consumer.append("instanceof");
+        consumer.addOp(" ", false); // Simulating a space after a keyword like instanceof
+        // The condition is `Character.isLetter(first) && isWordChar(prev)`
+        // Here, `first` is ' ' which is not a letter. So no space is added.
+        // Let's test with `typeof` and `+`.
+        consumer.buffer.setLength(0);
+        consumer.append("typeof");
+        consumer.addOp("+", true); // 't' is letter, 'f' is wordChar. Space needed.
+        assertEquals("typeof +", consumer.buffer.toString());
+    }
+}
+```
+
+1. SOURCE CODE ANALYSIS - The `CodeConsumer` abstract class and its concrete `append` and `getLastChar` abstract methods are the focus. Tests cover `addIdentifier`, `appendBlockStart`, `endBlock`, `endStatement`, `maybeEndStatement`, `addNumber`, and `addOp`.
+2. TEST CASE DESIGN -
+    - testAddIdentifierAppendsCorrectly: Input: "test", Expected: "test". Derived by direct `append`.
+    - testAddIdentifierWithSpaceNeeded: Input: "def", Previously: "abc", Expected: "abc def". Derived by `add` logic.
+    - testAddIdentifierWithNoSpaceNeeded: Input: "123", Previously: "abc", Expected: "abc123". Derived by `add` logic.
+    - testAddIdentifierWithForwardSlash: Input: "/b", Previously: "a/", Expected: "a/ /b". Derived by `add` logic for "//".
+    - testAppendBlockStart: Input: none, Expected: "{". Derived by `appendBlockStart`.
+    - testAppendBlockEnd: Input: none, Expected: "}". Derived by `appendBlockEnd`.
+    - testBeginBlockAddsSemicolonIfNecessary: Input: none, state: `statementNeedsEnded=true`, Expected: ";{". Derived by `beginBlock` logic.
+    - testBeginBlockWithoutSemicolon: Input: none, state: `statementNeedsEnded=false`, Expected: "{". Derived by `beginBlock` logic.
+    - testEndBlockAddsLineBreakIfRequested: Input: none, state: `shouldEndLine=true`, Expected: "}\n". Derived by `endBlock`.
+    - testEndBlockWithoutLineBreak: Input: none, state: `shouldEndLine=false`, Expected: "}". Derived by `endBlock`.
+    - testListSeparatorAddsCommaAndLineBreak: Input: none, Expected: ",\n". Derived by `listSeparator`.
+    - testEndStatementAddsSemicolonAndLineBreak: Input: true, Expected: ";\n". Derived by `endStatement(true)`.
+    - testEndStatementWithoutSemicolonButStarted: Input: false, state: `statementStarted=true`, Expected: "", `statementNeedsEnded=true`. Derived by `endStatement(false)`.
+    - testEndStatementWithoutSemicolonAndNotStarted: Input: false, state: `statementStarted=false`, Expected: "", `statementNeedsEnded=false`. Derived by `endStatement(false)`.
+    - testMaybeEndStatementAddsSemicolonIfNecessary: state: `statementNeedsEnded=true`, Expected: ";\n". Derived by `maybeEndStatement`.
+    - testMaybeEndStatementDoesNothingIfNotNeeded: state: `statementNeedsEnded=false`, Expected: "". Derived by `maybeEndStatement`.
+    - testEndFunctionSetsFlag: Input: none, Expected: `sawFunction=true`. Derived by `endFunction`.
+    - testEndFunctionWithStatementContextAddsLineBreak: Input: true, Expected: "\n". Derived by `endFunction(true)`.
+    - testBeginCaseBodyAddsColon: Input: none, Expected: ":". Derived by `beginCaseBody`.
+    - testAddWithEmptyStringDoesNothing: Input: "", Previously: "existing", Expected: "existing". Derived by `add` logic.
+    - testAddNumberHandlesNegativeZero: Input: 0.0 and -0.0, Expected: "0.0". Derived from `String.valueOf(0.0)`.
+    - testAddNumberHandlesLargeIntegersWithoutExponent: Input: 123.0, Expected: "123". Derived from `Long.toString`.
+    - testAddNumberHandlesLargeIntegersWithExponent: Input: 1234567890123.0, Expected: "1234567890123". Derived from `Long.toString` (exponent logic not triggered for this value).
+    - testAddNumberHandlesFloatingPoint: Input: 1.5, Expected: "1.5". Derived from `String.valueOf`.
+    - testAddNumberHandlesScientificNotation: Input: 1.23e5, Expected: "123E3". Derived from `addNumber` exponent logic.
+    - testAddNumberHandlesNegativeValueWhenPreviousCharIsMinus: Input: -5.0, Previously: "-", Expected: "- -5". Derived by `addNumber`'s space-adding logic for negative numbers.
+    - testAddOpHandlesPlusPlusCase: Input: "++", Previously: "+", Expected: "+ +". Derived by `addOp` logic.
+    - testAddOpHandlesMinusMinusCase: Input: "--", Previously: "-", Expected: "- -". Derived by `addOp` logic.
+    - testAddOpHandlesArrowCase: Input: ">", Previously: "-", Expected: "- >". Derived by `addOp` logic.
+    - testAddOpHandlesWordCharAfterOp: Input: "+", Previously: "typeof", Expected: "typeof +". Derived by `addOp` logic for operator after a word.
+4. DEFECT DETECTION STRATEGY - Tests cover string buffering, whitespace insertion for token separation, and special formatting rules for operators and numbers, targeting logic within `add`, `addOp`, and `addNumber`.
+5. SUMMARY - 30 tests.
+6. LIMITATIONS - The dummy `CodeConsumer` might not perfectly replicate all internal state transitions of a real implementation, particularly regarding line breaking and statement ending nuances. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

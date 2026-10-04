@@ -1,0 +1,421 @@
+package org.apache.commons.collections.buffer;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.io.Serializable;
+import java.util.AbstractCollection;
+import java.util.Iterator;
+import java.util.NoSuchElementException;
+import org.apache.commons.collections.Buffer;
+import org.apache.commons.collections.BufferUnderflowException;
+
+public class UnboundedFifoBufferTest {
+    // test methods (as many as the instructions ask for), each exactly in this form:
+    //     @Test
+    //     public void testWhatItChecks() throws Exception { ... }
+
+    @Test
+    public void testDefaultConstructor() {
+        UnboundedFifoBuffer buffer = new UnboundedFifoBuffer();
+        assertEquals(0, buffer.size());
+        assertTrue(buffer.isEmpty());
+    }
+
+    @Test
+    public void testConstructorWithPositiveSize() {
+        UnboundedFifoBuffer buffer = new UnboundedFifoBuffer(10);
+        assertEquals(0, buffer.size());
+        assertTrue(buffer.isEmpty());
+        assertEquals(11, buffer.buffer.length); // internal buffer size + 1
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testConstructorWithZeroSize() {
+        new UnboundedFifoBuffer(0);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testConstructorWithNegativeSize() {
+        new UnboundedFifoBuffer(-1);
+    }
+
+    @Test
+    public void testAddAndSize() {
+        UnboundedFifoBuffer buffer = new UnboundedFifoBuffer(2);
+        buffer.add("A");
+        assertEquals(1, buffer.size());
+        buffer.add("B");
+        assertEquals(2, buffer.size());
+        buffer.add("C");
+        assertEquals(3, buffer.size());
+    }
+
+    @Test
+    public void testAddAndIsEmpty() {
+        UnboundedFifoBuffer buffer = new UnboundedFifoBuffer();
+        assertTrue(buffer.isEmpty());
+        buffer.add("A");
+        assertFalse(buffer.isEmpty());
+    }
+
+    @Test(expected = NullPointerException.class)
+    public void testAddNull() {
+        UnboundedFifoBuffer buffer = new UnboundedFifoBuffer();
+        buffer.add(null);
+    }
+
+    @Test
+    public void testGetAndRemoveWhenEmpty() {
+        UnboundedFifoBuffer buffer = new UnboundedFifoBuffer();
+        try {
+            buffer.get();
+            fail("Expected BufferUnderflowException");
+        } catch (BufferUnderflowException e) {
+            // Expected
+        }
+        try {
+            buffer.remove();
+            fail("Expected BufferUnderflowException");
+        } catch (BufferUnderflowException e) {
+            // Expected
+        }
+    }
+
+    @Test
+    public void testGet() {
+        UnboundedFifoBuffer buffer = new UnboundedFifoBuffer(2);
+        buffer.add("A");
+        assertEquals("A", buffer.get());
+        buffer.add("B");
+        assertEquals("A", buffer.get()); // head should still be A
+    }
+
+    @Test
+    public void testRemove() {
+        UnboundedFifoBuffer buffer = new UnboundedFifoBuffer(2);
+        buffer.add("A");
+        buffer.add("B");
+        assertEquals("A", buffer.remove());
+        assertEquals(1, buffer.size());
+        assertEquals("B", buffer.remove());
+        assertEquals(0, buffer.size());
+    }
+
+    @Test
+    public void testAddRemoveCycle() {
+        UnboundedFifoBuffer buffer = new UnboundedFifoBuffer(2);
+        buffer.add("A");
+        buffer.add("B");
+        assertEquals("A", buffer.remove());
+        buffer.add("C");
+        assertEquals("B", buffer.remove());
+        buffer.add("D");
+        assertEquals("C", buffer.remove());
+        assertEquals("D", buffer.remove());
+        assertTrue(buffer.isEmpty());
+    }
+
+    @Test
+    public void testIteratorEmpty() {
+        UnboundedFifoBuffer buffer = new UnboundedFifoBuffer();
+        Iterator iterator = buffer.iterator();
+        assertFalse(iterator.hasNext());
+        try {
+            iterator.next();
+            fail("Expected NoSuchElementException");
+        } catch (NoSuchElementException e) {
+            // Expected
+        }
+    }
+
+    @Test
+    public void testIteratorBasic() {
+        UnboundedFifoBuffer buffer = new UnboundedFifoBuffer(2);
+        buffer.add("A");
+        buffer.add("B");
+        Iterator iterator = buffer.iterator();
+        assertTrue(iterator.hasNext());
+        assertEquals("A", iterator.next());
+        assertTrue(iterator.hasNext());
+        assertEquals("B", iterator.next());
+        assertFalse(iterator.hasNext());
+    }
+
+    @Test
+    public void testIteratorRemoveOne() {
+        UnboundedFifoBuffer buffer = new UnboundedFifoBuffer(2);
+        buffer.add("A");
+        buffer.add("B");
+        buffer.add("C");
+        Iterator iterator = buffer.iterator();
+        iterator.next(); // "A"
+        iterator.remove(); // remove "A"
+        assertEquals(2, buffer.size());
+        assertEquals("B", buffer.remove()); // remove "B" from buffer
+        assertEquals("C", buffer.remove()); // remove "C" from buffer
+    }
+
+    @Test
+    public void testIteratorRemoveMiddle() {
+        UnboundedFifoBuffer buffer = new UnboundedFifoBuffer(3);
+        buffer.add("A");
+        buffer.add("B");
+        buffer.add("C");
+        buffer.add("D");
+        Iterator iterator = buffer.iterator();
+        iterator.next(); // "A"
+        iterator.next(); // "B"
+        iterator.remove(); // remove "B"
+        assertEquals(3, buffer.size());
+        assertEquals("A", buffer.remove());
+        assertEquals("C", buffer.remove());
+        assertEquals("D", buffer.remove());
+    }
+
+    @Test
+    public void testIteratorRemoveLast() {
+        UnboundedFifoBuffer buffer = new UnboundedFifoBuffer(2);
+        buffer.add("A");
+        buffer.add("B");
+        buffer.add("C");
+        Iterator iterator = buffer.iterator();
+        iterator.next(); // "A"
+        iterator.next(); // "B"
+        iterator.next(); // "C"
+        iterator.remove(); // remove "C"
+        assertEquals(2, buffer.size());
+        assertEquals("A", buffer.remove());
+        assertEquals("B", buffer.remove());
+    }
+
+    @Test
+    public void testIteratorRemoveAll() {
+        UnboundedFifoBuffer buffer = new UnboundedFifoBuffer(2);
+        buffer.add("A");
+        buffer.add("B");
+        Iterator iterator = buffer.iterator();
+        while (iterator.hasNext()) {
+            iterator.next();
+            iterator.remove();
+        }
+        assertTrue(buffer.isEmpty());
+    }
+
+    @Test
+    public void testIteratorRemoveInvalid() {
+        UnboundedFifoBuffer buffer = new UnboundedFifoBuffer();
+        Iterator iterator = buffer.iterator();
+        try {
+            iterator.remove();
+            fail("Expected IllegalStateException");
+        } catch (IllegalStateException e) {
+            // Expected
+        }
+        buffer.add("A");
+        iterator = buffer.iterator();
+        iterator.next();
+        iterator.remove(); // valid remove
+        try {
+            iterator.remove();
+            fail("Expected IllegalStateException");
+        } catch (IllegalStateException e) {
+            // Expected
+        }
+    }
+
+    @Test
+    public void testGrowBuffer() {
+        UnboundedFifoBuffer buffer = new UnboundedFifoBuffer(1); // initial size 1, capacity 2
+        buffer.add("A"); // fills buffer[0]
+        buffer.add("B"); // fills buffer[1] (tail = 1, head = 0, size = 2)
+        // now buffer is full, size + 1 == buffer.length
+        // next add should trigger resize
+        buffer.add("C");
+        assertEquals(3, buffer.size());
+        assertEquals("A", buffer.remove());
+        assertEquals("B", buffer.remove());
+        assertEquals("C", buffer.remove());
+    }
+
+    @Test
+    public void testGrowBufferMultipleTimes() {
+        UnboundedFifoBuffer buffer = new UnboundedFifoBuffer(1);
+        for (int i = 0; i < 100; i++) {
+            buffer.add(i);
+        }
+        assertEquals(100, buffer.size());
+        for (int i = 0; i < 100; i++) {
+            assertEquals(i, buffer.remove());
+        }
+        assertTrue(buffer.isEmpty());
+    }
+
+    @Test
+    public void testSerialization() throws IOException, ClassNotFoundException {
+        UnboundedFifoBuffer buffer = new UnboundedFifoBuffer(3);
+        buffer.add("A");
+        buffer.add("B");
+
+        // Serialize
+        java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+        ObjectOutputStream oos = new ObjectOutputStream(baos);
+        oos.writeObject(buffer);
+        oos.close();
+
+        // Deserialize
+        java.io.ByteArrayInputStream bais = new java.io.ByteArrayInputStream(baos.toByteArray());
+        ObjectInputStream ois = new ObjectInputStream(bais);
+        UnboundedFifoBuffer deserializedBuffer = (UnboundedFifoBuffer) ois.readObject();
+        ois.close();
+
+        assertEquals(buffer.size(), deserializedBuffer.size());
+        assertEquals("A", deserializedBuffer.remove());
+        assertEquals("B", deserializedBuffer.remove());
+        assertTrue(deserializedBuffer.isEmpty());
+    }
+
+    @Test
+    public void testSerializationEmpty() throws IOException, ClassNotFoundException {
+        UnboundedFifoBuffer buffer = new UnboundedFifoBuffer(3);
+
+        // Serialize
+        java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+        ObjectOutputStream oos = new ObjectOutputStream(baos);
+        oos.writeObject(buffer);
+        oos.close();
+
+        // Deserialize
+        java.io.ByteArrayInputStream bais = new java.io.ByteArrayInputStream(baos.toByteArray());
+        ObjectInputStream ois = new ObjectInputStream(bais);
+        UnboundedFifoBuffer deserializedBuffer = (UnboundedFifoBuffer) ois.readObject();
+        ois.close();
+
+        assertEquals(0, deserializedBuffer.size());
+        assertTrue(deserializedBuffer.isEmpty());
+    }
+
+    @Test
+    public void testIteratorAfterSerialization() throws IOException, ClassNotFoundException {
+        UnboundedFifoBuffer buffer = new UnboundedFifoBuffer(3);
+        buffer.add("A");
+        buffer.add("B");
+
+        // Serialize
+        java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+        ObjectOutputStream oos = new ObjectOutputStream(baos);
+        oos.writeObject(buffer);
+        oos.close();
+
+        // Deserialize
+        java.io.ByteArrayInputStream bais = new java.io.ByteArrayInputStream(baos.toByteArray());
+        ObjectInputStream ois = new ObjectInputStream(bais);
+        UnboundedFifoBuffer deserializedBuffer = (UnboundedFifoBuffer) ois.readObject();
+        ois.close();
+
+        Iterator iterator = deserializedBuffer.iterator();
+        assertTrue(iterator.hasNext());
+        assertEquals("A", iterator.next());
+        assertTrue(iterator.hasNext());
+        assertEquals("B", iterator.next());
+        assertFalse(iterator.hasNext());
+    }
+
+    @Test
+    public void testIteratorRemoveAfterSerialization() throws IOException, ClassNotFoundException {
+        UnboundedFifoBuffer buffer = new UnboundedFifoBuffer(3);
+        buffer.add("A");
+        buffer.add("B");
+        buffer.add("C");
+
+        // Serialize
+        java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+        ObjectOutputStream oos = new ObjectOutputStream(baos);
+        oos.writeObject(buffer);
+        oos.close();
+
+        // Deserialize
+        java.io.ByteArrayInputStream bais = new java.io.ByteArrayInputStream(baos.toByteArray());
+        ObjectInputStream ois = new ObjectInputStream(bais);
+        UnboundedFifoBuffer deserializedBuffer = (UnboundedFifoBuffer) ois.readObject();
+        ois.close();
+
+        Iterator iterator = deserializedBuffer.iterator();
+        iterator.next(); // "A"
+        iterator.remove(); // remove "A"
+        assertEquals(2, deserializedBuffer.size());
+        assertEquals("B", deserializedBuffer.remove());
+        assertEquals("C", deserializedBuffer.remove());
+    }
+
+    @Test
+    public void testAddWhenFullAndWrapsAround() {
+        UnboundedFifoBuffer buffer = new UnboundedFifoBuffer(3); // capacity 4, size 3 initially
+        buffer.add("A");
+        buffer.add("B");
+        buffer.add("C");
+        // Head is at 0, tail is at 3. buffer.length is 4.
+        // buffer: [A, B, C, null]
+        // head = 0, tail = 3, size = 3
+
+        assertEquals("A", buffer.remove()); // head becomes 1
+        // buffer: [null, B, C, null]
+        // head = 1, tail = 3, size = 2
+
+        buffer.add("D"); // tail becomes 0, buffer[3] = D
+        // buffer: [D, B, C, null] (after wrapping)
+        // head = 1, tail = 0, size = 3
+        assertEquals(3, buffer.size());
+
+        assertEquals("B", buffer.remove()); // head becomes 2
+        assertEquals("C", buffer.remove()); // head becomes 3
+        assertEquals("D", buffer.remove()); // head becomes 0
+        assertTrue(buffer.isEmpty());
+    }
+
+    @Test
+    public void testAddFullThenRemoveAndAddAgain() {
+        UnboundedFifoBuffer buffer = new UnboundedFifoBuffer(2); // capacity 3
+        buffer.add("A");
+        buffer.add("B");
+        // head = 0, tail = 2, size = 2, buffer.length = 3
+        // buffer: [A, B, null]
+        assertEquals("A", buffer.remove()); // head becomes 1
+        // buffer: [null, B, null]
+        // head = 1, tail = 2, size = 1
+        buffer.add("C"); // tail becomes 0, buffer[2] = C
+        // buffer: [null, B, C]
+        // head = 1, tail = 0, size = 2
+        assertEquals(2, buffer.size());
+        assertEquals("B", buffer.remove()); // head becomes 2
+        assertEquals("C", buffer.remove()); // head becomes 0
+        assertTrue(buffer.isEmpty());
+    }
+
+    @Test
+    public void testAddTriggerResizeWhenFullAndWrapped() {
+        UnboundedFifoBuffer buffer = new UnboundedFifoBuffer(2); // capacity 3
+        buffer.add("A");
+        buffer.add("B");
+        // head = 0, tail = 2, size = 2, buffer.length = 3
+        // buffer: [A, B, null]
+        assertEquals("A", buffer.remove()); // head becomes 1
+        // buffer: [null, B, null]
+        // head = 1, tail = 2, size = 1
+        buffer.add("C"); // tail becomes 0, buffer[2] = C
+        // buffer: [null, B, C]
+        // head = 1, tail = 0, size = 2
+        // Now it's full with wrap around. size + 1 == buffer.length
+        buffer.add("D"); // should resize
+        // New buffer length = (3-1)*2 + 1 = 5
+        // tmp array: [B, C, D] (head 0, tail 3 in tmp)
+        // buffer = tmp; head = 0; tail = 3
+        assertEquals(3, buffer.size());
+        assertEquals("B", buffer.remove());
+        assertEquals("C", buffer.remove());
+        assertEquals("D", buffer.remove());
+        assertTrue(buffer.isEmpty());
+    }
+}

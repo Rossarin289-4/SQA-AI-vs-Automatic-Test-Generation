@@ -1,0 +1,264 @@
+I can cover archive stream state and record buffering through the visible API. I will avoid assuming undocumented entry internals or exact encoded archive bytes.
+
+```java
+package org.apache.commons.compress.archivers.tar;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.io.File;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.io.StringWriter;
+import java.nio.ByteBuffer;
+import java.util.HashMap;
+import java.util.Map;
+import org.apache.commons.compress.archivers.ArchiveEntry;
+import org.apache.commons.compress.archivers.ArchiveOutputStream;
+import org.apache.commons.compress.archivers.zip.ZipEncoding;
+import org.apache.commons.compress.archivers.zip.ZipEncodingHelper;
+import org.apache.commons.compress.utils.CharsetNames;
+import org.apache.commons.compress.utils.CountingOutputStream;
+
+public class TarArchiveOutputStreamTest {
+
+    @Test
+    public void testRecordSize() throws Exception {
+        TarArchiveOutputStream stream =
+                new TarArchiveOutputStream(new java.io.ByteArrayOutputStream());
+        assertEquals(512, stream.getRecordSize());
+    }
+
+    @Test
+    public void testEmptyStreamCanFinishAndWritesTwoRecords() throws Exception {
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        TarArchiveOutputStream stream = new TarArchiveOutputStream(bytes);
+        stream.finish();
+        assertEquals(1024L, stream.getBytesWritten());
+        assertEquals(1024, bytes.size());
+    }
+
+    @Test
+    public void testFinishIsNotRepeatable() throws Exception {
+        TarArchiveOutputStream stream =
+                new TarArchiveOutputStream(new java.io.ByteArrayOutputStream());
+        stream.finish();
+        try {
+            stream.finish();
+            fail("expected IOException");
+        } catch (IOException expected) {
+            assertEquals(1024L, stream.getBytesWritten());
+        }
+    }
+
+    @Test
+    public void testFinishRejectsAnUnclosedEntry() throws Exception {
+        TarArchiveOutputStream stream =
+                new TarArchiveOutputStream(new java.io.ByteArrayOutputStream());
+        TarArchiveEntry entry = new TarArchiveEntry("x");
+        entry.setSize(0);
+        stream.putArchiveEntry(entry);
+        try {
+            stream.finish();
+            fail("expected IOException");
+        } catch (IOException expected) {
+            assertEquals(512L, stream.getBytesWritten());
+        }
+    }
+
+    @Test
+    public void testCloseArchiveEntryRejectsMissingEntry() throws Exception {
+        TarArchiveOutputStream stream =
+                new TarArchiveOutputStream(new java.io.ByteArrayOutputStream());
+        try {
+            stream.closeArchiveEntry();
+            fail("expected IOException");
+        } catch (IOException expected) {
+            assertEquals(0L, stream.getBytesWritten());
+        }
+    }
+
+    @Test
+    public void testCloseEntryRejectsIncompleteContent() throws Exception {
+        TarArchiveOutputStream stream =
+                new TarArchiveOutputStream(new java.io.ByteArrayOutputStream());
+        TarArchiveEntry entry = new TarArchiveEntry("x");
+        entry.setSize(1);
+        stream.putArchiveEntry(entry);
+        try {
+            stream.closeArchiveEntry();
+            fail("expected IOException");
+        } catch (IOException expected) {
+            assertEquals(512L, stream.getBytesWritten());
+        }
+    }
+
+    @Test
+    public void testWritePastDeclaredSizeIsRejected() throws Exception {
+        TarArchiveOutputStream stream =
+                new TarArchiveOutputStream(new java.io.ByteArrayOutputStream());
+        TarArchiveEntry entry = new TarArchiveEntry("x");
+        entry.setSize(1);
+        stream.putArchiveEntry(entry);
+        try {
+            stream.write(new byte[] {1, 2}, 0, 2);
+            fail("expected IOException");
+        } catch (IOException expected) {
+            assertEquals(512L, stream.getBytesWritten());
+        }
+    }
+
+    @Test
+    public void testWritesExactlyDeclaredSizeAndClosesEntry() throws Exception {
+        TarArchiveOutputStream stream =
+                new TarArchiveOutputStream(new java.io.ByteArrayOutputStream());
+        TarArchiveEntry entry = new TarArchiveEntry("x");
+        entry.setSize(1);
+        stream.putArchiveEntry(entry);
+        stream.write(new byte[] {7}, 0, 1);
+        stream.closeArchiveEntry();
+        assertEquals(1024L, stream.getBytesWritten());
+    }
+
+    @Test
+    public void testWriteZeroBytesDoesNotOverrunEmptyEntry() throws Exception {
+        TarArchiveOutputStream stream =
+                new TarArchiveOutputStream(new java.io.ByteArrayOutputStream());
+        TarArchiveEntry entry = new TarArchiveEntry("x");
+        entry.setSize(0);
+        stream.putArchiveEntry(entry);
+        stream.write(new byte[0], 0, 0);
+        stream.closeArchiveEntry();
+        assertEquals(512L, stream.getBytesWritten());
+    }
+
+    @Test
+    public void testFragmentedWritesArePaddedOnEntryClose() throws Exception {
+        TarArchiveOutputStream stream =
+                new TarArchiveOutputStream(new java.io.ByteArrayOutputStream());
+        TarArchiveEntry entry = new TarArchiveEntry("x");
+        entry.setSize(3);
+        stream.putArchiveEntry(entry);
+        stream.write(new byte[] {1}, 0, 1);
+        stream.write(new byte[] {2, 3}, 0, 2);
+        stream.closeArchiveEntry();
+        assertEquals(1024L, stream.getBytesWritten());
+    }
+
+    @Test
+    public void testFullRecordWriteCountsHeaderAndData() throws Exception {
+        TarArchiveOutputStream stream =
+                new TarArchiveOutputStream(new java.io.ByteArrayOutputStream());
+        TarArchiveEntry entry = new TarArchiveEntry("x");
+        entry.setSize(512);
+        stream.putArchiveEntry(entry);
+        stream.write(new byte[512], 0, 512);
+        assertEquals(1024L, stream.getBytesWritten());
+        stream.closeArchiveEntry();
+    }
+
+    @Test
+    public void testRecordBoundaryWriteCountsOnlyCompletedRecord() throws Exception {
+        TarArchiveOutputStream stream =
+                new TarArchiveOutputStream(new java.io.ByteArrayOutputStream());
+        TarArchiveEntry entry = new TarArchiveEntry("x");
+        entry.setSize(513);
+        stream.putArchiveEntry(entry);
+        stream.write(new byte[512], 0, 512);
+        assertEquals(1024L, stream.getBytesWritten());
+        stream.write(new byte[1], 0, 1);
+        stream.closeArchiveEntry();
+        assertEquals(1536L, stream.getBytesWritten());
+    }
+
+    @Test
+    public void testGetCountMatchesBytesWrittenWhileWithinIntRange() throws Exception {
+        TarArchiveOutputStream stream =
+                new TarArchiveOutputStream(new java.io.ByteArrayOutputStream());
+        stream.finish();
+        assertEquals(1024, stream.getCount());
+        assertEquals(1024L, stream.getBytesWritten());
+    }
+
+    @Test
+    public void testCreateArchiveEntryUsesRequestedName() throws Exception {
+        TarArchiveOutputStream stream =
+                new TarArchiveOutputStream(new java.io.ByteArrayOutputStream());
+        ArchiveEntry entry = stream.createArchiveEntry(new File("unused"), "chosen");
+        assertEquals("chosen", entry.getName());
+    }
+
+    @Test
+    public void testCreateArchiveEntryRejectedAfterFinish() throws Exception {
+        TarArchiveOutputStream stream =
+                new TarArchiveOutputStream(new java.io.ByteArrayOutputStream());
+        stream.finish();
+        try {
+            stream.createArchiveEntry(new File("unused"), "chosen");
+            fail("expected IOException");
+        } catch (IOException expected) {
+            assertEquals(1024L, stream.getBytesWritten());
+        }
+    }
+
+    @Test
+    public void testPutEntryRejectedAfterFinish() throws Exception {
+        TarArchiveOutputStream stream =
+                new TarArchiveOutputStream(new java.io.ByteArrayOutputStream());
+        stream.finish();
+        try {
+            stream.putArchiveEntry(new TarArchiveEntry("x"));
+            fail("expected IOException");
+        } catch (IOException expected) {
+            assertEquals(1024L, stream.getBytesWritten());
+        }
+    }
+
+    @Test
+    public void testCloseFinishesEmptyArchive() throws Exception {
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        TarArchiveOutputStream stream = new TarArchiveOutputStream(bytes);
+        stream.close();
+        assertEquals(1024L, stream.getBytesWritten());
+        assertEquals(1024, bytes.size());
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+
+Tests exercise entry lifecycle, incomplete and oversized writes, record assembly and padding, finishing/closing, byte counts, and archive-entry creation.  
+The defaults and record size are checked where the source fixes them.
+
+### 2. TEST CASE DESIGN
+
+- `testRecordSize`: default constructor; expects 512 from `TarBuffer.DEFAULT_RCDSIZE` as used by the constructor.
+- `testEmptyStreamCanFinishAndWritesTwoRecords`: empty finish; expects two 512-byte EOF records.
+- `testFinishIsNotRepeatable`: finish twice; expects `IOException` on the second call and unchanged byte count.
+- `testFinishRejectsAnUnclosedEntry`: put a zero-size entry without closing it; finish rejects the open-entry state.
+- `testCloseArchiveEntryRejectsMissingEntry`: close without a current entry; expects `IOException` and no output.
+- `testCloseEntryRejectsIncompleteContent`: declare one byte but write none; close rejects the short content.
+- `testWritePastDeclaredSizeIsRejected`: declare one byte and request two; write rejects the overrun.
+- `testWritesExactlyDeclaredSizeAndClosesEntry`: one-byte entry; expected 512-byte header and 512-byte padded data record.
+- `testWriteZeroBytesDoesNotOverrunEmptyEntry`: zero-size entry and zero-length write; close succeeds with the header record only.
+- `testFragmentedWritesArePaddedOnEntryClose`: three bytes in fragments; close flushes one padded record after the header.
+- `testFullRecordWriteCountsHeaderAndData`: 512 data bytes; expects header plus full data record.
+- `testRecordBoundaryWriteCountsOnlyCompletedRecord`: after 512 bytes expects header plus one record; closing the final byte pads a second.
+- `testGetCountMatchesBytesWrittenWhileWithinIntRange`: after empty finish, both counts are 1024.
+- `testCreateArchiveEntryUsesRequestedName`: passes a name to the factory; checks the returned entry name.
+- `testCreateArchiveEntryRejectedAfterFinish`: finished state causes the factory to throw.
+- `testPutEntryRejectedAfterFinish`: finished state causes `putArchiveEntry` to throw.
+- `testCloseFinishesEmptyArchive`: close finishes the empty archive; expects two EOF records.
+
+### 4. DEFECT DETECTION STRATEGY
+
+The assertions pin entry-size enforcement, record completion/counting, and stream state transitions.  
+Actual detection depends on how a faulty version differs in those behaviors.
+
+### 5. SUMMARY
+
+16 independent tests.
+
+### 6. LIMITATIONS
+
+The supplied source does not expose the details of tar headers, so tests avoid checking their encoded fields.  
+Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

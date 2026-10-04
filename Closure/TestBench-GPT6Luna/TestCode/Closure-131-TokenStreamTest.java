@@ -1,0 +1,165 @@
+package com.google.javascript.rhino;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+
+public class TokenStreamTest {
+    @Test
+    public void testKeywordTwoCharacterBranches() throws Exception {
+        assertTrue(TokenStream.isKeyword("if"));
+        assertTrue(TokenStream.isKeyword("in"));
+        assertTrue(TokenStream.isKeyword("do"));
+        assertFalse(TokenStream.isKeyword("of"));
+    }
+
+    @Test
+    public void testKeywordThreeCharacterBranches() throws Exception {
+        assertTrue(TokenStream.isKeyword("for"));
+        assertTrue(TokenStream.isKeyword("int"));
+        assertTrue(TokenStream.isKeyword("new"));
+        assertTrue(TokenStream.isKeyword("try"));
+        assertTrue(TokenStream.isKeyword("var"));
+        assertFalse(TokenStream.isKeyword("foo"));
+    }
+
+    @Test
+    public void testKeywordFourCharacterCompleteMatches() throws Exception {
+        assertTrue(TokenStream.isKeyword("case"));
+        assertTrue(TokenStream.isKeyword("else"));
+        assertTrue(TokenStream.isKeyword("enum"));
+        assertTrue(TokenStream.isKeyword("this"));
+        assertTrue(TokenStream.isKeyword("true"));
+        assertFalse(TokenStream.isKeyword("care"));
+    }
+
+    @Test
+    public void testKeywordFourCharacterPartialCandidates() throws Exception {
+        assertTrue(TokenStream.isKeyword("byte"));
+        assertTrue(TokenStream.isKeyword("goto"));
+        assertTrue(TokenStream.isKeyword("long"));
+        assertTrue(TokenStream.isKeyword("null"));
+        assertTrue(TokenStream.isKeyword("void"));
+        assertTrue(TokenStream.isKeyword("with"));
+        assertFalse(TokenStream.isKeyword("bxyz"));
+        assertFalse(TokenStream.isKeyword("nulp"));
+    }
+
+    @Test
+    public void testKeywordFiveCharacterPartialCandidates() throws Exception {
+        assertTrue(TokenStream.isKeyword("class"));
+        assertTrue(TokenStream.isKeyword("break"));
+        assertTrue(TokenStream.isKeyword("while"));
+        assertTrue(TokenStream.isKeyword("false"));
+        assertTrue(TokenStream.isKeyword("const"));
+        assertTrue(TokenStream.isKeyword("final"));
+        assertTrue(TokenStream.isKeyword("float"));
+        assertTrue(TokenStream.isKeyword("short"));
+        assertTrue(TokenStream.isKeyword("super"));
+        assertTrue(TokenStream.isKeyword("throw"));
+        assertTrue(TokenStream.isKeyword("catch"));
+        assertFalse(TokenStream.isKeyword("clasp"));
+    }
+
+    @Test
+    public void testKeywordSixCharacterPartialCandidates() throws Exception {
+        assertTrue(TokenStream.isKeyword("native"));
+        assertTrue(TokenStream.isKeyword("delete"));
+        assertTrue(TokenStream.isKeyword("return"));
+        assertTrue(TokenStream.isKeyword("throws"));
+        assertTrue(TokenStream.isKeyword("import"));
+        assertTrue(TokenStream.isKeyword("double"));
+        assertTrue(TokenStream.isKeyword("static"));
+        assertTrue(TokenStream.isKeyword("public"));
+        assertTrue(TokenStream.isKeyword("switch"));
+        assertTrue(TokenStream.isKeyword("export"));
+        assertTrue(TokenStream.isKeyword("typeof"));
+        assertFalse(TokenStream.isKeyword("nativx"));
+    }
+
+    @Test
+    public void testKeywordSevenCharacterPartialCandidates() throws Exception {
+        assertTrue(TokenStream.isKeyword("package"));
+        assertTrue(TokenStream.isKeyword("default"));
+        assertTrue(TokenStream.isKeyword("finally"));
+        assertTrue(TokenStream.isKeyword("boolean"));
+        assertTrue(TokenStream.isKeyword("private"));
+        assertTrue(TokenStream.isKeyword("extends"));
+        assertFalse(TokenStream.isKeyword("packagx"));
+    }
+
+    @Test
+    public void testKeywordEightAndNineCharacterCandidates() throws Exception {
+        assertTrue(TokenStream.isKeyword("abstract"));
+        assertTrue(TokenStream.isKeyword("continue"));
+        assertTrue(TokenStream.isKeyword("debugger"));
+        assertTrue(TokenStream.isKeyword("function"));
+        assertTrue(TokenStream.isKeyword("volatile"));
+        assertTrue(TokenStream.isKeyword("interface"));
+        assertTrue(TokenStream.isKeyword("protected"));
+        assertTrue(TokenStream.isKeyword("transient"));
+        assertFalse(TokenStream.isKeyword("abstractx"));
+    }
+
+    @Test
+    public void testKeywordTenAndTwelveCharacterCandidates() throws Exception {
+        assertTrue(TokenStream.isKeyword("implements"));
+        assertTrue(TokenStream.isKeyword("instanceof"));
+        assertTrue(TokenStream.isKeyword("synchronized"));
+        assertFalse(TokenStream.isKeyword("synchronize"));
+    }
+
+    @Test
+    public void testKeywordExactComparisonAndLengths() throws Exception {
+        assertTrue(TokenStream.isKeyword("if"));
+        assertFalse(TokenStream.isKeyword("IF"));
+        assertFalse(TokenStream.isKeyword("iff"));
+        assertFalse(TokenStream.isKeyword(""));
+        assertFalse(TokenStream.isKeyword("a"));
+    }
+
+    @Test
+    public void testIdentifierEmptyAndInvalidStarts() throws Exception {
+        assertFalse(TokenStream.isJSIdentifier(""));
+        assertFalse(TokenStream.isJSIdentifier("1abc"));
+        assertFalse(TokenStream.isJSIdentifier("-abc"));
+        assertFalse(TokenStream.isJSIdentifier(" abc"));
+    }
+
+    @Test
+    public void testIdentifierAsciiAndUnicodeStarts() throws Exception {
+        assertTrue(TokenStream.isJSIdentifier("name"));
+        assertTrue(TokenStream.isJSIdentifier("_name"));
+        assertTrue(TokenStream.isJSIdentifier("$name"));
+        assertTrue(TokenStream.isJSIdentifier("\u00e9"));
+    }
+
+    @Test
+    public void testIdentifierValidParts() throws Exception {
+        assertTrue(TokenStream.isJSIdentifier("a1"));
+        assertTrue(TokenStream.isJSIdentifier("a_b"));
+        assertTrue(TokenStream.isJSIdentifier("a$b"));
+        assertTrue(TokenStream.isJSIdentifier("a\u00e9"));
+    }
+
+    @Test
+    public void testIdentifierInvalidParts() throws Exception {
+        assertFalse(TokenStream.isJSIdentifier("a-b"));
+        assertFalse(TokenStream.isJSIdentifier("a b"));
+        assertFalse(TokenStream.isJSIdentifier("a."));
+    }
+
+    @Test
+    public void testIdentifierIgnorableCharacterAtStart() throws Exception {
+        assertFalse(TokenStream.isJSIdentifier("\u0000a"));
+    }
+
+    @Test
+    public void testIdentifierIgnorableCharacterAfterStart() throws Exception {
+        assertFalse(TokenStream.isJSIdentifier("a\u0000b"));
+    }
+
+    @Test
+    public void testIdentifierOneCharacter() throws Exception {
+        assertTrue(TokenStream.isJSIdentifier("z"));
+    }
+}

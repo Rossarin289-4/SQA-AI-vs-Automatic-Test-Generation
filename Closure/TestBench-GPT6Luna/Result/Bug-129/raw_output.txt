@@ -1,0 +1,158 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Preconditions;
+import com.google.javascript.rhino.IR;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+
+public class PrepareAstTest {
+    @Test
+    public void testShouldTraverseObjectLiteral() throws Exception {
+        PrepareAst.PrepareAnnotations callback =
+                new PrepareAst.PrepareAnnotations();
+        Node object = new Node(Token.OBJECTLIT);
+        assertTrue(callback.shouldTraverse(null, object, null));
+    }
+
+    @Test
+    public void testShouldTraverseNonObjectLiteral() throws Exception {
+        PrepareAst.PrepareAnnotations callback =
+                new PrepareAst.PrepareAnnotations();
+        Node name = Node.newString(Token.NAME, "x");
+        assertTrue(callback.shouldTraverse(null, name, null));
+    }
+
+    @Test
+    public void testFreeCallIsAnnotated() throws Exception {
+        PrepareAst.PrepareAnnotations callback =
+                new PrepareAst.PrepareAnnotations();
+        Node callee = Node.newString(Token.NAME, "f");
+        Node call = new Node(Token.CALL, callee);
+        callback.visit(null, call, null);
+        assertTrue(call.getBooleanProp(Node.FREE_CALL));
+    }
+
+    @Test
+    public void testPropertyCallIsNotFree() throws Exception {
+        PrepareAst.PrepareAnnotations callback =
+                new PrepareAst.PrepareAnnotations();
+        Node receiver = Node.newString(Token.NAME, "o");
+        Node property = Node.newString(Token.STRING, "m");
+        Node callee = new Node(Token.GETPROP, receiver, property);
+        Node call = new Node(Token.CALL, callee);
+        callback.visit(null, call, null);
+        assertFalse(call.getBooleanProp(Node.FREE_CALL));
+    }
+
+    @Test
+    public void testDirectEvalIsAnnotated() throws Exception {
+        PrepareAst.PrepareAnnotations callback =
+                new PrepareAst.PrepareAnnotations();
+        Node eval = Node.newString(Token.NAME, "eval");
+        Node call = new Node(Token.CALL, eval);
+        callback.visit(null, call, null);
+        assertTrue(eval.getBooleanProp(Node.DIRECT_EVAL));
+    }
+
+    @Test
+    public void testOtherFreeCallIsNotDirectEval() throws Exception {
+        PrepareAst.PrepareAnnotations callback =
+                new PrepareAst.PrepareAnnotations();
+        Node callee = Node.newString(Token.NAME, "f");
+        Node call = new Node(Token.CALL, callee);
+        callback.visit(null, call, null);
+        assertFalse(callee.getBooleanProp(Node.DIRECT_EVAL));
+    }
+
+    @Test
+    public void testCallThroughCastIsAnnotated() throws Exception {
+        PrepareAst.PrepareAnnotations callback =
+                new PrepareAst.PrepareAnnotations();
+        Node name = Node.newString(Token.NAME, "f");
+        Node cast = new Node(Token.CAST, name);
+        Node call = new Node(Token.CALL, cast);
+        callback.visit(null, call, null);
+        assertTrue(call.getBooleanProp(Node.FREE_CALL));
+    }
+
+    @Test
+    public void testCallThroughCastToEvalIsDirectEval() throws Exception {
+        PrepareAst.PrepareAnnotations callback =
+                new PrepareAst.PrepareAnnotations();
+        Node eval = Node.newString(Token.NAME, "eval");
+        Node cast = new Node(Token.CAST, eval);
+        Node call = new Node(Token.CALL, cast);
+        callback.visit(null, call, null);
+        assertTrue(eval.getBooleanProp(Node.DIRECT_EVAL));
+    }
+
+    @Test
+    public void testCommaCallIsFreeAndNotDirectEval() throws Exception {
+        PrepareAst.PrepareAnnotations callback =
+                new PrepareAst.PrepareAnnotations();
+        Node comma = new Node(Token.COMMA,
+                Node.newNumber(0), Node.newString(Token.NAME, "eval"));
+        Node call = new Node(Token.CALL, comma);
+        callback.visit(null, call, null);
+        assertTrue(call.getBooleanProp(Node.FREE_CALL));
+        assertFalse(comma.getFirstChild().getNext()
+                .getBooleanProp(Node.DIRECT_EVAL));
+    }
+
+    @Test
+    public void testVisitNonCallLeavesFreeCallUnset() throws Exception {
+        PrepareAst.PrepareAnnotations callback =
+                new PrepareAst.PrepareAnnotations();
+        Node name = Node.newString(Token.NAME, "f");
+        callback.visit(null, name, null);
+        assertFalse(name.getBooleanProp(Node.FREE_CALL));
+    }
+
+    @Test
+    public void testProcessWithNullRootsReturnsNormally() throws Exception {
+        PrepareAst pass = new PrepareAst(null);
+        pass.process(null, null);
+        assertTrue(true);
+    }
+
+    @Test
+    public void testCheckOnlyProcessWithSimpleRootReturnsNormally()
+            throws Exception {
+        PrepareAst pass = new PrepareAst(null, true);
+        Node root = new Node(Token.SCRIPT);
+        pass.process(null, root);
+        assertEquals(Token.SCRIPT, root.getType());
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+Method selection is exploratory because no target method is specified. Tests exercise `PrepareAnnotations.shouldTraverse` and `visit`, including call classification and cast handling, plus the check-only `process` path.
+The normal `process` path requires a compiler for traversal and is not exercised.
+
+### 2. TEST CASE DESIGN
+- `testShouldTraverseObjectLiteral`: object-literal node; expected `true`, directly returned by `shouldTraverse`.
+- `testShouldTraverseNonObjectLiteral`: name node; expected `true`, also the callback’s unconditional return.
+- `testFreeCallIsAnnotated`: name callee; expected FREE_CALL `true` because it is not a property access.
+- `testPropertyCallIsNotFree`: GETPROP callee; expected FREE_CALL `false` because `NodeUtil.isGet` recognizes it as a property access.
+- `testDirectEvalIsAnnotated`: `eval` name callee; expected DIRECT_EVAL `true` by the name and string checks.
+- `testOtherFreeCallIsNotDirectEval`: `f` name callee; expected DIRECT_EVAL `false` because the name is not `eval`.
+- `testCallThroughCastIsAnnotated`: cast wrapping a name; expected FREE_CALL `true` after the cast is unwrapped.
+- `testCallThroughCastToEvalIsDirectEval`: cast wrapping `eval`; expected DIRECT_EVAL `true` after unwrapping.
+- `testCommaCallIsFreeAndNotDirectEval`: comma expression callee; expected FREE_CALL `true` and no direct-eval annotation because the callee itself is not a name.
+- `testVisitNonCallLeavesFreeCallUnset`: name node; expected the default false property because `visit` only handles CALL and FUNCTION.
+- `testProcessWithNullRootsReturnsNormally`: null roots in normal mode; expected normal return because both traversal conditions are skipped.
+- `testCheckOnlyProcessWithSimpleRootReturnsNormally`: empty SCRIPT in check-only mode; expected its type unchanged because normalization changes no node type here.
+
+### 4. DEFECT DETECTION STRATEGY
+The tests pin the callback’s free-call and direct-eval classification, its cast-unwrapping behavior, and basic processing paths. No detection claim is made.
+
+### 5. SUMMARY
+12 tests.
+
+### 6. LIMITATIONS
+The normal processing traversal cannot be meaningfully tested without constructing a compiler instance, and no concrete compiler subclass is supplied.  
+Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

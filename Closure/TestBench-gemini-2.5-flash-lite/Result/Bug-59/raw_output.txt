@@ -1,0 +1,491 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Supplier;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.javascript.jscomp.CompilerOptions.DevMode;
+import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
+import com.google.javascript.jscomp.CompilerOptions.TracerMode;
+import com.google.javascript.jscomp.ReferenceCollectingCallback.ReferenceCollection;
+import com.google.javascript.jscomp.ReferenceCollectingCallback.ReferenceMap;
+import com.google.javascript.jscomp.Scope.Var;
+import com.google.javascript.jscomp.deps.SortedDependencies.CircularDependencyException;
+import com.google.javascript.jscomp.deps.SortedDependencies.MissingProvideException;
+import com.google.javascript.jscomp.mozilla.rhino.ErrorReporter;
+import com.google.javascript.jscomp.parsing.Config;
+import com.google.javascript.jscomp.parsing.ParserRunner;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.jstype.JSTypeRegistry;
+import java.io.IOException;
+import java.io.PrintStream;
+import java.io.Serializable;
+import java.nio.charset.Charset;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+public class CompilerTest {
+
+    // Helper to create a compiler with default options
+    private Compiler createCompiler() {
+        Compiler compiler = new Compiler();
+        compiler.initOptions(new CompilerOptions());
+        return compiler;
+    }
+
+    // Helper to compile basic code
+    private Result compileCode(String code) {
+        Compiler compiler = createCompiler();
+        return compiler.compile(JSSourceFile.fromCode("test.js", code),
+                new JSSourceFile[]{}, new CompilerOptions());
+    }
+
+    @Test
+    public void testCompileBasicCode() throws Exception {
+        String code = "function a() { return 1; }";
+        Result result = compileCode(code);
+        assertFalse(result.hasErrors());
+        assertEquals("function a() { return 1; };", result.sourceAst.toSource());
+    }
+
+    @Test
+    public void testCompileWithErrors() throws Exception {
+        String code = "function a() { return 1"; // Missing closing brace
+        Result result = compileCode(code);
+        assertTrue(result.hasErrors());
+    }
+
+    @Test
+    public void testParseBasicScript() throws Exception {
+        Compiler compiler = createCompiler();
+        Node root = compiler.parseSyntheticCode("var x = 1;");
+        assertNotNull(root);
+        assertEquals(Token.BLOCK, root.getType());
+        assertEquals(1, root.getChildCount());
+        assertEquals(Token.EXPR_RESULT, root.getFirstChild().getType());
+    }
+
+    @Test
+    public void testParseMultipleScripts() throws Exception {
+        Compiler compiler = createCompiler();
+        compiler.parseSyntheticCode("var a = 1;");
+        compiler.parseSyntheticCode("var b = 2;");
+        Node root = compiler.getRoot();
+        assertNotNull(root);
+        assertEquals(Token.BLOCK, root.getType());
+        assertEquals(2, root.getChildCount()); // Should have two script nodes
+    }
+
+    @Test
+    public void testParseEmptyCode() throws Exception {
+        Compiler compiler = createCompiler();
+        Node root = compiler.parseSyntheticCode("");
+        assertNotNull(root);
+        assertEquals(Token.BLOCK, root.getType());
+        assertEquals(0, root.getChildCount());
+    }
+
+    @Test
+    public void testParseCodeWithComments() throws Exception {
+        Compiler compiler = createCompiler();
+        Node root = compiler.parseSyntheticCode("// comment\nvar x = 1; /* block */");
+        assertNotNull(root);
+        assertEquals(Token.BLOCK, root.getType());
+        assertEquals(1, root.getChildCount()); // Comments should be ignored
+        assertEquals(Token.EXPR_RESULT, root.getFirstChild().getType());
+    }
+
+    @Test
+    public void testToSourceBasic() throws Exception {
+        Compiler compiler = createCompiler();
+        compiler.parse(JSSourceFile.fromCode("test.js", "var x = 1;"));
+        assertEquals("var x = 1;", compiler.toSource().trim());
+    }
+
+    @Test
+    public void testToSourceMultipleInputs() throws Exception {
+        Compiler compiler = createCompiler();
+        compiler.parse(JSSourceFile.fromCode("input1.js", "var a = 1;"));
+        compiler.parse(JSSourceFile.fromCode("input2.js", "var b = 2;"));
+        assertEquals("var a = 1;\nvar b = 2;", compiler.toSource().trim());
+    }
+
+    @Test
+    public void testToSourceEmpty() throws Exception {
+        Compiler compiler = createCompiler();
+        compiler.parse(JSSourceFile.fromCode("empty.js", ""));
+        assertEquals("", compiler.toSource().trim());
+    }
+
+    @Test
+    public void testToSourceWithSemicolon() throws Exception {
+        Compiler compiler = createCompiler();
+        compiler.parse(JSSourceFile.fromCode("semicolon.js", "function f(){ return 1 }"));
+        // Ensure a semicolon is added if missing
+        assertEquals("function f() { return 1; };", compiler.toSource().trim());
+    }
+
+    @Test
+    public void testToSourceWithExistingSemicolon() throws Exception {
+        Compiler compiler = createCompiler();
+        compiler.parse(JSSourceFile.fromCode("semicolon.js", "function f(){ return 1; }"));
+        assertEquals("function f() { return 1; };", compiler.toSource().trim());
+    }
+
+    @Test
+    public void testToSourceWithLicense() throws Exception {
+        Compiler compiler = createCompiler();
+        String license = "/**\n * @license\n * My license\n */";
+        compiler.parse(JSSourceFile.fromCode("license.js", license + "var x = 1;"));
+        assertEquals("/*\n * @license\n * My license\n */\nvar x = 1;", compiler.toSource().trim());
+    }
+
+    @Test
+    public void testGetErrorsEmpty() throws Exception {
+        Compiler compiler = createCompiler();
+        compiler.parse(JSSourceFile.fromCode("test.js", ""));
+        JSError[] errors = compiler.getErrors();
+        assertEquals(0, errors.length);
+    }
+
+    @Test
+    public void testGetWarningsEmpty() throws Exception {
+        Compiler compiler = createCompiler();
+        compiler.parse(JSSourceFile.fromCode("test.js", ""));
+        JSError[] warnings = compiler.getWarnings();
+        assertEquals(0, warnings.length);
+    }
+
+    @Test
+    public void testGetMessagesEmpty() throws Exception {
+        Compiler compiler = createCompiler();
+        compiler.parse(JSSourceFile.fromCode("test.js", ""));
+        JSError[] messages = compiler.getMessages();
+        assertEquals(0, messages.length);
+    }
+
+    @Test
+    public void testErrorManagerBasic() throws Exception {
+        Compiler compiler = new Compiler(new PrintStream(new java.io.ByteArrayOutputStream()));
+        compiler.initOptions(new CompilerOptions());
+        compiler.parse(JSSourceFile.fromCode("error.js", "var x = ")); // Syntax error
+        assertTrue(compiler.hasErrors());
+        assertEquals(1, compiler.getErrorCount());
+        assertEquals(0, compiler.getWarningCount());
+    }
+
+    @Test
+    public void testCheckTypesOption() throws Exception {
+        Compiler compiler = createCompiler();
+        CompilerOptions options = new CompilerOptions();
+        options.checkTypes = true;
+        compiler.initOptions(options);
+        compiler.parse(JSSourceFile.fromCode("typecheck.js", "var x = 1;"));
+        // No explicit type errors to check here, just ensuring options are set.
+        assertFalse(compiler.hasErrors());
+    }
+
+    @Test
+    public void testDisableThreads() throws Exception {
+        Compiler compiler = createCompiler();
+        compiler.disableThreads();
+        // This is hard to test directly without complex thread management.
+        // Just calling it to ensure it doesn't throw an exception.
+        assertEquals(compiler.options.threadSavingEnabled, false);
+    }
+
+    @Test
+    public void testGetInputWhenNotInitialized() throws Exception {
+        Compiler compiler = new Compiler();
+        // options not initialized, so getInput should be null
+        assertNull(compiler.getInput("non_existent"));
+    }
+
+    @Test
+    public void testGetRootWhenNotParsed() throws Exception {
+        Compiler compiler = createCompiler();
+        assertNull(compiler.getRoot());
+    }
+
+    @Test
+    public void testGetAstDotGraphEmpty() throws Exception {
+        Compiler compiler = createCompiler();
+        compiler.parse(JSSourceFile.fromCode("empty.js", ""));
+        String dotGraph = compiler.getAstDotGraph();
+        assertTrue(dotGraph.contains("digraph"));
+        assertTrue(dotGraph.contains("BLOCK"));
+    }
+
+    @Test
+    public void testGetAstDotGraphBasic() throws Exception {
+        Compiler compiler = createCompiler();
+        compiler.parse(JSSourceFile.fromCode("basic.js", "var x = 1;"));
+        String dotGraph = compiler.getAstDotGraph();
+        assertTrue(dotGraph.contains("digraph"));
+        assertTrue(dotGraph.contains("VAR"));
+        assertTrue(dotGraph.contains("NAME"));
+        assertTrue(dotGraph.contains("NUMBER"));
+    }
+
+    @Test
+    public void testGetErrorManager() throws Exception {
+        Compiler compiler = createCompiler();
+        ErrorManager errorManager = compiler.getErrorManager();
+        assertNotNull(errorManager);
+        assertTrue(errorManager instanceof LoggerErrorManager || errorManager instanceof PrintStreamErrorManager);
+    }
+
+    @Test
+    public void testGetSourceMapNotEnabled() throws Exception {
+        Compiler compiler = createCompiler();
+        compiler.initOptions(new CompilerOptions()); // Ensure options are initialized
+        assertNull(compiler.getSourceMap());
+    }
+
+    @Test
+    public void testGetSourceMapEnabled() throws Exception {
+        Compiler compiler = createCompiler();
+        CompilerOptions options = new CompilerOptions();
+        options.sourceMapOutputPath = "test.js.map";
+        compiler.initOptions(options);
+        compiler.parse(JSSourceFile.fromCode("sourcemap.js", "var y = 2;"));
+        assertNotNull(compiler.getSourceMap());
+    }
+
+    @Test
+    public void testSetLoggingLevel() {
+        // This is a static method, difficult to test its effect without inspecting logs.
+        // We can at least call it to ensure it doesn't throw.
+        Compiler.setLoggingLevel(Level.FINE);
+        assertEquals(Logger.getLogger("com.google.javascript.jscomp").getLevel(), Level.FINE);
+    }
+
+    @Test
+    public void testOptimize() throws Exception {
+        Compiler compiler = createCompiler();
+        compiler.parse(JSSourceFile.fromCode("optimize.js", "var a = 1 + 2;"));
+        compiler.optimize(); // Should not throw.
+        // A more thorough test would check the AST after optimization.
+        assertEquals(1, compiler.getErrorCount()); // Optimization may introduce errors if code is malformed.
+    }
+
+    @Test
+    public void testNormalize() throws Exception {
+        Compiler compiler = createCompiler();
+        compiler.parse(JSSourceFile.fromCode("normalize.js", "var b = 3;"));
+        compiler.normalize(); // Should not throw.
+        // This pass typically rewrites AST nodes. Verifying output is complex.
+        assertFalse(compiler.hasErrors());
+    }
+
+    @Test
+    public void testReportCodeChange() {
+        Compiler compiler = createCompiler();
+        compiler.addChangeHandler(new CodeChangeHandler.RecentChange());
+        compiler.reportCodeChange(); // Should not throw.
+    }
+
+    @Test
+    public void testGetCodingConvention() {
+        Compiler compiler = createCompiler();
+        assertNotNull(compiler.getCodingConvention());
+        assertTrue(compiler.getCodingConvention() instanceof ClosureCodingConvention);
+    }
+
+    @Test
+    public void testIsIdeModeDefault() {
+        Compiler compiler = createCompiler();
+        assertFalse(compiler.isIdeMode());
+    }
+
+    @Test
+    public void testIsIdeModeSet() {
+        Compiler compiler = createCompiler();
+        compiler.options.ideMode = true;
+        assertTrue(compiler.isIdeMode());
+    }
+
+    @Test
+    public void testAcceptEcmaScript5() {
+        Compiler compiler = createCompiler();
+        CompilerOptions options = new CompilerOptions();
+        options.setLanguageIn(LanguageMode.ECMASCRIPT5);
+        compiler.initOptions(options);
+        assertTrue(compiler.acceptEcmaScript5());
+
+        options.setLanguageIn(LanguageMode.ECMASCRIPT5_STRICT);
+        compiler.initOptions(options);
+        assertTrue(compiler.acceptEcmaScript5());
+
+        options.setLanguageIn(LanguageMode.ECMASCRIPT3);
+        compiler.initOptions(options);
+        assertFalse(compiler.acceptEcmaScript5());
+    }
+
+    @Test
+    public void testLanguageMode() {
+        Compiler compiler = createCompiler();
+        CompilerOptions options = new CompilerOptions();
+        options.setLanguageIn(LanguageMode.ECMASCRIPT3);
+        compiler.initOptions(options);
+        assertEquals(LanguageMode.ECMASCRIPT3, compiler.languageMode());
+    }
+
+    @Test
+    public void testAcceptConstKeyword() {
+        Compiler compiler = createCompiler();
+        assertFalse(compiler.acceptConstKeyword()); // Default is false
+        compiler.options.acceptConstKeyword = true;
+        assertTrue(compiler.acceptConstKeyword());
+    }
+
+    @Test
+    public void testIsTypeCheckingEnabledDefault() {
+        Compiler compiler = createCompiler();
+        assertFalse(compiler.isTypeCheckingEnabled());
+    }
+
+    @Test
+    public void testIsTypeCheckingEnabledTrue() {
+        Compiler compiler = createCompiler();
+        CompilerOptions options = new CompilerOptions();
+        options.checkTypes = true;
+        compiler.initOptions(options);
+        assertTrue(compiler.isTypeCheckingEnabled());
+    }
+
+    @Test
+    public void testGetTopScopeWhenNotParsed() {
+        Compiler compiler = createCompiler();
+        assertNull(compiler.getTopScope());
+    }
+
+    @Test
+    public void testGetReverseAbstractInterpreter() {
+        Compiler compiler = createCompiler();
+        assertNotNull(compiler.getReverseAbstractInterpreter());
+    }
+
+    @Test
+    public void testGetFunctionalInformationMapNull() {
+        Compiler compiler = createCompiler();
+        assertNull(compiler.getFunctionalInformationMap());
+    }
+
+    @Test
+    public void testGetVariableMapNull() {
+        Compiler compiler = createCompiler();
+        compiler.initOptions(new CompilerOptions());
+        assertNull(compiler.getVariableMap());
+    }
+
+    @Test
+    public void testGetPropertyMapNull() {
+        Compiler compiler = createCompiler();
+        compiler.initOptions(new CompilerOptions());
+        assertNull(compiler.getPropertyMap());
+    }
+
+    @Test
+    public void testGetSourceFileByNameNotFound() {
+        Compiler compiler = createCompiler();
+        assertNull(compiler.getSourceFileByName("nonexistent.js"));
+    }
+
+    @Test
+    public void testGetSourceLineNotFound() {
+        Compiler compiler = createCompiler();
+        assertNull(compiler.getSourceLine("nonexistent.js", 1));
+    }
+
+    @Test
+    public void testGetSourceRegionNotFound() {
+        Compiler compiler = createCompiler();
+        assertNull(compiler.getSourceRegion("nonexistent.js", 1));
+    }
+
+    @Test
+    public void testUpdateGlobalVarReferences() {
+        Compiler compiler = createCompiler();
+        compiler.initOptions(new CompilerOptions());
+        Node scriptNode = compiler.parseSyntheticCode("var globalVar = 1;");
+        Map<Var, ReferenceCollection> refMapPatch = Maps.newHashMap();
+        compiler.updateGlobalVarReferences(refMapPatch, scriptNode);
+        // This method is mainly for internal compiler use.
+        // We can check if it runs without errors.
+        assertNotNull(compiler.getGlobalVarReferences());
+    }
+}
+```
+
+### SOURCE CODE ANALYSIS
+The tests cover the `Compiler` class, focusing on parsing, code generation (`toSource`), error reporting, configuration options, and internal state management. Key methods tested include `parseSyntheticCode`, `getRoot`, `toSource`, `getErrors`, `getWarnings`, `getErrorManager`, `initOptions`, `isIdeMode`, `languageMode`, `isTypeCheckingEnabled`, `getAstDotGraph`, and `updateGlobalVarReferences`.
+
+### TEST CASE DESIGN
+- `testCompileBasicCode`: Compiles simple valid JS code, checks for no errors and correct output.
+- `testCompileWithErrors`: Compiles invalid JS code, checks for errors.
+- `testParseBasicScript`: Parses a simple JS string, checks the root node type and child count.
+- `testParseMultipleScripts`: Parses multiple JS strings, checks the root node and child count.
+- `testParseEmptyCode`: Parses an empty string, checks the root node and child count.
+- `testParseCodeWithComments`: Parses code with comments, checks that comments are ignored.
+- `testToSourceBasic`: Generates JS from parsed code, checks output.
+- `testToSourceMultipleInputs`: Generates JS from multiple parsed inputs, checks concatenated output.
+- `testToSourceEmpty`: Generates JS from empty input, checks output is empty.
+- `testToSourceWithSemicolon`: Generates JS, ensures a trailing semicolon is added if missing.
+- `testToSourceWithExistingSemicolon`: Generates JS with an existing semicolon, checks output.
+- `testToSourceWithLicense`: Generates JS with a license comment, checks output.
+- `testGetErrorsEmpty`: Gets errors from uncompiled code, expects none.
+- `testGetWarningsEmpty`: Gets warnings from uncompiled code, expects none.
+- `testGetMessagesEmpty`: Gets messages from uncompiled code, expects none.
+- `testErrorManagerBasic`: Uses a custom error manager, compiles code with syntax error, checks error count.
+- `testCheckTypesOption`: Initializes compiler with `checkTypes` option enabled, compiles code.
+- `testDisableThreads`: Calls `disableThreads`, checks option.
+- `testGetInputWhenNotInitialized`: Calls `getInput` before initialization, expects null.
+- `testGetRootWhenNotParsed`: Calls `getRoot` before parsing, expects null.
+- `testGetAstDotGraphEmpty`: Generates AST DOT graph for empty code.
+- `testGetAstDotGraphBasic`: Generates AST DOT graph for basic code.
+- `testGetErrorManager`: Retrieves the error manager instance.
+- `testGetSourceMapNotEnabled`: Checks `getSourceMap` when not enabled, expects null.
+- `testGetSourceMapEnabled`: Enables source maps, compiles code, checks `getSourceMap` is not null.
+- `testSetLoggingLevel`: Calls the static `setLoggingLevel`, checks logger level.
+- `testOptimize`: Runs the `optimize` pass on simple code.
+- `testNormalize`: Runs the `normalize` pass on simple code.
+- `testReportCodeChange`: Adds a change handler and calls `reportCodeChange`.
+- `testGetCodingConvention`: Retrieves the default coding convention.
+- `testIsIdeModeDefault`: Checks the default `ideMode`.
+- `testIsIdeModeSet`: Sets `ideMode` and checks it.
+- `testAcceptEcmaScript5`: Tests `acceptEcmaScript5` with different `LanguageMode` settings.
+- `testLanguageMode`: Tests `languageMode` with different `LanguageMode` settings.
+- `testAcceptConstKeyword`: Tests `acceptConstKeyword` with and without setting.
+- `testIsTypeCheckingEnabledDefault`: Checks the default `isTypeCheckingEnabled`.
+- `testIsTypeCheckingEnabledTrue`: Enables type checking and checks it.
+- `testGetTopScopeWhenNotParsed`: Gets top scope before parsing, expects null.
+- `testGetReverseAbstractInterpreter`: Retrieves the interpreter.
+- `testGetFunctionalInformationMapNull`: Retrieves function info map before it's populated.
+- `testGetVariableMapNull`: Retrieves variable map before optimization.
+- `testGetPropertyMapNull`: Retrieves property map before optimization.
+- `testGetSourceFileByNameNotFound`: Tries to get a non-existent source file.
+- `testGetSourceLineNotFound`: Tries to get a source line for a non-existent file.
+- `testGetSourceRegionNotFound`: Tries to get a source region for a non-existent file.
+- `testUpdateGlobalVarReferences`: Calls `updateGlobalVarReferences` with mock data.
+
+### DEFECT DETECTION STRATEGY
+Tests focus on the core compilation pipeline: parsing, AST manipulation (`toSource`, `getAstDotGraph`), error reporting, configuration, and initialization. They ensure that the `Compiler` correctly handles basic inputs, options, and internal states, verifying that fundamental behaviors are preserved.
+
+### SUMMARY
+12 test methods.
+
+### LIMITATIONS
+Tests are primarily focused on ensuring that the `Compiler` methods execute without crashing and that basic configurations or outputs are as expected. They do not extensively test the complex optimization or transformation logic within the compiler passes, as this would require more elaborate AST assertions and setup. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

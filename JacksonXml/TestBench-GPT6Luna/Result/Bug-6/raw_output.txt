@@ -1,0 +1,340 @@
+```java
+package com.fasterxml.jackson.dataformat.xml.ser;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.io.*;
+import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.util.*;
+import javax.xml.namespace.QName;
+import javax.xml.stream.XMLStreamException;
+import javax.xml.stream.XMLStreamWriter;
+import org.codehaus.stax2.XMLStreamWriter2;
+import org.codehaus.stax2.ri.Stax2WriterAdapter;
+import com.fasterxml.jackson.core.*;
+import com.fasterxml.jackson.core.base.GeneratorBase;
+import com.fasterxml.jackson.core.io.IOContext;
+import com.fasterxml.jackson.core.json.JsonWriteContext;
+import com.fasterxml.jackson.dataformat.xml.XmlPrettyPrinter;
+import com.fasterxml.jackson.dataformat.xml.util.DefaultXmlPrettyPrinter;
+import com.fasterxml.jackson.dataformat.xml.util.StaxUtil;
+
+public class ToXmlGeneratorTest {
+    private ToXmlGenerator generator() throws Exception {
+        StringWriter output = new StringWriter();
+        XMLStreamWriter writer = javax.xml.stream.XMLOutputFactory.newFactory()
+                .createXMLStreamWriter(output);
+        IOContext context = new IOContext(
+                new com.fasterxml.jackson.core.io.BufferRecycler(), output, false);
+        return new ToXmlGenerator(context, JsonGenerator.Feature.collectDefaults(),
+                0, null, writer);
+    }
+
+    @Test
+    public void testFeatureDefaults() throws Exception {
+        assertEquals(0, ToXmlGenerator.Feature.collectDefaults());
+        assertFalse(ToXmlGenerator.Feature.WRITE_XML_DECLARATION.enabledByDefault());
+        assertFalse(ToXmlGenerator.Feature.WRITE_XML_1_1.enabledByDefault());
+    }
+
+    @Test
+    public void testFeatureMasksAndEnabled() throws Exception {
+        ToXmlGenerator g = generator();
+        assertEquals(1, ToXmlGenerator.Feature.WRITE_XML_DECLARATION.getMask());
+        assertEquals(2, ToXmlGenerator.Feature.WRITE_XML_1_1.getMask());
+        g.enable(ToXmlGenerator.Feature.WRITE_XML_1_1);
+        assertTrue(g.isEnabled(ToXmlGenerator.Feature.WRITE_XML_1_1));
+        assertFalse(g.isEnabled(ToXmlGenerator.Feature.WRITE_XML_DECLARATION));
+    }
+
+    @Test
+    public void testConfigureAndDisableFeatures() throws Exception {
+        ToXmlGenerator g = generator();
+        g.configure(ToXmlGenerator.Feature.WRITE_XML_DECLARATION, true);
+        assertTrue(g.isEnabled(ToXmlGenerator.Feature.WRITE_XML_DECLARATION));
+        g.configure(ToXmlGenerator.Feature.WRITE_XML_DECLARATION, false);
+        assertFalse(g.isEnabled(ToXmlGenerator.Feature.WRITE_XML_DECLARATION));
+    }
+
+    @Test
+    public void testOverrideFormatFeaturesRespectsMask() throws Exception {
+        ToXmlGenerator g = generator();
+        JsonGenerator result = g.overrideFormatFeatures(3, 1);
+        assertSame(g, result);
+        assertEquals(1, g.getFormatFeatures());
+        g.overrideFormatFeatures(2, 3);
+        assertEquals(2, g.getFormatFeatures());
+    }
+
+    @Test
+    public void testOutputProperties() throws Exception {
+        ToXmlGenerator g = generator();
+        assertSame(g.getStaxWriter(), g.getOutputTarget());
+        assertSame(g.getStaxWriter(), g.getOutputTarget());
+        assertEquals(-1, g.getOutputBuffered());
+        assertTrue(g.canWriteFormattedNumbers());
+    }
+
+    @Test
+    public void testInitialRootContextAndFeatureMask() throws Exception {
+        ToXmlGenerator g = generator();
+        assertTrue(g.inRoot());
+        assertEquals(0, g.getFormatFeatures());
+    }
+
+    @Test
+    public void testSetNextNameIfMissing() throws Exception {
+        ToXmlGenerator g = generator();
+        QName first = new QName("urn:a", "first");
+        QName second = new QName("urn:b", "second");
+        assertTrue(g.setNextNameIfMissing(first));
+        assertFalse(g.setNextNameIfMissing(second));
+        g.writeString("v");
+        g.close();
+        assertTrue(g.inRoot());
+    }
+
+    @Test
+    public void testSetNextNameReplacesName() throws Exception {
+        ToXmlGenerator g = generator();
+        g.setNextName(new QName("old"));
+        g.setNextName(new QName("new"));
+        g.writeString("value");
+        g.close();
+        assertTrue(g.inRoot());
+    }
+
+    @Test
+    public void testWriteFieldNameAndStringField() throws Exception {
+        ToXmlGenerator g = generator();
+        g.writeStartObject();
+        g.writeStringField("first", "one");
+        g.writeFieldName("second");
+        g.writeString("two");
+        g.writeEndObject();
+        assertTrue(g.inRoot());
+        g.close();
+    }
+
+    @Test
+    public void testStartAndFinishWrappedValue() throws Exception {
+        ToXmlGenerator g = generator();
+        QName wrapper = new QName("wrap");
+        QName item = new QName("item");
+        g.startWrappedValue(wrapper, item);
+        assertEquals(item.getLocalPart(), item.getLocalPart());
+        g.writeString("value");
+        g.finishWrappedValue(wrapper, item);
+        g.close();
+        assertEquals(0, g.getFormatFeatures());
+    }
+
+    @Test
+    public void testWrappedValueWithoutWrapper() throws Exception {
+        ToXmlGenerator g = generator();
+        QName item = new QName("item");
+        g.startWrappedValue(null, item);
+        g.writeString("value");
+        g.finishWrappedValue(null, item);
+        assertTrue(g.inRoot());
+        g.close();
+    }
+
+    @Test
+    public void testRepeatedFieldNameAcceptsValueAfterEachName() throws Exception {
+        ToXmlGenerator g = generator();
+        g.writeStartObject();
+        g.setNextName(new QName("item"));
+        g.writeRepeatedFieldName();
+        g.writeString("one");
+        g.writeRepeatedFieldName();
+        g.writeString("two");
+        g.writeEndObject();
+        assertTrue(g.inRoot());
+        g.close();
+    }
+
+    @Test
+    public void testWriteIntegerAndBooleanValues() throws Exception {
+        ToXmlGenerator g = generator();
+        g.writeStartObject();
+        g.writeFieldName("min");
+        g.writeNumber(Integer.MIN_VALUE);
+        g.writeFieldName("max");
+        g.writeNumber(Integer.MAX_VALUE);
+        g.writeFieldName("flag");
+        g.writeBoolean(true);
+        g.writeEndObject();
+        assertTrue(g.inRoot());
+        g.close();
+    }
+
+    @Test
+    public void testWriteNullValue() throws Exception {
+        ToXmlGenerator g = generator();
+        g.setNextName(new QName("empty"));
+        g.writeNull();
+        assertTrue(g.inRoot());
+        g.close();
+    }
+
+    @Test
+    public void testAttributeStringAndInteger() throws Exception {
+        ToXmlGenerator g = generator();
+        g.writeStartObject();
+        g.setNextName(new QName("label"));
+        g.setNextIsAttribute(true);
+        g.writeString("text");
+        g.setNextName(new QName("count"));
+        g.writeNumber(2147483647);
+        g.setNextIsAttribute(true);
+        g.writeEndObject();
+        assertTrue(g.inRoot());
+        g.close();
+    }
+
+    @Test
+    public void testUnwrappedFlagAppliesToOneValue() throws Exception {
+        ToXmlGenerator g = generator();
+        g.setNextName(new QName("value"));
+        g.setNextIsUnwrapped(true);
+        g.writeString("first");
+        g.setNextName(new QName("value"));
+        g.writeString("second");
+        assertTrue(g.inRoot());
+        g.close();
+    }
+
+    @Test
+    public void testCDataAndCharacterArraySlice() throws Exception {
+        ToXmlGenerator g = generator();
+        g.setNextName(new QName("cdata"));
+        g.setNextIsCData(true);
+        g.writeString("inside");
+        g.setNextName(new QName("slice"));
+        g.writeString("xvaluey".toCharArray(), 1, 5);
+        assertTrue(g.inRoot());
+        g.close();
+    }
+
+    @Test
+    public void testInitGeneratorWithoutDeclarationIsIdempotent() throws Exception {
+        ToXmlGenerator g = generator();
+        g.initGenerator();
+        g.initGenerator();
+        assertTrue(g.inRoot());
+        g.close();
+    }
+
+    @Test
+    public void testInitGeneratorWithXmlDeclaration() throws Exception {
+        ToXmlGenerator g = generator();
+        g.enable(ToXmlGenerator.Feature.WRITE_XML_DECLARATION);
+        g.initGenerator();
+        g.setNextName(new QName("root"));
+        g.writeString("x");
+        g.close();
+        assertTrue(g.inRoot());
+    }
+
+    @Test
+    public void testInitGeneratorXml11TakesPrecedence() throws Exception {
+        ToXmlGenerator g = generator();
+        g.enable(ToXmlGenerator.Feature.WRITE_XML_DECLARATION);
+        g.enable(ToXmlGenerator.Feature.WRITE_XML_1_1);
+        g.initGenerator();
+        g.setNextName(new QName("root"));
+        g.writeString("x");
+        g.close();
+        assertTrue(g.inRoot());
+    }
+
+    @Test
+    public void testArrayContextAndClosing() throws Exception {
+        ToXmlGenerator g = generator();
+        g.writeStartArray();
+        assertFalse(g.inRoot());
+        g.writeEndArray();
+        assertTrue(g.inRoot());
+        g.close();
+    }
+
+    @Test
+    public void testCloseClosesOpenArrayContent() throws Exception {
+        ToXmlGenerator g = generator();
+        g.writeStartArray();
+        g.close();
+        assertFalse(g.inRoot());
+    }
+
+    @Test
+    public void testPrettyPrinterConfigurationRoundTrip() throws Exception {
+        ToXmlGenerator g = generator();
+        DefaultXmlPrettyPrinter pp = new DefaultXmlPrettyPrinter();
+        assertSame(g, g.setPrettyPrinter(pp));
+        assertSame(pp, g.getPrettyPrinter());
+        g.setPrettyPrinter(null);
+        assertNull(g.getPrettyPrinter());
+        g.close();
+        assertTrue(g.inRoot());
+    }
+
+    @Test
+    public void testWriteBinarySubrange() throws Exception {
+        ToXmlGenerator g = generator();
+        g.setNextName(new QName("data"));
+        g.writeBinary(Base64Variants.getDefaultVariant(),
+                new byte[] { 9, 1, 2, 3, 8 }, 1, 3);
+        assertTrue(g.inRoot());
+        g.close();
+    }
+
+    @Test
+    public void testFlushAndClose() throws Exception {
+        ToXmlGenerator g = generator();
+        g.flush();
+        assertEquals(-1, g.getOutputBuffered());
+        g.close();
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+Method selection is exploratory because no target method was specified. Tests cover feature configuration, output/context state, naming and wrapped values, initialization, scalar/array output, binary output, and lifecycle behavior.
+
+### 2. TEST CASE DESIGN
+- `testFeatureDefaults`: feature defaults; both enum defaults and collected mask are false/zero.
+- `testFeatureMasksAndEnabled`: feature masks and enabling XML 1.1; ordinal-derived masks are 1 and 2.
+- `testConfigureAndDisableFeatures`: configure true then false; feature bit is set then cleared.
+- `testOverrideFormatFeaturesRespectsMask`: mask-limited override then full override; bitwise formula yields 1 then 2.
+- `testOutputProperties`: output target, buffer count, and formatted-number support; target is the writer and buffered count is -1.
+- `testInitialRootContextAndFeatureMask`: initial context and features; constructor leaves root context and zero format flags.
+- `testSetNextNameIfMissing`: first name is accepted and subsequent name rejected; method only assigns when null.
+- `testSetNextNameReplacesName`: explicit setter replaces the next name; writes a value and closes the generator.
+- `testWriteFieldNameAndStringField`: writes two named object fields; the completed object returns to root.
+- `testStartAndFinishWrappedValue`: writes wrapped item; non-null wrapper is opened and then closed.
+- `testWrappedValueWithoutWrapper`: null wrapper skips wrapper operations; item is still written.
+- `testRepeatedFieldNameAcceptsValueAfterEachName`: each repeated field name is followed by a value, satisfying context state.
+- `testWriteIntegerAndBooleanValues`: writes signed integer endpoints and a boolean; operations complete in object context.
+- `testWriteNullValue`: null under a named element; empty-element path completes.
+- `testAttributeStringAndInteger`: writes named values with attribute mode; output methods consume the configured names.
+- `testUnwrappedFlagAppliesToOneValue`: first string consumes the unwrapped flag; the following string uses normal element output.
+- `testCDataAndCharacterArraySlice`: CDATA string and selected character slice are submitted through their respective paths.
+- `testInitGeneratorWithoutDeclarationIsIdempotent`: repeated initialization with defaults writes no declaration and returns.
+- `testInitGeneratorWithXmlDeclaration`: enabled declaration selects XML 1.0; named output follows initialization.
+- `testInitGeneratorXml11TakesPrecedence`: XML 1.1 branch takes precedence over declaration feature.
+- `testArrayContextAndClosing`: array start leaves root and end restores root.
+- `testCloseClosesOpenArrayContent`: auto-close content closes the open array during close.
+- `testPrettyPrinterConfigurationRoundTrip`: setter returns generator, records printer, and accepts null to clear it.
+- `testWriteBinarySubrange`: supplies a valid three-byte subrange; binary output follows the named element path.
+- `testFlushAndClose`: default flush is permitted; buffered count remains -1.
+
+### 4. DEFECT DETECTION STRATEGY
+The suite pins feature masks, context transitions, name/flag handling, and representative XML output branches. Actual test outcomes have not been measured.
+
+### 5. SUMMARY
+24 tests.
+
+### 6. LIMITATIONS
+Several XML-writing tests assert successful execution and state rather than inspecting serialized bytes; mutations limited to output formatting could escape detection. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

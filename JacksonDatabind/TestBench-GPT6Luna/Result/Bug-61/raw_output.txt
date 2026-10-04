@@ -1,0 +1,297 @@
+```java
+package com.fasterxml.jackson.databind;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.fasterxml.jackson.databind.jsontype.impl.StdTypeResolverBuilder;
+import java.io.*;
+import java.lang.reflect.Type;
+import java.net.URL;
+import java.text.DateFormat;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
+import com.fasterxml.jackson.annotation.*;
+import com.fasterxml.jackson.core.*;
+import com.fasterxml.jackson.core.io.CharacterEscapes;
+import com.fasterxml.jackson.core.io.SegmentedStringWriter;
+import com.fasterxml.jackson.core.type.ResolvedType;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.core.util.*;
+import com.fasterxml.jackson.databind.cfg.BaseSettings;
+import com.fasterxml.jackson.databind.cfg.ContextAttributes;
+import com.fasterxml.jackson.databind.cfg.HandlerInstantiator;
+import com.fasterxml.jackson.databind.cfg.MapperConfig;
+import com.fasterxml.jackson.databind.cfg.MutableConfigOverride;
+import com.fasterxml.jackson.databind.cfg.ConfigOverrides;
+import com.fasterxml.jackson.databind.deser.*;
+import com.fasterxml.jackson.databind.introspect.*;
+import com.fasterxml.jackson.databind.jsonFormatVisitors.JsonFormatVisitorWrapper;
+import com.fasterxml.jackson.databind.jsontype.*;
+import com.fasterxml.jackson.databind.jsontype.impl.StdSubtypeResolver;
+import com.fasterxml.jackson.databind.node.*;
+import com.fasterxml.jackson.databind.ser.*;
+import com.fasterxml.jackson.databind.type.*;
+import com.fasterxml.jackson.databind.util.ClassUtil;
+import com.fasterxml.jackson.databind.util.RootNameLookup;
+import com.fasterxml.jackson.databind.util.StdDateFormat;
+import com.fasterxml.jackson.databind.util.TokenBuffer;
+import java.util.Collection;
+import com.fasterxml.jackson.annotation.JsonTypeInfo;
+import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.annotation.NoClass;
+
+public class ObjectMapperTest {
+    @Test
+    public void testDefaultTypingOnlyUsesObjectForObjectMode() throws Exception {
+        ObjectMapper.DefaultTypeResolverBuilder b =
+                new ObjectMapper.DefaultTypeResolverBuilder(ObjectMapper.DefaultTyping.JAVA_LANG_OBJECT);
+        assertTrue(b.useForType(TypeFactory.defaultInstance().constructType(Object.class)));
+        assertFalse(b.useForType(TypeFactory.defaultInstance().constructType(String.class)));
+    }
+
+    @Test
+    public void testObjectAndNonConcreteMode() throws Exception {
+        ObjectMapper.DefaultTypeResolverBuilder b =
+                new ObjectMapper.DefaultTypeResolverBuilder(ObjectMapper.DefaultTyping.OBJECT_AND_NON_CONCRETE);
+        assertTrue(b.useForType(TypeFactory.defaultInstance().constructType(Object.class)));
+        assertTrue(b.useForType(TypeFactory.defaultInstance().constructType(List.class)));
+        assertFalse(b.useForType(TypeFactory.defaultInstance().constructType(String.class)));
+    }
+
+    @Test
+    public void testNonConcreteAndArraysMode() throws Exception {
+        ObjectMapper.DefaultTypeResolverBuilder b =
+                new ObjectMapper.DefaultTypeResolverBuilder(ObjectMapper.DefaultTyping.NON_CONCRETE_AND_ARRAYS);
+        assertTrue(b.useForType(TypeFactory.defaultInstance().constructType(Object[].class)));
+        assertFalse(b.useForType(TypeFactory.defaultInstance().constructType(String[].class)));
+        assertTrue(b.useForType(TypeFactory.defaultInstance().constructType(List[].class)));
+    }
+
+    @Test
+    public void testNonFinalMode() throws Exception {
+        ObjectMapper.DefaultTypeResolverBuilder b =
+                new ObjectMapper.DefaultTypeResolverBuilder(ObjectMapper.DefaultTyping.NON_FINAL);
+        assertTrue(b.useForType(TypeFactory.defaultInstance().constructType(Number.class)));
+        assertFalse(b.useForType(TypeFactory.defaultInstance().constructType(Integer.class)));
+        assertFalse(b.useForType(TypeFactory.defaultInstance().constructType(int.class)));
+    }
+
+    @Test
+    public void testPrimitiveNeverUsesDefaultTyping() throws Exception {
+        for (ObjectMapper.DefaultTyping mode : ObjectMapper.DefaultTyping.values()) {
+            ObjectMapper.DefaultTypeResolverBuilder b = new ObjectMapper.DefaultTypeResolverBuilder(mode);
+            assertFalse(b.useForType(TypeFactory.defaultInstance().constructType(int.class)));
+            assertFalse(b.useForType(TypeFactory.defaultInstance().constructType(boolean.class)));
+        }
+    }
+
+    @Test
+    public void testTreeNodeExcludedFromObjectAndNonConcreteMode() throws Exception {
+        ObjectMapper.DefaultTypeResolverBuilder b =
+                new ObjectMapper.DefaultTypeResolverBuilder(ObjectMapper.DefaultTyping.OBJECT_AND_NON_CONCRETE);
+        assertFalse(b.useForType(TypeFactory.defaultInstance().constructType(JsonNode.class)));
+    }
+
+    @Test
+    public void testTreeNodeExcludedFromNonFinalMode() throws Exception {
+        ObjectMapper.DefaultTypeResolverBuilder b =
+                new ObjectMapper.DefaultTypeResolverBuilder(ObjectMapper.DefaultTyping.NON_FINAL);
+        assertFalse(b.useForType(TypeFactory.defaultInstance().constructType(JsonNode.class)));
+    }
+
+    @Test
+    public void testDefaultTypeBuilderSkipsPrimitiveDeserializer() throws Exception {
+        ObjectMapper.DefaultTypeResolverBuilder b =
+                new ObjectMapper.DefaultTypeResolverBuilder(ObjectMapper.DefaultTyping.NON_FINAL);
+        assertNull(b.buildTypeDeserializer(new ObjectMapper().getDeserializationConfig(),
+                TypeFactory.defaultInstance().constructType(int.class), Collections.<NamedType>emptyList()));
+    }
+
+    @Test
+    public void testDefaultTypeBuilderSkipsStringSerializer() throws Exception {
+        ObjectMapper.DefaultTypeResolverBuilder b =
+                new ObjectMapper.DefaultTypeResolverBuilder(ObjectMapper.DefaultTyping.NON_FINAL);
+        assertNull(b.buildTypeSerializer(new ObjectMapper().getSerializationConfig(),
+                TypeFactory.defaultInstance().constructType(String.class), Collections.<NamedType>emptyList()));
+    }
+
+    @Test
+    public void testExternalPropertyDefaultTypingRejected() throws Exception {
+        try {
+            new ObjectMapper().enableDefaultTyping(ObjectMapper.DefaultTyping.NON_FINAL,
+                    JsonTypeInfo.As.EXTERNAL_PROPERTY);
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) {
+        }
+    }
+
+    @Test
+    public void testDefaultTypingAsPropertyChangesObjectMapper() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        assertSame(mapper, mapper.enableDefaultTypingAsProperty(
+                ObjectMapper.DefaultTyping.NON_FINAL, "kind"));
+        assertNotNull(mapper.getSerializationConfig());
+        assertNotNull(mapper.getDeserializationConfig());
+    }
+
+    @Test
+    public void testDisableDefaultTypingReturnsMapper() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        assertSame(mapper, mapper.disableDefaultTyping());
+        assertNotNull(mapper.getSerializationConfig());
+    }
+
+    @Test
+    public void testSetDefaultTypingAcceptsNull() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        assertSame(mapper, mapper.setDefaultTyping(null));
+        assertNotNull(mapper.getSerializationConfig());
+        assertNotNull(mapper.getDeserializationConfig());
+    }
+
+    @Test
+    public void testCopyPreservesMapperConfiguration() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        mapper.enable(SerializationFeature.INDENT_OUTPUT);
+        ObjectMapper copied = mapper.copy();
+        assertNotSame(mapper, copied);
+        assertEquals(mapper.isEnabled(SerializationFeature.INDENT_OUTPUT),
+                copied.isEnabled(SerializationFeature.INDENT_OUTPUT));
+    }
+
+    @Test
+    public void testMixInAddAndReplaceDefinitions() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        mapper.addMixIn(String.class, Integer.class);
+        assertEquals(Integer.class, mapper.findMixInClassFor(String.class));
+        mapper.setMixIns(Collections.<Class<?>, Class<?>>emptyMap());
+        assertNull(mapper.findMixInClassFor(String.class));
+        assertEquals(0, mapper.mixInCount());
+    }
+
+    @Test
+    public void testTypeFactoryReplacementUsedToConstructType() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        TypeFactory factory = TypeFactory.defaultInstance();
+        assertSame(mapper, mapper.setTypeFactory(factory));
+        assertSame(factory, mapper.getTypeFactory());
+        assertEquals(String.class, mapper.constructType(String.class).getRawClass());
+    }
+
+    @Test
+    public void testMapperFeatureConfigureBothStates() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        mapper.configure(MapperFeature.AUTO_DETECT_FIELDS, false);
+        assertFalse(mapper.isEnabled(MapperFeature.AUTO_DETECT_FIELDS));
+        mapper.configure(MapperFeature.AUTO_DETECT_FIELDS, true);
+        assertTrue(mapper.isEnabled(MapperFeature.AUTO_DETECT_FIELDS));
+    }
+
+    @Test
+    public void testSerializationFeatureEnableAndDisable() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        mapper.enable(SerializationFeature.INDENT_OUTPUT);
+        assertTrue(mapper.isEnabled(SerializationFeature.INDENT_OUTPUT));
+        mapper.disable(SerializationFeature.INDENT_OUTPUT);
+        assertFalse(mapper.isEnabled(SerializationFeature.INDENT_OUTPUT));
+    }
+
+    @Test
+    public void testDeserializationFeatureConfigureBothStates() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        mapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+        assertFalse(mapper.isEnabled(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES));
+        mapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, true);
+        assertTrue(mapper.isEnabled(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES));
+    }
+
+    @Test
+    public void testJsonParserFeatureEnableAndDisable() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        mapper.enable(JsonParser.Feature.ALLOW_COMMENTS);
+        assertTrue(mapper.isEnabled(JsonParser.Feature.ALLOW_COMMENTS));
+        mapper.disable(JsonParser.Feature.ALLOW_COMMENTS);
+        assertFalse(mapper.isEnabled(JsonParser.Feature.ALLOW_COMMENTS));
+    }
+
+    @Test
+    public void testJsonGeneratorFeatureEnableAndDisable() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        mapper.enable(JsonGenerator.Feature.QUOTE_FIELD_NAMES);
+        assertTrue(mapper.isEnabled(JsonGenerator.Feature.QUOTE_FIELD_NAMES));
+        mapper.disable(JsonGenerator.Feature.QUOTE_FIELD_NAMES);
+        assertFalse(mapper.isEnabled(JsonGenerator.Feature.QUOTE_FIELD_NAMES));
+    }
+
+    @Test
+    public void testSerializationAndDeserializationRoundTrip() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        String json = mapper.writeValueAsString(Arrays.asList("a", "b"));
+        assertEquals("[\"a\",\"b\"]", json);
+        assertEquals(Arrays.asList("a", "b"),
+                mapper.readValue(json, new TypeReference<List<String>>() { }));
+    }
+
+    @Test
+    public void testReadTreeDistinguishesJsonNullFromEmptyInput() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        assertTrue(mapper.readTree("null").isNull());
+        assertTrue(mapper.readTree("").isNull());
+    }
+
+    @Test
+    public void testValueToTreeBuildsConfiguredObjectTree() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        JsonNode node = mapper.valueToTree(Collections.singletonMap("x", 3));
+        assertEquals(1, node.size());
+        assertEquals(3, node.get("x").intValue());
+    }
+
+    @Test
+    public void testConvertValueConvertsAndPreservesNull() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        assertEquals(Integer.valueOf(17), mapper.convertValue("17", Integer.class));
+        assertNull(mapper.convertValue(null, Integer.class));
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+The specified target is absent, so selection is exploratory. Tests focus on `DefaultTypeResolverBuilder.useForType`, its serializer/deserializer delegation, and selected mapper configuration, conversion, and tree methods.
+
+### 2. TEST CASE DESIGN
+- `testDefaultTypingOnlyUsesObjectForObjectMode`: Object and String types; Object matches the default mode’s sole type condition.
+- `testObjectAndNonConcreteMode`: Object, List, String; code accepts Object and non-concrete types but excludes concrete String.
+- `testNonConcreteAndArraysMode`: Object[], String[], List[]; array components are examined, then eligibility follows their type.
+- `testNonFinalMode`: Number, Integer, primitive int; non-final types qualify, final and primitive types do not.
+- `testPrimitiveNeverUsesDefaultTyping`: primitive int and boolean in all modes; early primitive check returns false.
+- `testTreeNodeExcludedFromObjectAndNonConcreteMode`: JsonNode; tree-model exclusion is explicit.
+- `testTreeNodeExcludedFromNonFinalMode`: JsonNode; tree-model exclusion is explicit.
+- `testDefaultTypeBuilderSkipsPrimitiveDeserializer`: primitive int; the builder returns null before delegating.
+- `testDefaultTypeBuilderSkipsStringSerializer`: String; the default builder returns null for primitive/final natural type through applicability.
+- `testExternalPropertyDefaultTypingRejected`: `EXTERNAL_PROPERTY`; source explicitly throws `IllegalArgumentException`.
+- `testDefaultTypingAsPropertyChangesObjectMapper`: valid property setup; fluent method returns the mapper and updates configs.
+- `testDisableDefaultTypingReturnsMapper`: disabling returns `setDefaultTyping(null)` result, the same mapper.
+- `testSetDefaultTypingAcceptsNull`: null typer; configs are updated and mapper returned.
+- `testCopyPreservesMapperConfiguration`: enabled indentation; copy is distinct and preserves the config state.
+- `testMixInAddAndReplaceDefinitions`: add then clear; lookup returns mapping, then null and count zero.
+- `testTypeFactoryReplacementUsedToConstructType`: default factory and String class; factory identity and constructed raw type follow declarations.
+- `testMapperFeatureConfigureBothStates`: field autodetection off/on; `isEnabled` reflects configured state.
+- `testSerializationFeatureEnableAndDisable`: indentation on/off; feature state is read back.
+- `testDeserializationFeatureConfigureBothStates`: unknown-property failure off/on; feature state is read back.
+- `testJsonParserFeatureEnableAndDisable`: comments on/off; feature state is read from mapper configuration.
+- `testJsonGeneratorFeatureEnableAndDisable`: field-name quoting on/off; generator feature state is read back.
+- `testSerializationAndDeserializationRoundTrip`: two short strings in a list; list serialization and generic read preserve the sequence.
+- `testReadTreeDistinguishesJsonNullFromEmptyInput`: JSON null and empty input; both are represented by null nodes by the source method.
+- `testValueToTreeBuildsConfiguredObjectTree`: singleton map with value 3; tree has one field whose integral value is 3.
+- `testConvertValueConvertsAndPreservesNull`: string `"17"` converts to Integer 17; null is returned directly by the null guard.
+
+### 4. DEFECT DETECTION STRATEGY
+The tests pin distinct type-selection branches and mapper state changes, plus representative configured tree and conversion behavior. They do not establish measured fault detection.
+
+### 5. SUMMARY
+24 tests.
+
+### 6. LIMITATIONS
+Target method was not specified, so test selection is exploratory; several mapper methods in the public-method list could not be meaningfully covered without introducing custom project implementations. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

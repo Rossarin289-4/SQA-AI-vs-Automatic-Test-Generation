@@ -1,0 +1,402 @@
+```java
+package org.jsoup.safety;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import org.jsoup.helper.Validate;
+import org.jsoup.nodes.*;
+import org.jsoup.parser.Tag;
+import org.jsoup.select.NodeTraversor;
+import org.jsoup.select.NodeVisitor;
+import java.util.List;
+
+public class CleanerTest {
+
+    @Test
+    public void testCleanWithNullDocument() {
+        Cleaner cleaner = new Cleaner(Whitelist.basic());
+        try {
+            cleaner.clean(null);
+            fail("Expected NullPointerException or similar for null document.");
+        } catch (NullPointerException e) {
+            // Expected behavior for null input to Validate.notNull
+        } catch (Exception e) {
+            fail("Caught unexpected exception: " + e.getMessage());
+        }
+    }
+
+    @Test
+    public void testCleanWithEmptyBody() {
+        Cleaner cleaner = new Cleaner(Whitelist.basic());
+        Document dirtyDoc = Document.createShell("");
+        Document cleanedDoc = cleaner.clean(dirtyDoc);
+        assertEquals(0, cleanedDoc.body().children().size());
+        assertEquals(0, cleanedDoc.body().text().length());
+    }
+
+    @Test
+    public void testCleanWithBasicWhitelist() {
+        Cleaner cleaner = new Cleaner(Whitelist.basic());
+        Document dirtyDoc = Document.createShell("");
+        Element body = dirtyDoc.body();
+        body.appendChild(new Element(Tag.valueOf("p"), ""));
+        body.appendChild(new Element(Tag.valueOf("script"), "")); // Should be removed
+        body.appendChild(new Element(Tag.valueOf("a"), ""));
+        body.appendChild(new TextNode("Some text", ""));
+
+        Document cleanedDoc = cleaner.clean(dirtyDoc);
+        assertEquals(3, cleanedDoc.body().children().size()); // p, a, textNode
+        assertEquals("p", cleanedDoc.body().child(0).tagName());
+        assertEquals("a", cleanedDoc.body().child(1).tagName());
+        assertEquals("Some text", cleanedDoc.body().child(2).outerHtml());
+    }
+
+    @Test
+    public void testCleanWithAllTagsAllowed() {
+        Whitelist whitelist = new Whitelist().addTags(
+                Whitelist.basic().get(), // Copy basic tags
+                "script", "div", "span" // Add custom tags
+        ).addAttributes("a", "href").addAttributes("img", "src");
+
+        Cleaner cleaner = new Cleaner(whitelist);
+        Document dirtyDoc = Document.createShell("");
+        Element body = dirtyDoc.body();
+        body.appendChild(new Element(Tag.valueOf("p"), ""));
+        body.appendChild(new Element(Tag.valueOf("script"), ""));
+        body.appendChild(new Element(Tag.valueOf("div"), ""));
+        body.appendChild(new Element(Tag.valueOf("span"), ""));
+        body.appendChild(new Element(Tag.valueOf("img"), "").attr("src", "http://example.com"));
+        body.appendChild(new Element(Tag.valueOf("a"), "").attr("href", "http://example.com"));
+
+
+        Document cleanedDoc = cleaner.clean(dirtyDoc);
+        assertEquals(6, cleanedDoc.body().children().size());
+        assertEquals("p", cleanedDoc.body().child(0).tagName());
+        assertEquals("script", cleanedDoc.body().child(1).tagName());
+        assertEquals("div", cleanedDoc.body().child(2).tagName());
+        assertEquals("span", cleanedDoc.body().child(3).tagName());
+        assertEquals("img", cleanedDoc.body().child(4).tagName());
+        assertEquals("a", cleanedDoc.body().child(5).tagName());
+    }
+
+    @Test
+    public void testCleanWithEnforcedAttributes() {
+        Whitelist whitelist = Whitelist.basic().addEnforcedAttribute("a", "rel", "nofollow");
+        Cleaner cleaner = new Cleaner(whitelist);
+        Document dirtyDoc = Document.createShell("");
+        Element body = dirtyDoc.body();
+        body.appendChild(new Element(Tag.valueOf("a"), "").attr("href", "http://example.com"));
+
+        Document cleanedDoc = cleaner.clean(dirtyDoc);
+        Element anchor = cleanedDoc.body().child(0).child(0); // Assuming the structure of how 'a' is added within body
+        assertEquals("nofollow", anchor.attr("rel"));
+    }
+
+    @Test
+    public void testCleanWithRelativeLinksPreserved() {
+        Whitelist whitelist = Whitelist.basic().preserveRelativeLinks(true).addAttributes("a", "href");
+        Cleaner cleaner = new Cleaner(whitelist);
+        Document dirtyDoc = Document.createShell("http://example.com");
+        Element body = dirtyDoc.body();
+        body.appendChild(new Element(Tag.valueOf("a"), "").attr("href", "/path/to/page"));
+
+        Document cleanedDoc = cleaner.clean(dirtyDoc);
+        Element anchor = cleanedDoc.body().child(0).child(0);
+        assertEquals("/path/to/page", anchor.attr("href"));
+    }
+
+    @Test
+    public void testCleanWithRelativeLinksNotPreserved() {
+        Whitelist whitelist = Whitelist.basic().preserveRelativeLinks(false).addAttributes("a", "href");
+        Cleaner cleaner = new Cleaner(whitelist);
+        Document dirtyDoc = Document.createShell("http://example.com");
+        Element body = dirtyDoc.body();
+        body.appendChild(new Element(Tag.valueOf("a"), "").attr("href", "/path/to/page"));
+
+        Document cleanedDoc = cleaner.clean(dirtyDoc);
+        Element anchor = cleanedDoc.body().child(0).child(0);
+        assertEquals("http://example.com/path/to/page", anchor.attr("href"));
+    }
+
+    @Test
+    public void testIsValidWithValidDocument() {
+        Cleaner cleaner = new Cleaner(Whitelist.basic());
+        Document dirtyDoc = Document.createShell("");
+        dirtyDoc.body().appendChild(new Element(Tag.valueOf("p"), ""));
+        assertTrue(cleaner.isValid(dirtyDoc));
+    }
+
+    @Test
+    public void testIsValidWithInvalidDocument() {
+        Cleaner cleaner = new Cleaner(Whitelist.basic());
+        Document dirtyDoc = Document.createShell("");
+        dirtyDoc.body().appendChild(new Element(Tag.valueOf("script"), ""));
+        assertFalse(cleaner.isValid(dirtyDoc));
+    }
+
+    @Test
+    public void testIsValidWithEmptyDocument() {
+        Cleaner cleaner = new Cleaner(Whitelist.basic());
+        Document dirtyDoc = Document.createShell("");
+        assertTrue(cleaner.isValid(dirtyDoc));
+    }
+
+    @Test
+    public void testIsValidWithDocumentWithOnlyText() {
+        Cleaner cleaner = new Cleaner(Whitelist.basic());
+        Document dirtyDoc = Document.createShell("");
+        dirtyDoc.body().appendChild(new TextNode("Some text", ""));
+        assertTrue(cleaner.isValid(dirtyDoc));
+    }
+
+    @Test
+    public void testCleanWithImgTagAndSafeProtocol() {
+        Whitelist whitelist = Whitelist.basicWithImages().addProtocols("img", "src", "http", "https");
+        Cleaner cleaner = new Cleaner(whitelist);
+        Document dirtyDoc = Document.createShell("");
+        Element body = dirtyDoc.body();
+        body.appendChild(new Element(Tag.valueOf("img"), "").attr("src", "http://example.com/image.png"));
+
+        Document cleanedDoc = cleaner.clean(dirtyDoc);
+        assertEquals(1, cleanedDoc.body().children().size());
+        assertEquals("img", cleanedDoc.body().child(0).tagName());
+        assertEquals("http://example.com/image.png", cleanedDoc.body().child(0).attr("src"));
+    }
+
+    @Test
+    public void testCleanWithImgTagAndUnsafeProtocol() {
+        Whitelist whitelist = Whitelist.basicWithImages().addProtocols("img", "src", "http", "https");
+        Cleaner cleaner = new Cleaner(whitelist);
+        Document dirtyDoc = Document.createShell("");
+        Element body = dirtyDoc.body();
+        body.appendChild(new Element(Tag.valueOf("img"), "").attr("src", "ftp://example.com/image.png"));
+
+        Document cleanedDoc = cleaner.clean(dirtyDoc);
+        assertEquals(0, cleanedDoc.body().children().size());
+    }
+
+    @Test
+    public void testCleanWithCustomAttributes() {
+        Whitelist whitelist = Whitelist.basic().addAttributes("p", "id", "class").addAttributes("a", "href", "target");
+        Cleaner cleaner = new Cleaner(whitelist);
+        Document dirtyDoc = Document.createShell("");
+        Element body = dirtyDoc.body();
+        body.appendChild(new Element(Tag.valueOf("p"), "").attr("id", "my-para").attr("style", "color: red;"));
+        body.appendChild(new Element(Tag.valueOf("a"), "").attr("href", "http://example.com").attr("target", "_blank").attr("data-custom", "ignore"));
+
+        Document cleanedDoc = cleaner.clean(dirtyDoc);
+        Element p = cleanedDoc.body().child(0);
+        assertEquals("my-para", p.attr("id"));
+        assertFalse(p.hasAttr("style"));
+
+        Element a = cleanedDoc.body().child(1);
+        assertEquals("http://example.com", a.attr("href"));
+        assertEquals("_blank", a.attr("target"));
+        assertFalse(a.hasAttr("data-custom"));
+    }
+
+    @Test
+    public void testCleanWithNestedSafeTags() {
+        Whitelist whitelist = Whitelist.basic();
+        Cleaner cleaner = new Cleaner(whitelist);
+        Document dirtyDoc = Document.createShell("");
+        Element body = dirtyDoc.body();
+        Element p = new Element(Tag.valueOf("p"), "");
+        p.appendChild(new Element(Tag.valueOf("strong"), "").appendChild(new TextNode("Bold text", "")));
+        body.appendChild(p);
+
+        Document cleanedDoc = cleaner.clean(dirtyDoc);
+        assertEquals(1, cleanedDoc.body().children().size());
+        Element cleanedP = cleanedDoc.body().child(0);
+        assertEquals("p", cleanedP.tagName());
+        assertEquals(1, cleanedP.children().size());
+        Element cleanedStrong = cleanedP.child(0);
+        assertEquals("strong", cleanedStrong.tagName());
+        assertEquals(1, cleanedStrong.children().size());
+        assertEquals("Bold text", cleanedStrong.child(0).outerHtml());
+    }
+
+    @Test
+    public void testCleanWithNestedUnsafeTags() {
+        Whitelist whitelist = Whitelist.simpleText(); // Allows strong, em, b, u, i
+        Cleaner cleaner = new Cleaner(whitelist);
+        Document dirtyDoc = Document.createShell("");
+        Element body = dirtyDoc.body();
+        Element p = new Element(Tag.valueOf("p"), "");
+        p.appendChild(new Element(Tag.valueOf("script"), "").appendChild(new TextNode("alert('xss')", "")));
+        body.appendChild(p);
+
+        Document cleanedDoc = cleaner.clean(dirtyDoc);
+        assertEquals(1, cleanedDoc.body().children().size());
+        Element cleanedP = cleanedDoc.body().child(0);
+        assertEquals("p", cleanedP.tagName());
+        assertEquals(0, cleanedP.children().size()); // Script tag should be removed
+    }
+
+    @Test
+    public void testCleanWithMixedContent() {
+        Whitelist whitelist = Whitelist.basic();
+        Cleaner cleaner = new Cleaner(whitelist);
+        Document dirtyDoc = Document.createShell("");
+        Element body = dirtyDoc.body();
+        body.appendChild(new Element(Tag.valueOf("p"), "").appendChild(new TextNode("Start ", "")).appendChild(new Element(Tag.valueOf("b"), "").appendChild(new TextNode("bold", ""))).appendChild(new TextNode(" end", "")));
+        body.appendChild(new Element(Tag.valueOf("div"), "").appendChild(new TextNode("should be removed", "")));
+
+        Document cleanedDoc = cleaner.clean(dirtyDoc);
+        assertEquals(1, cleanedDoc.body().children().size());
+        Element cleanedP = cleanedDoc.body().child(0);
+        assertEquals("p", cleanedP.tagName());
+        assertEquals("Start bold end", cleanedP.text());
+        assertEquals(3, cleanedP.childNodes().size());
+        assertEquals("Start ", cleanedP.childNode(0).outerHtml());
+        assertEquals("b", cleanedP.childNode(1).outerHtml().substring(0, 1));
+        assertEquals(" end", cleanedP.childNode(2).outerHtml());
+    }
+
+    @Test
+    public void testCleanWithNullWhitelist() {
+        try {
+            new Cleaner(null);
+            fail("Expected NullPointerException for null whitelist.");
+        } catch (NullPointerException e) {
+            // Expected
+        } catch (Exception e) {
+            fail("Caught unexpected exception: " + e.getMessage());
+        }
+    }
+
+    @Test
+    public void testCleaningVisitorHeadElementSafeTag() {
+        Whitelist whitelist = Whitelist.basic();
+        Cleaner cleaner = new Cleaner(whitelist);
+        Document doc = Document.createShell("");
+        Element body = doc.body();
+        Element p = new Element(Tag.valueOf("p"), "");
+        body.appendChild(p);
+
+        Cleaner.CleaningVisitor visitor = new Cleaner.CleaningVisitor(body, body);
+        visitor.head(p, 0);
+
+        assertEquals(1, body.children().size());
+        assertEquals("p", body.child(0).tagName());
+    }
+
+    @Test
+    public void testCleaningVisitorHeadElementUnsafeTag() {
+        Whitelist whitelist = Whitelist.basic();
+        Cleaner cleaner = new Cleaner(whitelist);
+        Document doc = Document.createShell("");
+        Element body = doc.body();
+        Element script = new Element(Tag.valueOf("script"), "");
+        body.appendChild(script);
+
+        Cleaner.CleaningVisitor visitor = new Cleaner.CleaningVisitor(body, body);
+        visitor.head(script, 0);
+
+        assertEquals(0, body.children().size());
+    }
+
+    @Test
+    public void testCleaningVisitorHeadTextNode() {
+        Whitelist whitelist = Whitelist.basic();
+        Cleaner cleaner = new Cleaner(whitelist);
+        Document doc = Document.createShell("");
+        Element body = doc.body();
+        TextNode text = new TextNode("Hello", "");
+        body.appendChild(text);
+
+        Cleaner.CleaningVisitor visitor = new Cleaner.CleaningVisitor(body, body);
+        visitor.head(text, 0);
+
+        assertEquals(1, body.children().size());
+        assertEquals("Hello", body.child(0).outerHtml());
+    }
+
+    @Test
+    public void testCleaningVisitorTailSafeTag() {
+        Whitelist whitelist = Whitelist.basic();
+        Cleaner cleaner = new Cleaner(whitelist);
+        Document doc = Document.createShell("");
+        Element body = doc.body();
+        Element p = new Element(Tag.valueOf("p"), "");
+        body.appendChild(p);
+
+        Cleaner.CleaningVisitor visitor = new Cleaner.CleaningVisitor(body, body);
+        visitor.head(p, 0); // Descend into p
+        visitor.tail(p, 0); // Ascend from p
+
+        // The destination should have reverted to the parent (body)
+        assertEquals(body, visitor.destination);
+    }
+
+    @Test
+    public void testCreateSafeElementWithAttributes() {
+        Whitelist whitelist = Whitelist.basic().addAttributes("a", "href");
+        Cleaner cleaner = new Cleaner(whitelist);
+        Document doc = Document.createShell("");
+        Element sourceEl = new Element(Tag.valueOf("a"), "");
+        sourceEl.attr("href", "http://example.com");
+        sourceEl.attr("class", "test");
+
+        Cleaner.ElementMeta meta = cleaner.createSafeElement(sourceEl);
+        Element destEl = meta.el;
+
+        assertEquals("a", destEl.tagName());
+        assertEquals("http://example.com", destEl.attr("href"));
+        assertFalse(destEl.hasAttr("class"));
+        assertEquals(1, meta.numAttribsDiscarded);
+    }
+
+    @Test
+    public void testCreateSafeElementWithEnforcedAttributes() {
+        Whitelist whitelist = Whitelist.basic().addEnforcedAttribute("a", "rel", "nofollow");
+        Cleaner cleaner = new Cleaner(whitelist);
+        Document doc = Document.createShell("");
+        Element sourceEl = new Element(Tag.valueOf("a"), "").attr("href", "http://example.com");
+
+        Cleaner.ElementMeta meta = cleaner.createSafeElement(sourceEl);
+        Element destEl = meta.el;
+
+        assertEquals("nofollow", destEl.attr("rel"));
+    }
+}
+```
+
+1. SOURCE CODE ANALYSIS
+The test suite focuses on the `clean` and `isValid` public methods of the `Cleaner` class. It also tests internal logic through the `CleaningVisitor` and `createSafeElement` private methods by observing their effects via the public methods.
+
+2. TEST CASE DESIGN
+- `testCleanWithNullDocument`: Input: null document. Expected: NullPointerException. Derived from `Validate.notNull` call.
+- `testCleanWithEmptyBody`: Input: Document with empty body. Expected: Cleaned document with empty body. Derived from `copySafeNodes` on an empty body.
+- `testCleanWithBasicWhitelist`: Input: P, script, a, text nodes. Expected: P, a, text node remain. Derived by tracing `Whitelist.basic()`.
+- `testCleanWithAllTagsAllowed`: Input: P, script, div, span, img, a tags. Expected: All tags allowed by custom whitelist remain. Derived by tracing custom whitelist.
+- `testCleanWithEnforcedAttributes`: Input: Anchor tag. Expected: 'rel' attribute is 'nofollow'. Derived from `Whitelist.addEnforcedAttribute`.
+- `testCleanWithRelativeLinksPreserved`: Input: Anchor with relative link, preserveRelativeLinks(true). Expected: Relative link preserved. Derived from `Whitelist.preserveRelativeLinks(true)`.
+- `testCleanWithRelativeLinksNotPreserved`: Input: Anchor with relative link, preserveRelativeLinks(false). Expected: Relative link made absolute. Derived from `Whitelist.preserveRelativeLinks(false)`.
+- `testIsValidWithValidDocument`: Input: Document with only 'p' tag. Expected: true. Derived from `copySafeNodes` returning 0.
+- `testIsValidWithInvalidDocument`: Input: Document with 'script' tag. Expected: false. Derived from `copySafeNodes` returning non-zero.
+- `testIsValidWithEmptyDocument`: Input: Empty document. Expected: true. Derived from `copySafeNodes` on empty body.
+- `testIsValidWithDocumentWithOnlyText`: Input: Document with TextNode. Expected: true. Derived from `copySafeNodes` on TextNode.
+- `testCleanWithImgTagAndSafeProtocol`: Input: Img tag with http protocol. Expected: Img tag retained. Derived from `Whitelist.addProtocols`.
+- `testCleanWithImgTagAndUnsafeProtocol`: Input: Img tag with ftp protocol. Expected: Img tag removed. Derived from `Whitelist.addProtocols`.
+- `testCleanWithCustomAttributes`: Input: P and A tags with allowed/disallowed attributes. Expected: Allowed attributes retained, disallowed removed. Derived from `Whitelist.addAttributes`.
+- `testCleanWithNestedSafeTags`: Input: Nested P and Strong tags. Expected: Both tags retained. Derived from `CleaningVisitor.head` and `tail`.
+- `testCleanWithNestedUnsafeTags`: Input: P containing a Script tag. Expected: Script tag removed. Derived from `Whitelist.isSafeTag`.
+- `testCleanWithMixedContent`: Input: P with text and bold, followed by div. Expected: P retained with text, B retained; div removed. Derived by `NodeTraversor.traverse`.
+- `testCleanWithNullWhitelist`: Input: null whitelist to constructor. Expected: NullPointerException. Derived from `Validate.notNull`.
+- `testCleaningVisitorHeadElementSafeTag`: Input: Safe tag 'p'. Expected: Element cloned and appended. Derived from `CleaningVisitor.head` logic.
+- `testCleaningVisitorHeadElementUnsafeTag`: Input: Unsafe tag 'script'. Expected: Element discarded. Derived from `CleaningVisitor.head` logic.
+- `testCleaningVisitorHeadTextNode`: Input: TextNode. Expected: TextNode cloned and appended. Derived from `CleaningVisitor.head` logic.
+- `testCleaningVisitorTailSafeTag`: Input: Safe tag 'p'. Expected: Destination reverts to parent. Derived from `CleaningVisitor.tail` logic.
+- `testCreateSafeElementWithAttributes`: Input: Anchor with href and class. Expected: href retained, class discarded. Derived from `createSafeElement` attribute filtering.
+- `testCreateSafeElementWithEnforcedAttributes`: Input: Anchor tag. Expected: enforced 'rel' attribute added. Derived from `createSafeElement` and `Whitelist.getEnforcedAttributes`.
+
+4. DEFECT DETECTION STRATEGY
+Tests cover basic whitelist functionality, attribute handling, protocol validation, nested tags, and edge cases in tag/attribute processing. They verify that the `clean` and `isValid` methods correctly apply the configured `Whitelist`.
+
+5. SUMMARY
+24 tests.
+
+6. LIMITATIONS
+The tests do not cover frame documents or complex HTML structures beyond basic nesting. The behavior of `Validate` methods is inferred from their declarations. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.
+```

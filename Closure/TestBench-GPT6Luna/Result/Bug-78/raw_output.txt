@@ -1,0 +1,396 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Preconditions;
+import com.google.common.collect.Lists;
+import com.google.javascript.jscomp.mozilla.rhino.ScriptRuntime;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.jstype.TernaryValue;
+import java.util.List;
+import java.util.Locale;
+
+public class PeepholeFoldConstantsTest {
+    // test methods (as many as the instructions ask for), each exactly in this form:
+    //     @Test
+    //     public void testWhatItChecks() throws Exception { ... }
+
+    @Test
+    public void testArrayLength() throws Exception {
+        PeepholeFoldConstants optimization = new PeepholeFoldConstants();
+        Node expression = new Node(Token.GETPROP,
+                new Node(Token.ARRAYLIT, Node.newNumber(1), Node.newNumber(2)),
+                Node.newString("length"));
+        Node root = Node.newExpr(expression);
+
+        Node result = optimization.optimizeSubtree(expression);
+
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(2.0, result.getDouble(), 0.0);
+        assertSame(result, root.getFirstChild());
+    }
+
+    @Test
+    public void testEmptyArrayLength() throws Exception {
+        PeepholeFoldConstants optimization = new PeepholeFoldConstants();
+        Node expression = new Node(Token.GETPROP,
+                new Node(Token.ARRAYLIT), Node.newString("length"));
+        Node root = Node.newExpr(expression);
+
+        Node result = optimization.optimizeSubtree(expression);
+
+        assertEquals(0.0, result.getDouble(), 0.0);
+        assertSame(result, root.getFirstChild());
+    }
+
+    @Test
+    public void testStringLength() throws Exception {
+        PeepholeFoldConstants optimization = new PeepholeFoldConstants();
+        Node expression = new Node(Token.GETPROP,
+                Node.newString("abc"), Node.newString("length"));
+        Node root = Node.newExpr(expression);
+
+        Node result = optimization.optimizeSubtree(expression);
+
+        assertEquals(3.0, result.getDouble(), 0.0);
+        assertSame(result, root.getFirstChild());
+    }
+
+    @Test
+    public void testArrayElementAtFirstIndex() throws Exception {
+        PeepholeFoldConstants optimization = new PeepholeFoldConstants();
+        Node array = new Node(Token.ARRAYLIT, Node.newString("first"), Node.newString("last"));
+        Node expression = new Node(Token.GETELEM, array, Node.newNumber(0));
+        Node root = Node.newExpr(expression);
+
+        Node result = optimization.optimizeSubtree(expression);
+
+        assertEquals(Token.STRING, result.getType());
+        assertEquals("first", result.getString());
+        assertSame(result, root.getFirstChild());
+    }
+
+    @Test
+    public void testArrayElementAtLastIndex() throws Exception {
+        PeepholeFoldConstants optimization = new PeepholeFoldConstants();
+        Node array = new Node(Token.ARRAYLIT, Node.newNumber(4), Node.newNumber(9));
+        Node expression = new Node(Token.GETELEM, array, Node.newNumber(1));
+        Node root = Node.newExpr(expression);
+
+        Node result = optimization.optimizeSubtree(expression);
+
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(9.0, result.getDouble(), 0.0);
+        assertSame(result, root.getFirstChild());
+    }
+
+    @Test
+    public void testArrayElementAtIndexZeroInSingleElementArray() throws Exception {
+        PeepholeFoldConstants optimization = new PeepholeFoldConstants();
+        Node expression = new Node(Token.GETELEM,
+                new Node(Token.ARRAYLIT, Node.newNumber(7)), Node.newNumber(0));
+        Node root = Node.newExpr(expression);
+
+        Node result = optimization.optimizeSubtree(expression);
+
+        assertEquals(7.0, result.getDouble(), 0.0);
+        assertSame(result, root.getFirstChild());
+    }
+
+    @Test
+    public void testArrayIndexFractionalIsNotFolded() throws Exception {
+        PeepholeFoldConstants optimization = new PeepholeFoldConstants();
+        Node expression = new Node(Token.GETELEM,
+                new Node(Token.ARRAYLIT, Node.newNumber(7)), Node.newNumber(0.5));
+        Node root = Node.newExpr(expression);
+
+        Node result = optimization.optimizeSubtree(expression);
+
+        assertSame(expression, result);
+        assertSame(expression, root.getFirstChild());
+    }
+
+    @Test
+    public void testArrayIndexAtLengthIsNotFolded() throws Exception {
+        PeepholeFoldConstants optimization = new PeepholeFoldConstants();
+        Node expression = new Node(Token.GETELEM,
+                new Node(Token.ARRAYLIT, Node.newNumber(7)), Node.newNumber(1));
+        Node root = Node.newExpr(expression);
+
+        Node result = optimization.optimizeSubtree(expression);
+
+        assertSame(expression, result);
+        assertSame(expression, root.getFirstChild());
+    }
+
+    @Test
+    public void testConstantAddition() throws Exception {
+        PeepholeFoldConstants optimization = new PeepholeFoldConstants();
+        Node expression = new Node(Token.ADD, Node.newNumber(2), Node.newNumber(3));
+        Node root = Node.newExpr(expression);
+
+        Node result = optimization.optimizeSubtree(expression);
+
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(5.0, result.getDouble(), 0.0);
+        assertSame(result, root.getFirstChild());
+    }
+
+    @Test
+    public void testConstantSubtraction() throws Exception {
+        PeepholeFoldConstants optimization = new PeepholeFoldConstants();
+        Node expression = new Node(Token.SUB, Node.newNumber(9), Node.newNumber(4));
+        Node root = Node.newExpr(expression);
+
+        Node result = optimization.optimizeSubtree(expression);
+
+        assertEquals(5.0, result.getDouble(), 0.0);
+        assertSame(result, root.getFirstChild());
+    }
+
+    @Test
+    public void testConstantMultiplication() throws Exception {
+        PeepholeFoldConstants optimization = new PeepholeFoldConstants();
+        Node expression = new Node(Token.MUL, Node.newNumber(3), Node.newNumber(4));
+        Node root = Node.newExpr(expression);
+
+        Node result = optimization.optimizeSubtree(expression);
+
+        assertEquals(12.0, result.getDouble(), 0.0);
+        assertSame(result, root.getFirstChild());
+    }
+
+    @Test
+    public void testDivisionByZeroRemainsUnfolded() throws Exception {
+        PeepholeFoldConstants optimization = new PeepholeFoldConstants();
+        Node expression = new Node(Token.DIV, Node.newNumber(8), Node.newNumber(0));
+        Node root = Node.newExpr(expression);
+
+        Node result = optimization.optimizeSubtree(expression);
+
+        assertSame(expression, result);
+        assertSame(expression, root.getFirstChild());
+    }
+
+    @Test
+    public void testAdditionOfStrings() throws Exception {
+        PeepholeFoldConstants optimization = new PeepholeFoldConstants();
+        Node expression = new Node(Token.ADD, Node.newString("ab"), Node.newString("cd"));
+        Node root = Node.newExpr(expression);
+
+        Node result = optimization.optimizeSubtree(expression);
+
+        assertEquals(Token.STRING, result.getType());
+        assertEquals("abcd", result.getString());
+        assertSame(result, root.getFirstChild());
+    }
+
+    @Test
+    public void testFoldTypeofString() throws Exception {
+        PeepholeFoldConstants optimization = new PeepholeFoldConstants();
+        Node expression = new Node(Token.TYPEOF, Node.newString("x"));
+        Node root = Node.newExpr(expression);
+
+        Node result = optimization.optimizeSubtree(expression);
+
+        assertEquals(Token.STRING, result.getType());
+        assertEquals("string", result.getString());
+        assertSame(result, root.getFirstChild());
+    }
+
+    @Test
+    public void testFoldTypeofNumber() throws Exception {
+        PeepholeFoldConstants optimization = new PeepholeFoldConstants();
+        Node expression = new Node(Token.TYPEOF, Node.newNumber(3));
+        Node root = Node.newExpr(expression);
+
+        Node result = optimization.optimizeSubtree(expression);
+
+        assertEquals("number", result.getString());
+        assertSame(result, root.getFirstChild());
+    }
+
+    @Test
+    public void testFoldTypeofBoolean() throws Exception {
+        PeepholeFoldConstants optimization = new PeepholeFoldConstants();
+        Node expression = new Node(Token.TYPEOF, new Node(Token.TRUE));
+        Node root = Node.newExpr(expression);
+
+        Node result = optimization.optimizeSubtree(expression);
+
+        assertEquals("boolean", result.getString());
+        assertSame(result, root.getFirstChild());
+    }
+
+    @Test
+    public void testFoldAndWithTrueLeftOperand() throws Exception {
+        PeepholeFoldConstants optimization = new PeepholeFoldConstants();
+        Node right = Node.newString("value");
+        Node expression = new Node(Token.AND, new Node(Token.TRUE), right);
+        Node root = Node.newExpr(expression);
+
+        Node result = optimization.optimizeSubtree(expression);
+
+        assertSame(right, result);
+        assertSame(right, root.getFirstChild());
+    }
+
+    @Test
+    public void testFoldOrWithFalseLeftOperand() throws Exception {
+        PeepholeFoldConstants optimization = new PeepholeFoldConstants();
+        Node right = Node.newString("value");
+        Node expression = new Node(Token.OR, new Node(Token.FALSE), right);
+        Node root = Node.newExpr(expression);
+
+        Node result = optimization.optimizeSubtree(expression);
+
+        assertSame(right, result);
+        assertSame(right, root.getFirstChild());
+    }
+
+    @Test
+    public void testLeftShiftAtZeroAmount() throws Exception {
+        PeepholeFoldConstants optimization = new PeepholeFoldConstants();
+        Node expression = new Node(Token.LSH, Node.newNumber(5), Node.newNumber(0));
+        Node root = Node.newExpr(expression);
+
+        Node result = optimization.optimizeSubtree(expression);
+
+        assertEquals(5.0, result.getDouble(), 0.0);
+        assertSame(result, root.getFirstChild());
+    }
+
+    @Test
+    public void testLeftShiftAtMaximumValidAmount() throws Exception {
+        PeepholeFoldConstants optimization = new PeepholeFoldConstants();
+        Node expression = new Node(Token.LSH, Node.newNumber(1), Node.newNumber(31));
+        Node root = Node.newExpr(expression);
+
+        Node result = optimization.optimizeSubtree(expression);
+
+        assertEquals(-2147483648.0, result.getDouble(), 0.0);
+        assertSame(result, root.getFirstChild());
+    }
+
+    @Test
+    public void testLeftShiftAtFirstInvalidAmount() throws Exception {
+        PeepholeFoldConstants optimization = new PeepholeFoldConstants();
+        Node expression = new Node(Token.LSH, Node.newNumber(1), Node.newNumber(32));
+        Node root = Node.newExpr(expression);
+
+        Node result = optimization.optimizeSubtree(expression);
+
+        assertSame(expression, result);
+        assertSame(expression, root.getFirstChild());
+    }
+
+    @Test
+    public void testUnsignedRightShiftOfNegativeOne() throws Exception {
+        PeepholeFoldConstants optimization = new PeepholeFoldConstants();
+        Node expression = new Node(Token.URSH, Node.newNumber(-1), Node.newNumber(1));
+        Node root = Node.newExpr(expression);
+
+        Node result = optimization.optimizeSubtree(expression);
+
+        assertEquals(2147483647.0, result.getDouble(), 0.0);
+        assertSame(result, root.getFirstChild());
+    }
+
+    @Test
+    public void testFoldStringSubstring() throws Exception {
+        PeepholeFoldConstants optimization = new PeepholeFoldConstants();
+        Node target = new Node(Token.GETPROP, Node.newString("abcdef"), Node.newString("substring"));
+        Node expression = new Node(Token.CALL, target, Node.newNumber(1), Node.newNumber(4));
+        Node root = Node.newExpr(expression);
+
+        Node result = optimization.optimizeSubtree(expression);
+
+        assertEquals(Token.STRING, result.getType());
+        assertEquals("bcd", result.getString());
+        assertSame(result, root.getFirstChild());
+    }
+
+    @Test
+    public void testFoldStringSubstr() throws Exception {
+        PeepholeFoldConstants optimization = new PeepholeFoldConstants();
+        Node target = new Node(Token.GETPROP, Node.newString("abcdef"), Node.newString("substr"));
+        Node expression = new Node(Token.CALL, target, Node.newNumber(2), Node.newNumber(3));
+        Node root = Node.newExpr(expression);
+
+        Node result = optimization.optimizeSubtree(expression);
+
+        assertEquals("cde", result.getString());
+        assertSame(result, root.getFirstChild());
+    }
+
+    @Test
+    public void testFoldStringIndexOfAtEnd() throws Exception {
+        PeepholeFoldConstants optimization = new PeepholeFoldConstants();
+        Node target = new Node(Token.GETPROP, Node.newString("abcabc"), Node.newString("indexOf"));
+        Node expression = new Node(Token.CALL, target, Node.newString("bc"), Node.newNumber(3));
+        Node root = Node.newExpr(expression);
+
+        Node result = optimization.optimizeSubtree(expression);
+
+        assertEquals(4.0, result.getDouble(), 0.0);
+        assertSame(result, root.getFirstChild());
+    }
+
+    @Test
+    public void testFoldStringLowercase() throws Exception {
+        PeepholeFoldConstants optimization = new PeepholeFoldConstants();
+        Node target = new Node(Token.GETPROP, Node.newString("AbC"), Node.newString("toLowerCase"));
+        Node expression = new Node(Token.CALL, target);
+        Node root = Node.newExpr(expression);
+
+        Node result = optimization.optimizeSubtree(expression);
+
+        assertEquals("abc", result.getString());
+        assertSame(result, root.getFirstChild());
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+No target method was specified, and the class has no listed public methods, so method selection is exploratory.  
+Tests exercise the public subtree optimization entry point across folding, arithmetic, indexing, shifts, and string-method branches.
+
+### 2. TEST CASE DESIGN
+- `testArrayLength`: two-element array; expects 2, from the array child count.
+- `testEmptyArrayLength`: empty array; expects 0, from its child count.
+- `testStringLength`: `"abc"`; expects 3, its Java string length.
+- `testArrayElementAtFirstIndex`: index 0; expects `"first"`, the first array child.
+- `testArrayElementAtLastIndex`: index 1 in a two-element array; expects 9, the last child.
+- `testArrayElementAtIndexZeroInSingleElementArray`: index 0; expects 7, the sole child.
+- `testArrayIndexFractionalIsNotFolded`: index 0.5; expects the original expression because the index is non-integral.
+- `testArrayIndexAtLengthIsNotFolded`: index 1 into a one-element array; expects the original expression because it is out of bounds.
+- `testConstantAddition`: 2 + 3; expects 5 by arithmetic addition.
+- `testConstantSubtraction`: 9 − 4; expects 5 by arithmetic subtraction.
+- `testConstantMultiplication`: 3 × 4; expects 12 by arithmetic multiplication.
+- `testDivisionByZeroRemainsUnfolded`: divisor 0; expects the original node because division by zero is not folded.
+- `testAdditionOfStrings`: `"ab" + "cd"`; expects `"abcd"` by string concatenation.
+- `testFoldTypeofString`: string literal; expects `"string"` from the `TYPEOF` branch.
+- `testFoldTypeofNumber`: number literal; expects `"number"` from the `TYPEOF` branch.
+- `testFoldTypeofBoolean`: true literal; expects `"boolean"` from the `TYPEOF` branch.
+- `testFoldAndWithTrueLeftOperand`: true AND a string; expects the right operand.
+- `testFoldOrWithFalseLeftOperand`: false OR a string; expects the right operand.
+- `testLeftShiftAtZeroAmount`: 5 shifted by 0; expects 5.
+- `testLeftShiftAtMaximumValidAmount`: 1 shifted by 31; expects −2147483648 under Java’s 32-bit signed shift semantics.
+- `testLeftShiftAtFirstInvalidAmount`: shift amount 32; expects the original expression because valid amounts are below 32.
+- `testUnsignedRightShiftOfNegativeOne`: −1 unsigned-shifted by 1; expects 2147483647.
+- `testFoldStringSubstring`: `"abcdef".substring(1, 4)`; expects `"bcd"`.
+- `testFoldStringSubstr`: `"abcdef".substr(2, 3)`; expects `"cde"`.
+- `testFoldStringIndexOfAtEnd`: `"abcabc".indexOf("bc", 3)`; expects index 4.
+- `testFoldStringLowercase`: `"AbC".toLowerCase()`; expects `"abc"` using the root locale.
+
+### 4. DEFECT DETECTION STRATEGY
+The assertions pin exact folded values and verify that boundary or unsupported inputs remain unfolded.  
+These checks provide behavioral coverage but do not establish detection of any particular defect.
+
+### 5. SUMMARY
+26 independent tests.
+
+### 6. LIMITATIONS
+The tests invoke the class’s package-private optimization entry point and rely on the test environment providing a usable default constructor and inherited optimization support. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

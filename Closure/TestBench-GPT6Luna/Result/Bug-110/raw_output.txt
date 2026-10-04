@@ -1,0 +1,253 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.javascript.rhino.Node;
+import com.google.common.base.Preconditions;
+import com.google.common.collect.HashMultiset;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.common.collect.Multiset;
+import com.google.common.collect.Sets;
+import com.google.javascript.jscomp.CompilerOptions.AliasTransformation;
+import com.google.javascript.jscomp.CompilerOptions.AliasTransformationHandler;
+import com.google.javascript.jscomp.Scope.Var;
+import com.google.javascript.rhino.IR;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.SourcePosition;
+import com.google.javascript.rhino.Token;
+import java.util.Collection;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import javax.annotation.Nullable;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Objects;
+import com.google.javascript.rhino.jstype.JSType;
+import com.google.javascript.rhino.jstype.SimpleSourceFile;
+import com.google.javascript.rhino.jstype.StaticSourceFile;
+import java.io.IOException;
+import java.io.Serializable;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.NoSuchElementException;
+
+public class ScopedAliasesTest {
+    @Test
+    public void testNodeQualifiedNameAndTypePredicate() throws Exception {
+        Node node = Node.newString("x");
+        assertEquals("x", node.getString());
+        assertEquals(Token.STRING, node.getType());
+        assertFalse(node.isQualifiedName());
+    }
+
+    @Test
+    public void testNumberValue() throws Exception {
+        Node node = Node.newNumber(7.25);
+        assertEquals(7.25, node.getDouble(), 0.0);
+        node.setDouble(-2.5);
+        assertEquals(-2.5, node.getDouble(), 0.0);
+    }
+
+    @Test
+    public void testChildrenAndIndexEdges() throws Exception {
+        Node parent = new Node(Token.BLOCK);
+        Node first = Node.newString("a");
+        Node last = Node.newString("b");
+        parent.addChildToBack(first);
+        parent.addChildToBack(last);
+        assertEquals(2, parent.getChildCount());
+        assertEquals(0, parent.getIndexOfChild(first));
+        assertEquals(1, parent.getIndexOfChild(last));
+        assertEquals(-1, parent.getIndexOfChild(Node.newString("c")));
+        assertEquals(first, parent.getChildAtIndex(0));
+        assertEquals(last, parent.getChildAtIndex(1));
+        assertEquals(first, parent.getChildBefore(last));
+    }
+
+    @Test
+    public void testChildMutationsAndParentLinks() throws Exception {
+        Node parent = new Node(Token.BLOCK);
+        Node a = Node.newString("a");
+        Node b = Node.newString("b");
+        Node c = Node.newString("c");
+        parent.addChildToBack(a);
+        parent.addChildToBack(c);
+        parent.addChildBefore(b, c);
+        assertEquals(3, parent.getChildCount());
+        assertEquals(b, parent.getChildBefore(c));
+        parent.removeChild(b);
+        assertEquals(2, parent.getChildCount());
+        assertNull(b.getParent());
+        assertEquals(c, parent.getLastChild());
+    }
+
+    @Test
+    public void testReplaceChildAndCloneTree() throws Exception {
+        Node parent = new Node(Token.BLOCK);
+        Node oldChild = Node.newString("old");
+        parent.addChildToBack(oldChild);
+        Node newChild = Node.newString("new");
+        parent.replaceChild(oldChild, newChild);
+        assertEquals(newChild, parent.getFirstChild());
+        assertNull(oldChild.getParent());
+        Node clone = parent.cloneTree();
+        assertEquals("new", clone.getFirstChild().getString());
+        assertNull(clone.getParent());
+        assertNull(clone.getFirstChild().getParent() == parent ? parent : null);
+    }
+
+    @Test
+    public void testIntegerPropertiesAtZeroAndEdges() throws Exception {
+        Node node = new Node(Token.NAME);
+        assertEquals(0, node.getIntProp(Node.LENGTH));
+        node.putIntProp(Node.LENGTH, Integer.MAX_VALUE);
+        assertEquals(Integer.MAX_VALUE, node.getExistingIntProp(Node.LENGTH));
+        node.putIntProp(Node.LENGTH, Integer.MIN_VALUE);
+        assertEquals(Integer.MIN_VALUE, node.getIntProp(Node.LENGTH));
+        node.putIntProp(Node.LENGTH, 0);
+        assertEquals(0, node.getIntProp(Node.LENGTH));
+    }
+
+    @Test
+    public void testBooleanPropertyToggle() throws Exception {
+        Node node = new Node(Token.NAME);
+        node.putBooleanProp(Node.QUOTED_PROP, true);
+        assertTrue(node.getBooleanProp(Node.QUOTED_PROP));
+        node.putBooleanProp(Node.QUOTED_PROP, false);
+        assertFalse(node.getBooleanProp(Node.QUOTED_PROP));
+    }
+
+    @Test
+    public void testObjectPropertyReplacementAndRemoval() throws Exception {
+        Node node = new Node(Token.NAME);
+        node.putProp(Node.INPUT_ID, "first");
+        assertEquals("first", node.getProp(Node.INPUT_ID));
+        node.putProp(Node.INPUT_ID, "second");
+        assertEquals("second", node.getProp(Node.INPUT_ID));
+        node.removeProp(Node.INPUT_ID);
+        assertNull(node.getProp(Node.INPUT_ID));
+    }
+
+    @Test
+    public void testMissingExistingIntegerPropertyThrows() throws Exception {
+        Node node = new Node(Token.NAME);
+        try {
+            node.getExistingIntProp(Node.LENGTH);
+            fail("expected IllegalStateException");
+        } catch (IllegalStateException expected) {
+            assertEquals(0, node.getIntProp(Node.LENGTH));
+        }
+    }
+
+    @Test
+    public void testSourcePositionLengthEdges() throws Exception {
+        Node node = new Node(Token.NAME, 3, Node.MAX_COLUMN_NUMBER);
+        assertEquals(3, node.getLineno());
+        assertEquals(Node.MAX_COLUMN_NUMBER, node.getCharno());
+        node.setLength(Integer.MAX_VALUE);
+        assertEquals(Integer.MAX_VALUE, node.getLength());
+        node.setLength(Integer.MIN_VALUE);
+        assertEquals(Integer.MIN_VALUE, node.getLength());
+    }
+
+    @Test
+    public void testSourceFileTestingName() throws Exception {
+        Node node = new Node(Token.SCRIPT);
+        assertNull(node.getSourceFileName());
+        node.setSourceFileForTesting("sample.js");
+        assertEquals("sample.js", node.getSourceFileName());
+        assertFalse(node.isFromExterns());
+    }
+
+    @Test
+    public void testSideEffectFlagQueries() throws Exception {
+        Node call = new Node(Token.CALL);
+        call.setSideEffectFlags(Node.NO_SIDE_EFFECTS | Node.FLAG_LOCAL_RESULTS);
+        assertTrue(call.isNoSideEffectsCall());
+        assertTrue(call.isLocalResultCall());
+        assertFalse(call.mayMutateArguments());
+        assertFalse(call.mayMutateGlobalStateOrThrow());
+        call.setSideEffectFlags(Node.SIDE_EFFECTS_ALL);
+        assertFalse(call.isNoSideEffectsCall());
+        assertTrue(call.mayMutateArguments());
+    }
+
+    @Test
+    public void testQualifiedNamesAndEmptyNameBoundary() throws Exception {
+        Node simple = Node.newString(Token.NAME, "alpha");
+        assertEquals("alpha", simple.getQualifiedName());
+        assertTrue(simple.isQualifiedName());
+        Node empty = Node.newString(Token.NAME, "");
+        assertNull(empty.getQualifiedName());
+        assertFalse(empty.isQualifiedName());
+    }
+
+    @Test
+    public void testTreeEquivalenceAndDifference() throws Exception {
+        Node left = new Node(Token.BLOCK, Node.newString("x"));
+        Node right = left.cloneTree();
+        assertTrue(left.isEquivalentTo(right));
+        assertNull(left.checkTreeEquals(right));
+        right.getFirstChild().setString("y");
+        assertFalse(left.isEquivalentTo(right));
+        assertNotNull(left.checkTreeEquals(right));
+    }
+
+    @Test
+    public void testQuotedStringMutation() throws Exception {
+        Node string = Node.newString("key");
+        assertFalse(string.isQuotedString());
+        string.setQuotedString();
+        assertTrue(string.isQuotedString());
+    }
+
+    @Test
+    public void testChildRemovalAndDetachChildren() throws Exception {
+        Node parent = new Node(Token.BLOCK);
+        Node one = Node.newString("one");
+        Node two = Node.newString("two");
+        parent.addChildToBack(one);
+        parent.addChildToBack(two);
+        assertEquals(one, parent.removeFirstChild());
+        assertNull(one.getParent());
+        parent.detachChildren();
+        assertEquals(0, parent.getChildCount());
+        assertNull(two.getParent());
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+No target method was specified, so method selection is exploratory.  
+The provided class is `ScopedAliases`, but the supplied public-method list and the requested test header concern `Node`; tests therefore exercise the visible `Node` behaviors and state changes.
+
+### 2. TEST CASE DESIGN
+- `testNodeQualifiedNameAndTypePredicate`: `"x"`; string, type, and qualified-name behavior follow the node’s string token and `getQualifiedName` rules.
+- `testNumberValue`: `7.25`, then `-2.5`; number-node accessors return and update the stored double.
+- `testChildrenAndIndexEdges`: two children and indexes 0, 1, and missing; child traversal yields insertion order and absent-child index is -1.
+- `testChildMutationsAndParentLinks`: insert then remove middle child; the parent’s count/order update and detached child’s parent becomes null.
+- `testReplaceChildAndCloneTree`: replace a child and clone; replacement appears in the parent and the tree clone preserves child text.
+- `testIntegerPropertiesAtZeroAndEdges`: zero, `Integer.MAX_VALUE`, `Integer.MIN_VALUE`; integer properties preserve nonzero values and omit zero.
+- `testBooleanPropertyToggle`: true then false; boolean properties map to integer property values.
+- `testObjectPropertyReplacementAndRemoval`: replace and remove an object property; reads return the latest value and then null.
+- `testMissingExistingIntegerPropertyThrows`: absent property; `getExistingIntProp` throws `IllegalStateException`, while ordinary read is zero.
+- `testSourcePositionLengthEdges`: line 3, maximum column, and signed integer length endpoints; the source-position encoding caps at `MAX_COLUMN_NUMBER` and length stores the property value.
+- `testSourceFileTestingName`: initially unset, then `"sample.js"`; testing setter stores the filename and creates a non-extern source file.
+- `testSideEffectFlagQueries`: no-side-effects/local-result flags, then all-effects flags; each query follows the bitmask checks.
+- `testQualifiedNamesAndEmptyNameBoundary`: nonempty and empty names; empty names are not qualified and return null.
+- `testTreeEquivalenceAndDifference`: cloned tree and modified child; clone is equivalent, then the changed child makes trees unequal.
+- `testQuotedStringMutation`: default false then set; quoted-string property reflects the mutation.
+- `testChildRemovalAndDetachChildren`: remove first then detach remainder; parent empties and removed nodes are detached.
+
+### 4. DEFECT DETECTION STRATEGY
+The tests pin visible `Node` behavior for tree edits, property boundaries, source-position encoding, and side-effect flags.  
+They do not exercise `ScopedAliases` processing because no usable compiler setup or target method was supplied.
+
+### 5. SUMMARY
+16 tests.
+
+### 6. LIMITATIONS
+The class-under-test source and requested header disagree: the source is `ScopedAliases`, while the header names `ScopedAliasesTest` and imports `Node`. The tests target only `Node` APIs visible in the supplied source. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

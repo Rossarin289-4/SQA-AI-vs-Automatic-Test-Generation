@@ -1,0 +1,684 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Predicate;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Iterators;
+import com.google.javascript.rhino.ErrorReporter;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.jstype.JSType;
+import com.google.javascript.rhino.jstype.ObjectType;
+import com.google.javascript.rhino.jstype.StaticReference;
+import com.google.javascript.rhino.jstype.StaticScope;
+import com.google.javascript.rhino.jstype.StaticSlot;
+import com.google.javascript.rhino.jstype.StaticSourceFile;
+import com.google.javascript.rhino.jstype.StaticSymbolTable;
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.javascript.jscomp.CompilerOptions.AliasTransformation;
+import com.google.javascript.jscomp.CompilerOptions.AliasTransformationHandler;
+import com.google.javascript.jscomp.Scope.Var;
+import com.google.javascript.rhino.SourcePosition;
+import java.util.Collection;
+import java.util.List;
+import javax.annotation.Nullable;
+
+public class ScopeTest {
+    // Mock AbstractCompiler for creating Scope objects
+    private static class MockAbstractCompiler extends AbstractCompiler {
+        MockAbstractCompiler() {
+            // Initialize necessary fields for AbstractCompiler if any are used by Scope constructors.
+            // For this case, it seems only the global scope constructor uses it.
+            // We can use a placeholder for type registry if not used.
+        }
+
+        @Override
+        public JSTypeRegistry getTypeRegistry() {
+            // Mock JSTypeRegistry if needed.
+            // For now, returning null or a dummy if not strictly required for construction.
+            return null;
+        }
+    }
+
+    // Helper to create a simple Scope.
+    private Scope createGlobalScope(Node rootNode) {
+        return new Scope(rootNode, new MockAbstractCompiler());
+    }
+
+    // Helper to create a nested Scope.
+    private Scope createNestedScope(Scope parent, Node rootNode) {
+        return new Scope(parent, rootNode);
+    }
+
+    // Helper to create a Var.
+    private Var createVar(String name, Node nameNode, JSType type, Scope scope, CompilerInput input, boolean inferred, boolean isDefine, JSDocInfo info) {
+        return new Var(inferred, name, nameNode, type, scope, 0, input, isDefine, info);
+    }
+
+    @Test
+    public void testGlobalScopeCreation() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Scope globalScope = createGlobalScope(root);
+        assertNotNull(globalScope);
+        assertTrue(globalScope.isGlobal());
+        assertNull(globalScope.getParent());
+        assertEquals(0, globalScope.getDepth());
+        assertEquals(root, globalScope.getRootNode());
+    }
+
+    @Test
+    public void testNestedScopeCreation() throws Exception {
+        Node globalRoot = new Node(Token.SCRIPT);
+        Scope globalScope = createGlobalScope(globalRoot);
+        Node functionRoot = new Node(Token.FUNCTION);
+        Scope nestedScope = createNestedScope(globalScope, functionRoot);
+        assertNotNull(nestedScope);
+        assertFalse(nestedScope.isGlobal());
+        assertEquals(globalScope, nestedScope.getParent());
+        assertEquals(1, nestedScope.getDepth());
+        assertEquals(functionRoot, nestedScope.getRootNode());
+    }
+
+    @Test
+    public void testGetParent() throws Exception {
+        Node globalRoot = new Node(Token.SCRIPT);
+        Scope globalScope = createGlobalScope(globalRoot);
+        Node functionRoot = new Node(Token.FUNCTION);
+        Scope nestedScope = createNestedScope(globalScope, functionRoot);
+        assertEquals(globalScope, nestedScope.getParent());
+        assertNull(globalScope.getParent());
+    }
+
+    @Test
+    public void testGetRootNode() throws Exception {
+        Node globalRoot = new Node(Token.SCRIPT);
+        Scope globalScope = createGlobalScope(globalRoot);
+        Node functionRoot = new Node(Token.FUNCTION);
+        Scope nestedScope = createNestedScope(globalScope, functionRoot);
+        assertEquals(globalRoot, globalScope.getRootNode());
+        assertEquals(functionRoot, nestedScope.getRootNode());
+    }
+
+    @Test
+    public void testGetDepth() throws Exception {
+        Node globalRoot = new Node(Token.SCRIPT);
+        Scope globalScope = createGlobalScope(globalRoot);
+        Node functionRoot1 = new Node(Token.FUNCTION);
+        Scope nestedScope1 = createNestedScope(globalScope, functionRoot1);
+        Node functionRoot2 = new Node(Token.FUNCTION);
+        Scope nestedScope2 = createNestedScope(nestedScope1, functionRoot2);
+        assertEquals(0, globalScope.getDepth());
+        assertEquals(1, nestedScope1.getDepth());
+        assertEquals(2, nestedScope2.getDepth());
+    }
+
+    @Test
+    public void testGetGlobalScope() throws Exception {
+        Node globalRoot = new Node(Token.SCRIPT);
+        Scope globalScope = createGlobalScope(globalRoot);
+        Node functionRoot1 = new Node(Token.FUNCTION);
+        Scope nestedScope1 = createNestedScope(globalScope, functionRoot1);
+        Node functionRoot2 = new Node(Token.FUNCTION);
+        Scope nestedScope2 = createNestedScope(nestedScope1, functionRoot2);
+        assertEquals(globalScope, globalScope.getGlobalScope());
+        assertEquals(globalScope, nestedScope1.getGlobalScope());
+        assertEquals(globalScope, nestedScope2.getGlobalScope());
+    }
+
+    @Test
+    public void testDeclareAndGetVar() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Scope scope = createGlobalScope(root);
+        Node nameNode = Node.newString("myVar");
+        JSType mockType = null; // Mock JSType
+        CompilerInput mockInput = new CompilerInput(null, null, false); // Mock CompilerInput
+        Var var = createVar("myVar", nameNode, mockType, scope, mockInput, false, false, null);
+        scope.vars.put("myVar", var); // Directly add for testing getVar
+
+        Var foundVar = scope.getVar("myVar");
+        assertNotNull(foundVar);
+        assertEquals("myVar", foundVar.getName());
+        assertEquals(nameNode, foundVar.getNode());
+    }
+
+    @Test
+    public void testGetVar_notDeclared() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Scope scope = createGlobalScope(root);
+        assertNull(scope.getVar("nonExistentVar"));
+    }
+
+    @Test
+    public void testGetVar_inParentScope() throws Exception {
+        Node globalRoot = new Node(Token.SCRIPT);
+        Scope globalScope = createGlobalScope(globalRoot);
+        Node varNameNode = Node.newString("globalVar");
+        JSType mockType = null;
+        CompilerInput mockInput = new CompilerInput(null, null, false);
+        Var globalVar = createVar("globalVar", varNameNode, mockType, globalScope, mockInput, false, false, null);
+        globalScope.vars.put("globalVar", globalVar);
+
+        Node functionRoot = new Node(Token.FUNCTION);
+        Scope nestedScope = createNestedScope(globalScope, functionRoot);
+
+        Var foundVar = nestedScope.getVar("globalVar");
+        assertNotNull(foundVar);
+        assertEquals("globalVar", foundVar.getName());
+        assertEquals(globalVar, foundVar); // Should be the same instance
+    }
+
+    @Test
+    public void testIsDeclared() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Scope scope = createGlobalScope(root);
+        Node nameNode = Node.newString("myVar");
+        JSType mockType = null;
+        CompilerInput mockInput = new CompilerInput(null, null, false);
+        Var var = createVar("myVar", nameNode, mockType, scope, mockInput, false, false, null);
+        scope.vars.put("myVar", var);
+
+        assertTrue(scope.isDeclared("myVar", true));
+        assertTrue(scope.isDeclared("myVar", false));
+        assertFalse(scope.isDeclared("otherVar", true));
+        assertFalse(scope.isDeclared("otherVar", false));
+    }
+
+    @Test
+    public void testIsDeclared_inParentScope() throws Exception {
+        Node globalRoot = new Node(Token.SCRIPT);
+        Scope globalScope = createGlobalScope(globalRoot);
+        Node varNameNode = Node.newString("globalVar");
+        JSType mockType = null;
+        CompilerInput mockInput = new CompilerInput(null, null, false);
+        Var globalVar = createVar("globalVar", varNameNode, mockType, globalScope, mockInput, false, false, null);
+        globalScope.vars.put("globalVar", globalVar);
+
+        Node functionRoot = new Node(Token.FUNCTION);
+        Scope nestedScope = createNestedScope(globalScope, functionRoot);
+
+        assertTrue(nestedScope.isDeclared("globalVar", true));
+        assertFalse(nestedScope.isDeclared("globalVar", false)); // Not declared in nestedScope itself
+    }
+
+    @Test
+    public void testGetVars() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Scope scope = createGlobalScope(root);
+        Node nameNode1 = Node.newString("var1");
+        JSType mockType = null;
+        CompilerInput mockInput = new CompilerInput(null, null, false);
+        Var var1 = createVar("var1", nameNode1, mockType, scope, mockInput, false, false, null);
+        scope.vars.put("var1", var1);
+
+        Node nameNode2 = Node.newString("var2");
+        Var var2 = createVar("var2", nameNode2, mockType, scope, mockInput, false, false, null);
+        scope.vars.put("var2", var2);
+
+        Iterator<Var> varsIterator = scope.getVars();
+        assertTrue(varsIterator.hasNext());
+        Var firstVar = varsIterator.next();
+        assertTrue(firstVar == var1 || firstVar == var2);
+        assertTrue(varsIterator.hasNext());
+        Var secondVar = varsIterator.next();
+        assertTrue(secondVar == var1 || secondVar == var2);
+        assertFalse(varsIterator.hasNext());
+    }
+
+    @Test
+    public void testGetVarCount() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Scope scope = createGlobalScope(root);
+        assertEquals(0, scope.getVarCount());
+
+        Node nameNode1 = Node.newString("var1");
+        JSType mockType = null;
+        CompilerInput mockInput = new CompilerInput(null, null, false);
+        Var var1 = createVar("var1", nameNode1, mockType, scope, mockInput, false, false, null);
+        scope.vars.put("var1", var1);
+        assertEquals(1, scope.getVarCount());
+
+        Node nameNode2 = Node.newString("var2");
+        Var var2 = createVar("var2", nameNode2, mockType, scope, mockInput, false, false, null);
+        scope.vars.put("var2", var2);
+        assertEquals(2, scope.getVarCount());
+    }
+
+    @Test
+    public void testGetArgumentsVar() throws Exception {
+        Node root = new Node(Token.FUNCTION); // 'arguments' is relevant in function scopes
+        Scope scope = createNestedScope(createGlobalScope(new Node(Token.SCRIPT)), root);
+        Var argsVar = scope.getArgumentsVar();
+        assertNotNull(argsVar);
+        assertEquals("arguments", argsVar.getName());
+        assertTrue(argsVar instanceof Scope.Arguments);
+        assertEquals(scope, argsVar.getScope());
+        assertNull(argsVar.getNode()); // 'arguments' doesn't have a declaration node in this context.
+    }
+
+    @Test
+    public void testGetArgumentsVar_cached() throws Exception {
+        Node root = new Node(Token.FUNCTION);
+        Scope scope = createNestedScope(createGlobalScope(new Node(Token.SCRIPT)), root);
+        Var argsVar1 = scope.getArgumentsVar();
+        Var argsVar2 = scope.getArgumentsVar();
+        assertSame(argsVar1, argsVar2); // Should return the same instance.
+    }
+
+    @Test
+    public void testIsGlobal() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Scope globalScope = createGlobalScope(root);
+        assertTrue(globalScope.isGlobal());
+
+        Node functionRoot = new Node(Token.FUNCTION);
+        Scope nestedScope = createNestedScope(globalScope, functionRoot);
+        assertFalse(nestedScope.isGlobal());
+    }
+
+    @Test
+    public void testIsLocal() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Scope globalScope = createGlobalScope(root);
+        assertFalse(globalScope.isLocal());
+
+        Node functionRoot = new Node(Token.FUNCTION);
+        Scope nestedScope = createNestedScope(globalScope, functionRoot);
+        assertTrue(nestedScope.isLocal());
+    }
+
+    @Test
+    public void testGetTypeOfThis() throws Exception {
+        Node globalRoot = new Node(Token.SCRIPT);
+        Scope globalScope = createGlobalScope(globalRoot);
+        // The global scope's 'this' type is usually a specific global object type.
+        // We can't easily mock JSTypeRegistry here, so we'll check for non-null.
+        assertNotNull(globalScope.getTypeOfThis());
+
+        Node functionRoot = new Node(Token.FUNCTION);
+        // For a nested scope, 'this' type is inherited from the parent or function type.
+        // Mocking JSType for function type to set a specific 'this' type.
+        JSType mockFunctionType = new JSType(null) { // Mock JSType to enable toMaybeFunctionType
+            @Override public FunctionType toMaybeFunctionType() {
+                return new FunctionType(null, null) { // Mock FunctionType
+                    @Override public JSType getTypeOfThis() {
+                        // Return a mock ObjectType for 'this'
+                        return new ObjectType(null) { // Mock ObjectType
+                            @Override public String getDisplayName() { return "MockThisType"; }
+                        };
+                    }
+                };
+            }
+            @Override public String getDisplayName() { return "MockFunctionType"; }
+        };
+        functionRoot.setJSType(mockFunctionType);
+        Scope nestedScope = createNestedScope(globalScope, functionRoot);
+        assertNotNull(nestedScope.getTypeOfThis());
+        assertEquals("MockThisType", nestedScope.getTypeOfThis().getDisplayName());
+    }
+
+    @Test
+    public void testGetSlot_and_getOwnSlot() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Scope scope = createGlobalScope(root);
+        Node nameNode = Node.newString("myVar");
+        JSType mockType = null;
+        CompilerInput mockInput = new CompilerInput(null, null, false);
+        Var var = createVar("myVar", nameNode, mockType, scope, mockInput, false, false, null);
+        scope.vars.put("myVar", var);
+
+        StaticSlot<JSType> ownSlot = scope.getOwnSlot("myVar");
+        assertNotNull(ownSlot);
+        assertEquals("myVar", ownSlot.getName());
+        assertEquals(var, ownSlot.getSymbol());
+
+        StaticSlot<JSType> slot = scope.getSlot("myVar");
+        assertNotNull(slot);
+        assertEquals("myVar", slot.getName());
+        assertEquals(var, slot.getSymbol());
+    }
+
+    @Test
+    public void testGetOwnSlot_notDeclared() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Scope scope = createGlobalScope(root);
+        assertNull(scope.getOwnSlot("nonExistentVar"));
+    }
+
+    @Test
+    public void testGetSlot_inParentScope() throws Exception {
+        Node globalRoot = new Node(Token.SCRIPT);
+        Scope globalScope = createGlobalScope(globalRoot);
+        Node varNameNode = Node.newString("globalVar");
+        JSType mockType = null;
+        CompilerInput mockInput = new CompilerInput(null, null, false);
+        Var globalVar = createVar("globalVar", varNameNode, mockType, globalScope, mockInput, false, false, null);
+        globalScope.vars.put("globalVar", globalVar);
+
+        Node functionRoot = new Node(Token.FUNCTION);
+        Scope nestedScope = createNestedScope(globalScope, functionRoot);
+
+        StaticSlot<JSType> slot = nestedScope.getSlot("globalVar");
+        assertNotNull(slot);
+        assertEquals("globalVar", slot.getName());
+        assertEquals(globalVar, slot.getSymbol());
+    }
+
+    @Test
+    public void testGetAllSymbols() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Scope scope = createGlobalScope(root);
+        Node nameNode1 = Node.newString("var1");
+        JSType mockType = null;
+        CompilerInput mockInput = new CompilerInput(null, null, false);
+        Var var1 = createVar("var1", nameNode1, mockType, scope, mockInput, false, false, null);
+        scope.vars.put("var1", var1);
+
+        Node nameNode2 = Node.newString("var2");
+        Var var2 = createVar("var2", nameNode2, mockType, scope, mockInput, false, false, null);
+        scope.vars.put("var2", var2);
+
+        Iterable<Var> allSymbols = scope.getAllSymbols();
+        List<Var> symbolList = Lists.newArrayList(allSymbols);
+        assertEquals(2, symbolList.size());
+        assertTrue(symbolList.contains(var1));
+        assertTrue(symbolList.contains(var2));
+    }
+
+    @Test
+    public void testGetDeclarativelyUnboundVarsWithoutTypes() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Scope scope = createGlobalScope(root);
+        Node nameNode1 = Node.newString("var1");
+        JSType mockType = null; // No declared type
+        CompilerInput mockInput = new CompilerInput(null, null, false);
+        Var var1 = createVar("var1", nameNode1, mockType, scope, mockInput, false, false, null);
+        Node varNode1 = new Node(Token.VAR);
+        varNode1.addChildToBack(nameNode1);
+        var1.nameNode.setParent(varNode1); // Parent is VAR
+        scope.vars.put("var1", var1);
+
+        // Test case 1: Var with no type
+        Iterator<Var> iterator1 = scope.getDeclarativelyUnboundVarsWithoutTypes();
+        assertTrue(iterator1.hasNext());
+        assertEquals(var1, iterator1.next());
+        assertFalse(iterator1.hasNext());
+
+        // Test case 2: Var with a declared type
+        JSType declaredType = new JSType(null) {}; // Dummy declared type
+        Node nameNode2 = Node.newString("var2");
+        Var var2 = createVar("var2", nameNode2, declaredType, scope, mockInput, false, false, null);
+        Node varNode2 = new Node(Token.VAR);
+        varNode2.addChildToBack(nameNode2);
+        var2.nameNode.setParent(varNode2);
+        scope.vars.put("var2", var2);
+
+        Iterator<Var> iterator2 = scope.getDeclarativelyUnboundVarsWithoutTypes();
+        assertTrue(iterator2.hasNext());
+        assertEquals(var1, iterator2.next()); // Only var1 should be returned
+        assertFalse(iterator2.hasNext());
+
+        // Test case 3: Non-VAR parent (should not be considered)
+        Node nameNode3 = Node.newString("var3");
+        Var var3 = createVar("var3", nameNode3, null, scope, mockInput, false, false, null);
+        Node assignNode = new Node(Token.ASSIGN);
+        assignNode.addChildToBack(nameNode3);
+        var3.nameNode.setParent(assignNode);
+        scope.vars.put("var3", var3);
+
+        Iterator<Var> iterator3 = scope.getDeclarativelyUnboundVarsWithoutTypes();
+        assertTrue(iterator3.hasNext());
+        assertEquals(var1, iterator3.next()); // Still only var1
+        assertFalse(iterator3.hasNext());
+    }
+
+    // Tests for ScopedAliases methods (implementing parts of the API outline)
+    // These would typically be in a separate test class for ScopedAliases,
+    // but given the constraints, we'll include basic checks if they directly
+    // interact with Scope.
+
+    @Test
+    public void testScopedAliases_process() throws Exception {
+        // This requires a more complex setup with Compiler, NodeTraversal, etc.
+        // As a simplified test, we'll just check if the method exists and can be called.
+        // A full test would involve creating ASTs and verifying changes.
+        Node externs = new Node(Token.ROOT);
+        Node root = new Node(Token.SCRIPT);
+        AbstractCompiler compiler = new MockAbstractCompiler();
+        // Mock AliasTransformationHandler and PreprocessorSymbolTable if needed.
+        ScopedAliases scopedAliases = new ScopedAliases(compiler, null, new AliasTransformationHandler() {
+            @Override
+            public AliasTransformation logAliasTransformation(String sourceFileName, SourcePosition<AliasTransformation> region) {
+                return new AliasTransformation() {
+                    @Override public void addAlias(String alias, String qualifiedName) {}
+                    @Override public String getAlias() { return null; }
+                    @Override public String getQualifiedName() { return null; }
+                    @Override public SourcePosition<AliasTransformation> getRegion() { return null; }
+                    @Override public String getSourceFileName() { return null; }
+                    @Override public String toString() { return "MockAliasTransformation"; }
+                };
+            }
+        });
+        scopedAliases.process(externs, root);
+        // Basic check: no exceptions thrown for a simple structure.
+        // More detailed checks would require building a specific AST.
+    }
+
+    @Test
+    public void testScopedAliases_hotSwapScript() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        AbstractCompiler compiler = new MockAbstractCompiler();
+        ScopedAliases scopedAliases = new ScopedAliases(compiler, null, new AliasTransformationHandler() {
+            @Override
+            public AliasTransformation logAliasTransformation(String sourceFileName, SourcePosition<AliasTransformation> region) {
+                return new AliasTransformation() {
+                    @Override public void addAlias(String alias, String qualifiedName) {}
+                    @Override public String getAlias() { return null; }
+                    @Override public String getQualifiedName() { return null; }
+                    @Override public SourcePosition<AliasTransformation> getRegion() { return null; }
+                    @Override public String getSourceFileName() { return null; }
+                    @Override public String toString() { return "MockAliasTransformation"; }
+                };
+            }
+        });
+        scopedAliases.hotSwapScript(root, null);
+        // Basic check: no exceptions thrown.
+    }
+
+    @Test
+    public void testVar_getName() throws Exception {
+        Node nameNode = Node.newString("testVar");
+        Scope scope = createGlobalScope(new Node(Token.SCRIPT));
+        CompilerInput mockInput = new CompilerInput(null, null, false);
+        Var var = createVar("testVar", nameNode, null, scope, mockInput, false, false, null);
+        assertEquals("testVar", var.getName());
+    }
+
+    @Test
+    public void testVar_getNode() throws Exception {
+        Node nameNode = Node.newString("testVar");
+        Scope scope = createGlobalScope(new Node(Token.SCRIPT));
+        CompilerInput mockInput = new CompilerInput(null, null, false);
+        Var var = createVar("testVar", nameNode, null, scope, mockInput, false, false, null);
+        assertEquals(nameNode, var.getNode());
+    }
+
+    @Test
+    public void testVar_getScope() throws Exception {
+        Node globalRoot = new Node(Token.SCRIPT);
+        Scope globalScope = createGlobalScope(globalRoot);
+        Node functionRoot = new Node(Token.FUNCTION);
+        Scope nestedScope = createNestedScope(globalScope, functionRoot);
+        Node nameNode = Node.newString("testVar");
+        CompilerInput mockInput = new CompilerInput(null, null, false);
+        Var var = createVar("testVar", nameNode, null, nestedScope, mockInput, false, false, null);
+        assertEquals(nestedScope, var.getScope());
+    }
+
+    @Test
+    public void testVar_isGlobal() throws Exception {
+        Node globalRoot = new Node(Token.SCRIPT);
+        Scope globalScope = createGlobalScope(globalRoot);
+        Node nameNode = Node.newString("globalVar");
+        CompilerInput mockInput = new CompilerInput(null, null, false);
+        Var globalVar = createVar("globalVar", nameNode, null, globalScope, mockInput, false, false, null);
+        assertTrue(globalVar.isGlobal());
+
+        Node functionRoot = new Node(Token.FUNCTION);
+        Scope nestedScope = createNestedScope(globalScope, functionRoot);
+        Node nameNodeLocal = Node.newString("localVar");
+        Var localVar = createVar("localVar", nameNodeLocal, null, nestedScope, mockInput, false, false, null);
+        assertFalse(localVar.isGlobal());
+    }
+
+    @Test
+    public void testVar_isLocal() throws Exception {
+        Node globalRoot = new Node(Token.SCRIPT);
+        Scope globalScope = createGlobalScope(globalRoot);
+        Node nameNode = Node.newString("globalVar");
+        CompilerInput mockInput = new CompilerInput(null, null, false);
+        Var globalVar = createVar("globalVar", nameNode, null, globalScope, mockInput, false, false, null);
+        assertFalse(globalVar.isLocal());
+
+        Node functionRoot = new Node(Token.FUNCTION);
+        Scope nestedScope = createNestedScope(globalScope, functionRoot);
+        Node nameNodeLocal = Node.newString("localVar");
+        Var localVar = createVar("localVar", nameNodeLocal, null, nestedScope, mockInput, false, false, null);
+        assertTrue(localVar.isLocal());
+    }
+
+    @Test
+    public void testVar_isDefine() throws Exception {
+        Node nameNode = Node.newString("myDefine");
+        Scope scope = createGlobalScope(new Node(Token.SCRIPT));
+        CompilerInput mockInput = new CompilerInput(null, null, false);
+        Var defineVar = createVar("myDefine", nameNode, null, scope, mockInput, false, true, null); // isDefine = true
+        assertTrue(defineVar.isDefine());
+
+        Var regularVar = createVar("regularVar", Node.newString("regularVar"), null, scope, mockInput, false, false, null); // isDefine = false
+        assertFalse(regularVar.isDefine());
+    }
+
+    @Test
+    public void testVar_isConst() throws Exception {
+        Node nameNode = Node.newString("myConst");
+        NodeUtil.setConstantName(nameNode); // Mark as constant
+        Scope scope = createGlobalScope(new Node(Token.SCRIPT));
+        CompilerInput mockInput = new CompilerInput(null, null, false);
+        Var constVar = createVar("myConst", nameNode, null, scope, mockInput, false, false, null);
+        assertTrue(constVar.isConst());
+
+        Node nameNode2 = Node.newString("notAConst");
+        Var notAConstVar = createVar("notAConst", nameNode2, null, scope, mockInput, false, false, null);
+        assertFalse(notAConstVar.isConst());
+    }
+
+    @Test
+    public void testVar_getJSDocInfo() throws Exception {
+        JSDocInfo docInfo = new JSDocInfo();
+        Node nameNode = Node.newString("varWithDoc");
+        NodeUtil.setInfoForNameNode(nameNode, docInfo);
+        Scope scope = createGlobalScope(new Node(Token.SCRIPT));
+        CompilerInput mockInput = new CompilerInput(null, null, false);
+        Var varWithDoc = createVar("varWithDoc", nameNode, null, scope, mockInput, false, false, docInfo);
+        assertEquals(docInfo, varWithDoc.getJSDocInfo());
+
+        Node nameNode2 = Node.newString("varWithoutDoc");
+        Var varWithoutDoc = createVar("varWithoutDoc", nameNode2, null, scope, mockInput, false, false, null);
+        assertNull(varWithoutDoc.getJSDocInfo());
+    }
+
+    @Test
+    public void testVar_isTypeInferred() throws Exception {
+        Node nameNode = Node.newString("inferredVar");
+        Scope scope = createGlobalScope(new Node(Token.SCRIPT));
+        CompilerInput mockInput = new CompilerInput(null, null, false);
+        Var inferredVar = createVar("inferredVar", nameNode, null, scope, mockInput, true, false, null); // typeInferred = true
+        assertTrue(inferredVar.isTypeInferred());
+
+        Var declaredVar = createVar("declaredVar", Node.newString("declaredVar"), null, scope, mockInput, false, false, null); // typeInferred = false
+        assertFalse(declaredVar.isTypeInferred());
+    }
+
+    @Test
+    public void testVar_isNoShadow() throws Exception {
+        JSDocInfo docInfo = new JSDocInfo();
+        docInfo.setNoShadow(true);
+        Node nameNode = Node.newString("noShadowVar");
+        NodeUtil.setInfoForNameNode(nameNode, docInfo);
+        Scope scope = createGlobalScope(new Node(Token.SCRIPT));
+        CompilerInput mockInput = new CompilerInput(null, null, false);
+        Var noShadowVar = createVar("noShadowVar", nameNode, null, scope, mockInput, false, false, docInfo);
+        assertTrue(noShadowVar.isNoShadow());
+
+        Node nameNode2 = Node.newString("shadowVar");
+        Var shadowVar = createVar("shadowVar", nameNode2, null, scope, mockInput, false, false, null);
+        assertFalse(shadowVar.isNoShadow());
+    }
+
+    @Test
+    public void testVar_toString() throws Exception {
+        Node nameNode = Node.newString("toStringVar");
+        JSType mockType = new JSType(null) { // Mock JSType
+            @Override public String getDisplayName() { return "MockType"; }
+        };
+        Scope scope = createGlobalScope(new Node(Token.SCRIPT));
+        CompilerInput mockInput = new CompilerInput(null, null, false);
+        Var var = createVar("toStringVar", nameNode, mockType, scope, mockInput, false, false, null);
+        assertEquals("Scope.Var toStringVar{MockType}", var.toString());
+    }
+}
+```
+
+```text
+1. SOURCE CODE ANALYSIS - The tests cover the creation and retrieval of scopes, variables, and their properties. Methods like `getVar`, `isDeclared`, `getVars`, `getVarCount`, `getArgumentsVar`, `isGlobal`, `isLocal`, `getTypeOfThis`, `getSlot`, `getOwnSlot`, `getAllSymbols`, `getDeclarativelyUnboundVarsWithoutTypes`, and `Var` methods are tested. The `ScopedAliases` class methods are also minimally tested for basic functionality.
+2. TEST CASE DESIGN -
+- testGlobalScopeCreation: Checks creation of global scope, its properties.
+- testNestedScopeCreation: Checks creation of nested scope, its properties.
+- testGetParent: Verifies parent scope retrieval.
+- testGetRootNode: Verifies root node retrieval.
+- testGetDepth: Verifies scope depth.
+- testGetGlobalScope: Verifies retrieval of the top-level global scope.
+- testDeclareAndGetVar: Tests adding and retrieving a variable by name.
+- testGetVar_notDeclared: Tests retrieving a non-existent variable.
+- testGetVar_inParentScope: Tests retrieving a variable from a parent scope.
+- testIsDeclared: Tests the `isDeclared` method with and without recursion.
+- testIsDeclared_inParentScope: Tests `isDeclared` for variables in parent scopes.
+- testGetVars: Tests iterating over declared variables.
+- testGetVarCount: Tests counting variables in a scope.
+- testGetArgumentsVar: Tests retrieval of the special "arguments" variable.
+- testGetArgumentsVar_cached: Tests that "arguments" var is cached.
+- testIsGlobal: Checks the `isGlobal` property.
+- testIsLocal: Checks the `isLocal` property.
+- testGetTypeOfThis: Checks retrieval of the 'this' type for different scopes.
+- testGetSlot_and_getOwnSlot: Tests retrieval of slots by name.
+- testGetOwnSlot_notDeclared: Tests `getOwnSlot` for a non-existent variable.
+- testGetSlot_inParentScope: Tests `getSlot` for variables in parent scopes.
+- testGetAllSymbols: Tests retrieval of all symbols in the scope.
+- testGetDeclarativelyUnboundVarsWithoutTypes: Tests filtering for unbound variables without types.
+- testScopedAliases_process: Basic check for `process` method call.
+- testScopedAliases_hotSwapScript: Basic check for `hotSwapScript` method call.
+- testVar_getName: Tests `Var.getName()`.
+- testVar_getNode: Tests `Var.getNode()`.
+- testVar_getScope: Tests `Var.getScope()`.
+- testVar_isGlobal: Tests `Var.isGlobal()`.
+- testVar_isLocal: Tests `Var.isLocal()`.
+- testVar_isDefine: Tests `Var.isDefine()`.
+- testVar_isConst: Tests `Var.isConst()`.
+- testVar_getJSDocInfo: Tests `Var.getJSDocInfo()`.
+- testVar_isTypeInferred: Tests `Var.isTypeInferred()`.
+- testVar_isNoShadow: Tests `Var.isNoShadow()`.
+- testVar_toString: Tests `Var.toString()`.
+4. DEFECT DETECTION STRATEGY - Tests focus on the correct creation, state management, and retrieval of scope and variable information, including inheritance and special cases like 'arguments'.
+5. SUMMARY - 33 tests.
+6. LIMITATIONS - The tests for `ScopedAliases` are minimal due to the complexity of setting up the necessary compiler environment and AST. Mocking complex types like `JSTypeRegistry` and `AbstractCompiler` is simplified.
+Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.
+```

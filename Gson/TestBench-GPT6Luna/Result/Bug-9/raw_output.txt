@@ -1,0 +1,315 @@
+```java
+package com.google.gson.internal.bind;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.gson.stream.JsonWriter;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonNull;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonPrimitive;
+import java.io.IOException;
+import java.io.Writer;
+import java.util.ArrayList;
+import java.util.List;
+import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.net.InetAddress;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.net.URL;
+import java.sql.Timestamp;
+import java.util.BitSet;
+import java.util.Calendar;
+import java.util.Currency;
+import java.util.Date;
+import java.util.GregorianCalendar;
+import java.util.HashMap;
+import java.util.Locale;
+import java.util.Map;
+import java.util.StringTokenizer;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicIntegerArray;
+import com.google.gson.Gson;
+import com.google.gson.JsonIOException;
+import com.google.gson.JsonSyntaxException;
+import com.google.gson.TypeAdapter;
+import com.google.gson.TypeAdapterFactory;
+import com.google.gson.annotations.SerializedName;
+import com.google.gson.internal.LazilyParsedNumber;
+import com.google.gson.reflect.TypeToken;
+import com.google.gson.stream.JsonReader;
+import com.google.gson.stream.JsonToken;
+import java.io.Closeable;
+import java.io.Flushable;
+
+public class JsonTreeWriterTest {
+    @Test
+    public void testInitiallyProducesJsonNull() throws Exception {
+        assertSame(JsonNull.INSTANCE, new JsonTreeWriter().get());
+    }
+
+    @Test
+    public void testTopLevelStringAndNullString() throws Exception {
+        JsonTreeWriter writer = new JsonTreeWriter();
+        writer.value("abc");
+        assertEquals("abc", writer.get().getAsString());
+
+        JsonTreeWriter nullWriter = new JsonTreeWriter();
+        nullWriter.value((String) null);
+        assertTrue(nullWriter.get().isJsonNull());
+    }
+
+    @Test
+    public void testBooleanValues() throws Exception {
+        JsonTreeWriter writer = new JsonTreeWriter();
+        writer.beginArray();
+        writer.value(true);
+        writer.value(Boolean.FALSE);
+        writer.endArray();
+        assertEquals("[true,false]", writer.get().toString());
+    }
+
+    @Test
+    public void testLongEdgeValues() throws Exception {
+        JsonTreeWriter writer = new JsonTreeWriter();
+        writer.beginArray();
+        writer.value(Long.MAX_VALUE);
+        writer.value(Long.MIN_VALUE);
+        writer.endArray();
+        assertEquals("9223372036854775807", writer.get().getAsJsonArray().get(0).getAsString());
+        assertEquals("-9223372036854775808", writer.get().getAsJsonArray().get(1).getAsString());
+    }
+
+    @Test
+    public void testFiniteDoubleAndNumber() throws Exception {
+        JsonTreeWriter writer = new JsonTreeWriter();
+        writer.beginArray();
+        writer.value(1.5);
+        writer.value((Number) new BigDecimal("2.25"));
+        writer.endArray();
+        assertEquals(1.5, writer.get().getAsJsonArray().get(0).getAsDouble(), 1e-9);
+        assertEquals(2.25, writer.get().getAsJsonArray().get(1).getAsDouble(), 1e-9);
+    }
+
+    @Test
+    public void testNonFiniteDoubleRejectedInStrictMode() throws Exception {
+        JsonTreeWriter writer = new JsonTreeWriter();
+        try {
+            writer.value(Double.NaN);
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) { }
+        assertSame(JsonNull.INSTANCE, writer.get());
+    }
+
+    @Test
+    public void testNonFiniteNumberRejectedInStrictMode() throws Exception {
+        JsonTreeWriter writer = new JsonTreeWriter();
+        try {
+            writer.value((Number) Double.POSITIVE_INFINITY);
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) { }
+        assertSame(JsonNull.INSTANCE, writer.get());
+    }
+
+    @Test
+    public void testLenientAllowsNonFiniteValues() throws Exception {
+        JsonTreeWriter writer = new JsonTreeWriter();
+        writer.setLenient(true);
+        writer.beginArray();
+        writer.value(Double.NaN);
+        writer.value((Number) Double.POSITIVE_INFINITY);
+        writer.endArray();
+        assertTrue(Double.isNaN(writer.get().getAsJsonArray().get(0).getAsDouble()));
+        assertEquals(Double.POSITIVE_INFINITY,
+                writer.get().getAsJsonArray().get(1).getAsDouble(), 0.0);
+    }
+
+    @Test
+    public void testNestedArrayAndObjectValues() throws Exception {
+        JsonTreeWriter writer = new JsonTreeWriter();
+        writer.beginArray();
+        writer.beginObject();
+        writer.name("items");
+        writer.beginArray();
+        writer.value("first");
+        writer.endArray();
+        writer.endObject();
+        writer.endArray();
+
+        JsonElement item = writer.get().getAsJsonArray().get(0)
+                .getAsJsonObject().get("items").getAsJsonArray().get(0);
+        assertEquals("first", item.getAsString());
+    }
+
+    @Test
+    public void testNullObjectMemberIncludedByDefault() throws Exception {
+        JsonTreeWriter writer = new JsonTreeWriter();
+        writer.beginObject();
+        writer.name("n");
+        writer.nullValue();
+        writer.endObject();
+        assertTrue(writer.get().getAsJsonObject().has("n"));
+        assertTrue(writer.get().getAsJsonObject().get("n").isJsonNull());
+    }
+
+    @Test
+    public void testNullObjectMemberOmittedWhenConfigured() throws Exception {
+        JsonTreeWriter writer = new JsonTreeWriter();
+        writer.setSerializeNulls(false);
+        writer.beginObject();
+        writer.name("n");
+        writer.nullValue();
+        writer.endObject();
+        assertEquals(0, writer.get().getAsJsonObject().size());
+    }
+
+    @Test
+    public void testNullArrayEntryIsPreservedWhenNullSerializationDisabled() throws Exception {
+        JsonTreeWriter writer = new JsonTreeWriter();
+        writer.setSerializeNulls(false);
+        writer.beginArray();
+        writer.nullValue();
+        writer.endArray();
+        assertEquals(1, writer.get().getAsJsonArray().size());
+        assertTrue(writer.get().getAsJsonArray().get(0).isJsonNull());
+    }
+
+    @Test
+    public void testNameAndEndWithPendingNameRejected() throws Exception {
+        JsonTreeWriter writer = new JsonTreeWriter();
+        writer.beginObject();
+        writer.name("pending");
+        try {
+            writer.endObject();
+            fail("expected IllegalStateException");
+        } catch (IllegalStateException expected) { }
+        assertTrue(writer.get() == null || writer.get().isJsonNull());
+    }
+
+    @Test
+    public void testNameOutsideObjectRejected() throws Exception {
+        JsonTreeWriter writer = new JsonTreeWriter();
+        try {
+            writer.name("x");
+            fail("expected IllegalStateException");
+        } catch (IllegalStateException expected) { }
+        assertSame(JsonNull.INSTANCE, writer.get());
+    }
+
+    @Test
+    public void testMismatchedEndRejected() throws Exception {
+        JsonTreeWriter writer = new JsonTreeWriter();
+        writer.beginArray();
+        try {
+            writer.endObject();
+            fail("expected IllegalStateException");
+        } catch (IllegalStateException expected) { }
+    }
+
+    @Test
+    public void testGetRejectsIncompleteContainer() throws Exception {
+        JsonTreeWriter writer = new JsonTreeWriter();
+        writer.beginArray();
+        try {
+            writer.get();
+            fail("expected IllegalStateException");
+        } catch (IllegalStateException expected) { }
+    }
+
+    @Test
+    public void testCloseRejectsIncompleteDocument() throws Exception {
+        JsonTreeWriter writer = new JsonTreeWriter();
+        writer.beginObject();
+        try {
+            writer.close();
+            fail("expected IOException");
+        } catch (IOException expected) { }
+    }
+
+    @Test
+    public void testClosePreventsSubsequentWrites() throws Exception {
+        JsonTreeWriter writer = new JsonTreeWriter();
+        writer.close();
+        try {
+            writer.value("x");
+            fail("expected IllegalStateException");
+        } catch (IllegalStateException expected) { }
+    }
+
+    @Test
+    public void testFlushIsAllowed() throws Exception {
+        JsonTreeWriter writer = new JsonTreeWriter();
+        writer.beginArray();
+        writer.flush();
+        writer.endArray();
+        assertEquals(0, writer.get().getAsJsonArray().size());
+    }
+
+    @Test
+    public void testArrayAppendsSeveralValuesInOrder() throws Exception {
+        JsonTreeWriter writer = new JsonTreeWriter();
+        writer.beginArray();
+        writer.value(0L);
+        writer.value(1L);
+        writer.value(-1L);
+        writer.endArray();
+        JsonArray array = writer.get().getAsJsonArray();
+        assertEquals(3, array.size());
+        assertEquals(0L, array.get(0).getAsLong());
+        assertEquals(1L, array.get(1).getAsLong());
+        assertEquals(-1L, array.get(2).getAsLong());
+    }
+
+    @Test
+    public void testNullBooleanAndNumberOverloads() throws Exception {
+        JsonTreeWriter writer = new JsonTreeWriter();
+        writer.beginArray();
+        writer.value((Boolean) null);
+        writer.value((Number) null);
+        writer.endArray();
+        assertEquals(2, writer.get().getAsJsonArray().size());
+        assertTrue(writer.get().getAsJsonArray().get(0).isJsonNull());
+        assertTrue(writer.get().getAsJsonArray().get(1).isJsonNull());
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+Method selection is exploratory because no target method was specified; tests focus on `JsonTreeWriter` construction, value insertion, container nesting, null handling, validation, and close behavior.
+The tests exercise strict/lenient numeric branches, pending-name and stack-state checks, serialize-null configuration, and array/object assembly.
+
+### 2. TEST CASE DESIGN
+- `testInitiallyProducesJsonNull`: new writer; expects `JsonNull.INSTANCE`, from initial product.
+- `testTopLevelStringAndNullString`: ordinary and null strings; expects primitive text and JSON null, from `value(String)` dispatch.
+- `testBooleanValues`: both boolean overloads in array; expects `[true,false]`, from primitive insertion.
+- `testLongEdgeValues`: `Long.MAX_VALUE` and `Long.MIN_VALUE`; expects their exact decimal representations, from long primitive values.
+- `testFiniteDoubleAndNumber`: finite double and `BigDecimal`; expects 1.5 and 2.25 numerically, from inserted number primitives.
+- `testNonFiniteDoubleRejectedInStrictMode`: NaN in default strict mode; expects `IllegalArgumentException` and unchanged initial product.
+- `testNonFiniteNumberRejectedInStrictMode`: infinite `Number` in strict mode; expects `IllegalArgumentException` before insertion.
+- `testLenientAllowsNonFiniteValues`: NaN and positive infinity with leniency enabled; expects both values present.
+- `testNestedArrayAndObjectValues`: nested array/object; expects the inserted string at the nested path.
+- `testNullObjectMemberIncludedByDefault`: default null policy; expects named null property retained.
+- `testNullObjectMemberOmittedWhenConfigured`: null serialization disabled; expects object size zero.
+- `testNullArrayEntryIsPreservedWhenNullSerializationDisabled`: array null; expects one null element because array insertion does not consult that option.
+- `testNameAndEndWithPendingNameRejected`: end object after an unfilled name; expects `IllegalStateException`.
+- `testNameOutsideObjectRejected`: name on empty stack; expects `IllegalStateException`.
+- `testMismatchedEndRejected`: end object while array is on top; expects `IllegalStateException`.
+- `testGetRejectsIncompleteContainer`: get while array remains open; expects `IllegalStateException`.
+- `testCloseRejectsIncompleteDocument`: close with an open object; expects `IOException`.
+- `testClosePreventsSubsequentWrites`: close then write; expects sentinel-stack `IllegalStateException`.
+- `testFlushIsAllowed`: flush an open empty array; expects successful completion and empty array.
+- `testArrayAppendsSeveralValuesInOrder`: array containing 0, 1, -1; expects size and ordered values.
+- `testNullBooleanAndNumberOverloads`: null boxed Boolean and Number; expects two JSON-null array entries.
+
+### 4. DEFECT DETECTION STRATEGY
+The assertions pin down produced tree contents and key state-dependent branches: null omission, numeric strictness, nesting validation, and post-close behavior.
+
+### 5. SUMMARY
+21 tests.
+
+### 6. LIMITATIONS
+No faulty implementation was supplied, so these tests are not known to detect a defect; some malformed-state tests only verify the specified exception type. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

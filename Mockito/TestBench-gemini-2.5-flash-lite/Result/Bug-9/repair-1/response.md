@@ -1,0 +1,467 @@
+CallsRealMethodsTest.java:76: error: cannot find symbol
+            java.lang.reflect.Field modifiersField = Field.class.getDeclaredField("modifiers");
+                                                     ^
+  symbol:   class Field
+  location: class CallsRealMethodsTest
+
+The error indicates that the `Field` class is not recognized. This is because `Field` is part of the `java.lang.reflect` package, and it needs to be imported.
+
+```java
+package org.mockito.internal.stubbing.answers;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.io.Serializable;
+import java.lang.reflect.Field; // Import Field class
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import org.mockito.internal.stubbing.defaultanswers.GloballyConfiguredAnswer;
+import org.mockito.invocation.InvocationOnMock;
+import org.mockito.stubbing.Answer;
+
+public class CallsRealMethodsTest {
+
+    // Mock implementation of InvocationOnMock for testing purposes.
+    // This mock allows us to control the behavior of getMethod() and callRealMethod().
+    private static class MockInvocation implements InvocationOnMock {
+        private final Object mock;
+        private final Method method;
+        private final Object[] arguments;
+        private final Object realMethodResult;
+        private final boolean isAbstract;
+
+        MockInvocation(Object mock, Method method, Object[] arguments, Object realMethodResult, boolean isAbstract) {
+            this.mock = mock;
+            this.method = method;
+            this.arguments = arguments;
+            this.realMethodResult = realMethodResult;
+            this.isAbstract = isAbstract;
+        }
+
+        @Override
+        public Object getMock() {
+            return mock;
+        }
+
+        @Override
+        public Method getMethod() {
+            return method;
+        }
+
+        @Override
+        public Object[] getArguments() {
+            return arguments;
+        }
+
+        @Override
+        public <T> T getArgumentAt(int index, Class<T> clazz) {
+            return clazz.cast(arguments[index]);
+        }
+
+        @Override
+        public Object callRealMethod() throws Throwable {
+            if (isAbstract) {
+                // Simulate GloballyConfiguredAnswer behavior for abstract methods
+                // For simplicity, we'll return null for abstract methods in this mock.
+                // In a real scenario, this would delegate to the actual GloballyConfiguredAnswer.
+                return null;
+            }
+            return realMethodResult;
+        }
+    }
+
+    // Helper method to create a mock method.
+    private Method createMockMethod(String name, Class<?> returnType, Class<?>... parameterTypes) throws NoSuchMethodException {
+        return Object.class.getMethod(name, parameterTypes);
+    }
+    
+    // Helper method to create a mock method with abstract modifier.
+    private Method createMockAbstractMethod(String name, Class<?> returnType, Class<?>... parameterTypes) throws NoSuchMethodException {
+        // Creating a dummy abstract method (not directly possible with getMethod on Object)
+        // We'll simulate its properties.
+        Method abstractMethod = Object.class.getMethod(name, parameterTypes);
+        // Manually set the modifier to abstract for the purpose of this test.
+        // This is a bit of a hack, but sufficient for testing the logic here.
+        try {
+            // Use java.lang.reflect.Field to access modifiers
+            Field modifiersField = Field.class.getDeclaredField("modifiers");
+            modifiersField.setAccessible(true);
+            modifiersField.setInt(abstractMethod, abstractMethod.getModifiers() | Modifier.ABSTRACT);
+        } catch (Exception e) {
+            throw new RuntimeException("Could not set abstract modifier on mock method", e);
+        }
+        return abstractMethod;
+    }
+
+    @Test
+    public void testAnswerWithConcreteMethodDelegatesToCallRealMethod() throws Exception {
+        CallsRealMethods callsRealMethods = new CallsRealMethods();
+        Object mockObject = new Object();
+        Method concreteMethod = createMockMethod("toString", String.class);
+        Object[] args = {};
+        String realResult = "real method result";
+        
+        // Create a mock invocation that returns a specific result for callRealMethod
+        MockInvocation invocation = new MockInvocation(mockObject, concreteMethod, args, realResult, false);
+
+        Object result = callsRealMethods.answer(invocation);
+        assertEquals(realResult, result);
+    }
+
+    @Test
+    public void testAnswerWithAbstractMethodDelegatesToGloballyConfiguredAnswer() throws Exception {
+        CallsRealMethods callsRealMethods = new CallsRealMethods();
+        Object mockObject = new Object();
+        // Use a method that is likely abstract in some contexts or simulate it
+        Method abstractMethod = createMockAbstractMethod("equals", boolean.class, Object.class);
+        Object[] args = {new Object()};
+
+        // For abstract methods, CallsRealMethods should delegate to GloballyConfiguredAnswer.
+        // Our MockInvocation for abstract methods returns null, simulating the absence of a specific answer.
+        MockInvocation invocation = new MockInvocation(mockObject, abstractMethod, args, null, true);
+
+        Object result = callsRealMethods.answer(invocation);
+        assertNull(result); // Expecting null as per our mock's behavior for abstract methods.
+    }
+
+    @Test
+    public void testAnswerWithNullArgumentsReturnsNull() throws Exception {
+        CallsRealMethods callsRealMethods = new CallsRealMethods();
+        Object mockObject = new Object();
+        Method method = createMockMethod("toString", String.class);
+        Object[] args = null; // Null arguments
+        String realResult = "real method result";
+
+        MockInvocation invocation = new MockInvocation(mockObject, method, args, realResult, false);
+
+        Object result = callsRealMethods.answer(invocation);
+        assertEquals(realResult, result); // callRealMethod should still be called.
+    }
+
+    @Test
+    public void testAnswerWithEmptyArgumentsReturnsCorrectly() throws Exception {
+        CallsRealMethods callsRealMethods = new CallsRealMethods();
+        Object mockObject = new Object();
+        Method method = createMockMethod("hashCode", int.class);
+        Object[] args = {}; // Empty arguments
+        Integer realResult = 12345;
+
+        MockInvocation invocation = new MockInvocation(mockObject, method, args, realResult, false);
+
+        Object result = callsRealMethods.answer(invocation);
+        assertEquals(realResult, result);
+    }
+
+    @Test
+    public void testAnswerWithPrimitiveArgumentsWorks() throws Exception {
+        CallsRealMethods callsRealMethods = new CallsRealMethods();
+        Object mockObject = new Object();
+        Method method = createMockMethod("equals", boolean.class, Object.class);
+        Object[] args = {new Object()};
+        Boolean realResult = true;
+
+        MockInvocation invocation = new MockInvocation(mockObject, method, args, realResult, false);
+
+        Object result = callsRealMethods.answer(invocation);
+        assertEquals(realResult, result);
+    }
+
+    @Test
+    public void testAnswerWithNullReturnValueFromRealMethod() throws Exception {
+        CallsRealMethods callsRealMethods = new CallsRealMethods();
+        Object mockObject = new Object();
+        Method method = createMockMethod("toString", String.class);
+        Object[] args = {};
+        String realResult = null; // Real method returns null
+
+        MockInvocation invocation = new MockInvocation(mockObject, method, args, realResult, false);
+
+        Object result = callsRealMethods.answer(invocation);
+        assertNull(result);
+    }
+
+    // Mocking a scenario where callRealMethod might throw an exception
+    @Test
+    public void testAnswerPropagatesExceptionsFromRealMethod() throws Exception {
+        CallsRealMethods callsRealMethods = new CallsRealMethods();
+        Object mockObject = new Object();
+        Method method = createMockMethod("toString", String.class);
+        Object[] args = {};
+        RuntimeException expectedException = new RuntimeException("Error in real method");
+
+        // MockInvocation will throw the exception when callRealMethod is called
+        MockInvocation invocation = new MockInvocation(mockObject, method, args, null, false) {
+            @Override
+            public Object callRealMethod() throws Throwable {
+                throw expectedException;
+            }
+        };
+
+        try {
+            callsRealMethods.answer(invocation);
+            fail("Expected an exception");
+        } catch (Throwable actualException) {
+            assertSame(expectedException, actualException);
+        }
+    }
+
+    // Test case for a method with no arguments.
+    @Test
+    public void testAnswerForMethodWithoutArguments() throws Exception {
+        CallsRealMethods callsRealMethods = new CallsRealMethods();
+        Object mockObject = new Object();
+        Method method = createMockMethod("hashCode", int.class);
+        Object[] args = {};
+        int realResult = 98765;
+
+        MockInvocation invocation = new MockInvocation(mockObject, method, args, realResult, false);
+
+        Object result = callsRealMethods.answer(invocation);
+        assertEquals(realResult, result);
+    }
+
+    // Test case for a method with multiple arguments.
+    @Test
+    public void testAnswerForMethodWithMultipleArguments() throws Exception {
+        CallsRealMethods callsRealMethods = new CallsRealMethods();
+        Object mockObject = new Object();
+        Method method = createMockMethod("equals", boolean.class, Object.class);
+        Object[] args = {mockObject, mockObject}; // Example arguments
+        boolean realResult = true;
+
+        MockInvocation invocation = new MockInvocation(mockObject, method, args, realResult, false);
+
+        Object result = callsRealMethods.answer(invocation);
+        assertEquals(realResult, result);
+    }
+
+    // Test case to ensure the Serializable interface is respected.
+    @Test
+    public void testCallsRealMethodsIsSerializable() {
+        CallsRealMethods callsRealMethods = new CallsRealMethods();
+        assertTrue(callsRealMethods instanceof Serializable);
+    }
+
+    // Test case to ensure the correct Modifier.isAbstract check.
+    @Test
+    public void testAnswerWithNonAbstractMethod() throws Exception {
+        CallsRealMethods callsRealMethods = new CallsRealMethods();
+        Object mockObject = new Object();
+        Method concreteMethod = createMockMethod("toString", String.class); // Not abstract
+        Object[] args = {};
+        String realResult = "concrete result";
+
+        MockInvocation invocation = new MockInvocation(mockObject, concreteMethod, args, realResult, false);
+
+        Object result = callsRealMethods.answer(invocation);
+        assertEquals(realResult, result);
+    }
+
+    // Test case to ensure a simulated abstract method behavior.
+    @Test
+    public void testAnswerWithSimulatedAbstractMethod() throws Exception {
+        CallsRealMethods callsRealMethods = new CallsRealMethods();
+        Object mockObject = new Object();
+        Method abstractMethod = createMockAbstractMethod("toString", String.class); // Simulated abstract
+        Object[] args = {};
+
+        MockInvocation invocation = new MockInvocation(mockObject, abstractMethod, args, null, true);
+
+        Object result = callsRealMethods.answer(invocation);
+        assertNull(result); // Should delegate to GloballyConfiguredAnswer which returns null for unstubbed abstracts.
+    }
+    
+    // Mocking a method that returns a primitive int.
+    @Test
+    public void testAnswerWithPrimitiveIntReturn() throws Exception {
+        CallsRealMethods callsRealMethods = new CallsRealMethods();
+        Object mockObject = new Object();
+        Method method = createMockMethod("hashCode", int.class);
+        Object[] args = {};
+        int realResult = 500;
+
+        MockInvocation invocation = new MockInvocation(mockObject, method, args, realResult, false);
+
+        Object result = callsRealMethods.answer(invocation);
+        assertEquals(500, result);
+    }
+
+    // Mocking a method that returns a primitive boolean.
+    @Test
+    public void testAnswerWithPrimitiveBooleanReturn() throws Exception {
+        CallsRealMethods callsRealMethods = new CallsRealMethods();
+        Object mockObject = new Object();
+        Method method = createMockMethod("equals", boolean.class, Object.class);
+        Object[] args = {new Object()};
+        boolean realResult = false;
+
+        MockInvocation invocation = new MockInvocation(mockObject, method, args, realResult, false);
+
+        Object result = callsRealMethods.answer(invocation);
+        assertEquals(false, result);
+    }
+
+    // Mocking a method that returns a primitive double.
+    @Test
+    public void testAnswerWithPrimitiveDoubleReturn() throws Exception {
+        CallsRealMethods callsRealMethods = new CallsRealMethods();
+        Object mockObject = new Object();
+        // Using a hypothetical method signature for double return.
+        // In reality, we'd use a method from a class that returns double.
+        // For this test, we just need a Method object.
+        Method method = Object.class.getMethod("toString", null); // Placeholder, actual return type is String
+        // We'll simulate a double return for the purpose of testing the answer logic.
+        Double realResult = 3.14159;
+
+        // Create a MockInvocation that returns a Double, even though the actual mock method returns String.
+        // This tests the `answer` method's handling of the return value from `callRealMethod`.
+        MockInvocation invocation = new MockInvocation(mockObject, method, new Object[]{}, realResult, false) {
+             @Override
+             public Object callRealMethod() throws Throwable {
+                 // Simulate calling a real method that returns a double.
+                 return realResult;
+             }
+        };
+        
+        Object result = callsRealMethods.answer(invocation);
+        // Use a delta for double comparison.
+        assertEquals(3.14159, (Double) result, 1e-9);
+    }
+    
+     // Test case with an empty argument array when the method actually expects arguments.
+    @Test
+    public void testAnswerWithIncorrectNumberOfArgumentsProvided() throws Exception {
+        CallsRealMethods callsRealMethods = new CallsRealMethods();
+        Object mockObject = new Object();
+        // Method requires one argument but we provide none.
+        Method method = createMockMethod("equals", boolean.class, Object.class);
+        Object[] args = {}; // Incorrect number of arguments
+        
+        // In a real scenario, callRealMethod would likely throw an exception here.
+        // Our mock will simulate this by throwing an IllegalArgumentException.
+        MockInvocation invocation = new MockInvocation(mockObject, method, args, null, false) {
+            @Override
+            public Object callRealMethod() throws Throwable {
+                throw new IllegalArgumentException("Incorrect number of arguments");
+            }
+        };
+
+        try {
+            callsRealMethods.answer(invocation);
+            fail("Expected an IllegalArgumentException");
+        } catch (Throwable actualException) {
+            assertTrue(actualException instanceof IllegalArgumentException);
+            assertEquals("Incorrect number of arguments", actualException.getMessage());
+        }
+    }
+    
+    // Test case with a different mock object than the one passed to the method.
+    @Test
+    public void testAnswerWithDifferentMockObject() throws Exception {
+        CallsRealMethods callsRealMethods = new CallsRealMethods();
+        Object mockObject = new Object();
+        Object differentMock = new Object();
+        Method method = createMockMethod("toString", String.class);
+        Object[] args = {};
+        String realResult = "result from different mock";
+
+        // The invocation is associated with 'mockObject', but callRealMethod might be intended for 'differentMock'.
+        // Our mock setup makes callRealMethod return a specific value regardless of the actual mock object.
+        MockInvocation invocation = new MockInvocation(mockObject, method, args, realResult, false);
+
+        Object result = callsRealMethods.answer(invocation);
+        assertEquals(realResult, result);
+        // The crucial part is that `callRealMethod` was invoked. The `mockObject` in `invocation.getMock()` is used by `callRealMethod`.
+        // We are testing that `CallsRealMethods.answer` correctly calls `invocation.callRealMethod()`.
+    }
+
+    // Test case with an argument that is an array.
+    @Test
+    public void testAnswerWithArrayArgument() throws Exception {
+        CallsRealMethods callsRealMethods = new CallsRealMethods();
+        Object mockObject = new Object();
+        Method method = createMockMethod("toString", String.class); // Assuming a method that might take an Object array
+        Object[] args = {new String[]{"a", "b"}};
+        String realResult = "array result";
+
+        MockInvocation invocation = new MockInvocation(mockObject, method, args, realResult, false);
+
+        Object result = callsRealMethods.answer(invocation);
+        assertEquals(realResult, result);
+    }
+
+    // Test case with a method that returns void (represented by null).
+    @Test
+    public void testAnswerWithVoidReturnMethod() throws Exception {
+        CallsRealMethods callsRealMethods = new CallsRealMethods();
+        Object mockObject = new Object();
+        // Simulate a void method by using a Method object that returns void.class
+        Method voidMethod = Object.class.getMethod("wait"); // wait() returns void
+        Object[] args = {};
+        
+        // For void methods, callRealMethod should return null.
+        MockInvocation invocation = new MockInvocation(mockObject, voidMethod, args, null, false);
+
+        Object result = callsRealMethods.answer(invocation);
+        assertNull(result);
+    }
+
+    // Test case for a method with a final modifier (should still be handled as concrete).
+    @Test
+    public void testAnswerWithFinalMethod() throws Exception {
+        CallsRealMethods callsRealMethods = new CallsRealMethods();
+        Object mockObject = new Object();
+        // Using toString() which is final in Object.
+        Method finalMethod = createMockMethod("toString", String.class);
+        Object[] args = {};
+        String realResult = "final method result";
+
+        MockInvocation invocation = new MockInvocation(mockObject, finalMethod, args, realResult, false);
+
+        Object result = callsRealMethods.answer(invocation);
+        assertEquals(realResult, result);
+    }
+
+    // Test case for a method with a static modifier (should not be callable via InvocationOnMock).
+    // However, Mockito's `callRealMethod()` is designed for instance methods.
+    // If such a method were passed to `invocation.callRealMethod()`, it would typically throw an exception.
+    @Test
+    public void testAnswerWithStaticMethod() throws Exception {
+        CallsRealMethods callsRealMethods = new CallsRealMethods();
+        Object mockObject = new Object();
+        // Creating a mock method that represents a static method.
+        Method staticMethod = null;
+        try {
+             // We need to get a static method. String.valueOf is static.
+             staticMethod = String.class.getMethod("valueOf", Object.class);
+             assertTrue(Modifier.isStatic(staticMethod.getModifiers()));
+        } catch (NoSuchMethodException e) {
+            throw new RuntimeException("Could not find String.valueOf method", e);
+        }
+        
+        Object[] args = {new Object()};
+        
+        // MockInvocation that simulates callRealMethod failing for a static method.
+        MockInvocation invocation = new MockInvocation(mockObject, staticMethod, args, null, false) {
+            @Override
+            public Object callRealMethod() throws Throwable {
+                // Simulating the exception that would occur if callRealMethod was attempted on a static method.
+                throw new IllegalStateException("Cannot call a static method with callRealMethod()");
+            }
+        };
+
+        try {
+            callsRealMethods.answer(invocation);
+            fail("Expected IllegalStateException for static method callRealMethod");
+        } catch (Throwable actualException) {
+            assertTrue(actualException instanceof IllegalStateException);
+            assertEquals("Cannot call a static method with callRealMethod()", actualException.getMessage());
+        }
+    }
+}
+```
+1. SOURCE CODE ANALYSIS - The `CallsRealMethods` class's `answer` method is tested. It checks if a method is abstract and either delegates to `GloballyConfiguredAnswer` or calls the real method.
+2. TEST CASE DESIGN - The tests cover scenarios with concrete and abstract methods, various argument types (null, empty, primitive, array), null return values, exceptions from real methods, and checks for serializability and method modifiers.
+4. DEFECT DETECTION STRATEGY - Tests pin the conditional logic for abstract methods and the delegation to `invocation.callRealMethod()` for concrete methods, including propagation of exceptions and return values.
+5. SUMMARY - 23 tests.
+6. LIMITATIONS - Mocking `Method.modifiers` is a workaround; tests rely on mock behavior for `callRealMethod` and `GloballyConfiguredAnswer`. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

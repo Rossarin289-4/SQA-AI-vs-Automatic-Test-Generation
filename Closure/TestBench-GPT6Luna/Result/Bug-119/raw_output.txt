@@ -1,0 +1,217 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Predicate;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Sets;
+import com.google.javascript.jscomp.CodingConvention.SubclassRelationship;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.TokenStream;
+import com.google.javascript.rhino.jstype.JSType;
+import com.google.javascript.rhino.jstype.StaticReference;
+import com.google.javascript.rhino.jstype.StaticScope;
+import com.google.javascript.rhino.jstype.StaticSlot;
+import com.google.javascript.rhino.jstype.StaticSourceFile;
+import com.google.javascript.rhino.jstype.StaticSymbolTable;
+import java.io.PrintStream;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+public class GlobalNamespaceTest {
+    @Test
+    public void testRootNodeIsRootParent() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        Node parent = new Node(Token.BLOCK, root);
+        GlobalNamespace namespace = new GlobalNamespace(null, root);
+        assertSame(parent, namespace.getRootNode());
+    }
+
+    @Test
+    public void testParentScopeIsNull() throws Exception {
+        GlobalNamespace namespace = new GlobalNamespace(null, new Node(Token.SCRIPT));
+        assertNull(namespace.getParentScope());
+    }
+
+    @Test
+    public void testHasNoSlotForEmptyScript() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        GlobalNamespace namespace = new GlobalNamespace(null, root);
+        assertNull(namespace.getSlot("missing"));
+    }
+
+    @Test
+    public void testOwnSlotForEmptyScriptIsNull() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        GlobalNamespace namespace = new GlobalNamespace(null, root);
+        assertNull(namespace.getOwnSlot("missing"));
+    }
+
+    @Test
+    public void testGetAllSymbolsForEmptyScript() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        GlobalNamespace namespace = new GlobalNamespace(null, root);
+        assertEquals(0, size(namespace.getAllSymbols()));
+    }
+
+    @Test
+    public void testGetReferencesForNameFromEmptyNamespace() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        GlobalNamespace namespace = new GlobalNamespace(null, root);
+        GlobalNamespace.Name name = new GlobalNamespace.Name("x", null, false);
+        assertEquals(0, size(namespace.getReferences(name)));
+    }
+
+    @Test
+    public void testScopeOfNameIsThisNamespace() throws Exception {
+        GlobalNamespace namespace = new GlobalNamespace(null, new Node(Token.SCRIPT));
+        GlobalNamespace.Name name = new GlobalNamespace.Name("x", null, false);
+        assertSame(namespace, namespace.getScope(name));
+    }
+
+    @Test
+    public void testNameIsFullName() throws Exception {
+        GlobalNamespace.Name root = new GlobalNamespace.Name("alpha", null, false);
+        GlobalNamespace.Name child = root.addProperty("beta", false);
+        assertEquals("alpha.beta", child.getName());
+    }
+
+    @Test
+    public void testNameDeclarationInitiallyNull() throws Exception {
+        GlobalNamespace.Name name = new GlobalNamespace.Name("alpha", null, false);
+        assertNull(name.getDeclaration());
+    }
+
+    @Test
+    public void testNameTypeIsNull() throws Exception {
+        GlobalNamespace.Name name = new GlobalNamespace.Name("alpha", null, false);
+        assertNull(name.getType());
+    }
+
+    @Test
+    public void testNameTypeIsNotInferred() throws Exception {
+        GlobalNamespace.Name name = new GlobalNamespace.Name("alpha", null, false);
+        assertFalse(name.isTypeInferred());
+    }
+
+    @Test
+    public void testGetParentScopeAfterGenerationIsNull() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        GlobalNamespace namespace = new GlobalNamespace(null, root);
+        namespace.getAllSymbols();
+        assertNull(namespace.getParentScope());
+    }
+
+    @Test
+    public void testGetScopeDoesNotDependOnSlot() throws Exception {
+        GlobalNamespace namespace = new GlobalNamespace(null, new Node(Token.SCRIPT));
+        GlobalNamespace.Name name = new GlobalNamespace.Name("unindexed", null, false);
+        assertSame(namespace, namespace.getScope(name));
+    }
+
+    @Test
+    public void testEmptyNameIndexAfterGeneration() throws Exception {
+        GlobalNamespace namespace = new GlobalNamespace(null, new Node(Token.SCRIPT));
+        assertEquals(0, namespace.getNameIndex().size());
+    }
+
+    @Test
+    public void testSimpleNameBaseName() throws Exception {
+        GlobalNamespace.Name name = new GlobalNamespace.Name("single", null, false);
+        assertEquals("single", name.getFullName());
+    }
+
+    @Test
+    public void testNestedNameFullName() throws Exception {
+        GlobalNamespace.Name root = new GlobalNamespace.Name("one", null, false);
+        GlobalNamespace.Name middle = root.addProperty("two", false);
+        GlobalNamespace.Name leaf = middle.addProperty("three", false);
+        assertEquals("one.two.three", leaf.getFullName());
+    }
+
+    @Test
+    public void testNewReferenceExposesItsNode() throws Exception {
+        Node node = Node.newString(Token.NAME, "symbol");
+        GlobalNamespace.Name name = new GlobalNamespace.Name("symbol", null, false);
+        GlobalNamespace.Ref ref = new GlobalNamespace.Ref(
+                null, null, node, name, GlobalNamespace.Ref.Type.DIRECT_GET, 0);
+        assertSame(node, ref.getNode());
+    }
+
+    @Test
+    public void testNewReferenceExposesItsSymbol() throws Exception {
+        Node node = Node.newString(Token.NAME, "symbol");
+        GlobalNamespace.Name name = new GlobalNamespace.Name("symbol", null, false);
+        GlobalNamespace.Ref ref = new GlobalNamespace.Ref(
+                null, null, node, name, GlobalNamespace.Ref.Type.DIRECT_GET, 0);
+        assertSame(name, ref.getSymbol());
+    }
+
+    @Test
+    public void testUnattachedReferenceHasNoSourceFile() throws Exception {
+        Node node = Node.newString(Token.NAME, "symbol");
+        GlobalNamespace.Name name = new GlobalNamespace.Name("symbol", null, false);
+        GlobalNamespace.Ref ref = new GlobalNamespace.Ref(
+                null, null, node, name, GlobalNamespace.Ref.Type.DIRECT_GET, 0);
+        assertNull(ref.getSourceFile());
+    }
+
+    @Test
+    public void testGlobalNamespaceIsNotItsOwnParent() throws Exception {
+        GlobalNamespace namespace = new GlobalNamespace(null, new Node(Token.SCRIPT));
+        assertNotSame(namespace, namespace.getParentScope());
+    }
+
+    private int size(Iterable<?> values) {
+        int count = 0;
+        for (Object value : values) {
+            count++;
+        }
+        return count;
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+No target method was specified, so method selection is exploratory. The tests exercise safe name and reference accessors and empty-namespace lookup behavior; construction of a populated namespace is avoided because it requires compiler traversal.
+
+### 2. TEST CASE DESIGN
+- `testRootNodeIsRootParent`: script child of block; expect its parent, based on `getRootNode()` returning `root.getParent()`.
+- `testParentScopeIsNull`: any namespace; expect null, directly returned by `getParentScope()`.
+- `testHasNoSlotForEmptyScript`: empty script and missing name; expect null after index lookup.
+- `testOwnSlotForEmptyScriptIsNull`: empty script and missing name; expect null after index lookup.
+- `testGetAllSymbolsForEmptyScript`: empty script; expect zero symbols because traversal discovers none.
+- `testGetReferencesForNameFromEmptyNamespace`: fresh name with no refs; expect zero refs.
+- `testScopeOfNameIsThisNamespace`: fresh name; expect the namespace instance, as `getScope()` returns `this`.
+- `testNameIsFullName`: child `beta` of `alpha`; expect `alpha.beta` from recursive full-name construction.
+- `testNameDeclarationInitiallyNull`: fresh name; expect null because no declaration was added.
+- `testNameTypeIsNull`: fresh name; expect null because `Name.getType()` returns null.
+- `testNameTypeIsNotInferred`: fresh name; expect false from the constant `isTypeInferred()` implementation.
+- `testGetParentScopeAfterGenerationIsNull`: empty script after symbol generation; expect null from `getParentScope()`.
+- `testGetScopeDoesNotDependOnSlot`: unindexed name; expect this namespace from `getScope()`.
+- `testEmptyNameIndexAfterGeneration`: empty script; expect index size zero because traversal discovers no names.
+- `testSimpleNameBaseName`: root name `single`; expect `single` from `getFullName()`.
+- `testNestedNameFullName`: nested names `one.two.three`; expect concatenation through parent links.
+- `testNewReferenceExposesItsNode`: reference constructed with a node; expect that same node from `getNode()`.
+- `testNewReferenceExposesItsSymbol`: reference constructed with a name; expect that same name from `getSymbol()`.
+- `testUnattachedReferenceHasNoSourceFile`: reference built from a node without a source file; expect null, as assigned from `getStaticSourceFile()`.
+- `testGlobalNamespaceIsNotItsOwnParent`: namespace; expect its parent scope not to be itself because it is null.
+
+### 4. DEFECT DETECTION STRATEGY
+The assertions pin empty-index behavior and direct name/reference accessor contracts. Actual fault sensitivity depends on changes to those behaviors.
+
+### 5. SUMMARY
+19 tests.
+
+### 6. LIMITATIONS
+Method selection is exploratory because no target method was given; empty traversal does not cover namespace-building branches, and several tests check straightforward accessors. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

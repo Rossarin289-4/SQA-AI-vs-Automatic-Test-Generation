@@ -1,0 +1,687 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Joiner;
+import com.google.common.base.Preconditions;
+import com.google.common.collect.BiMap;
+import com.google.common.collect.HashBiMap;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.common.collect.Sets;
+import com.google.javascript.jscomp.NodeTraversal.AbstractPostOrderCallback;
+import com.google.javascript.jscomp.TypeValidator.TypeMismatch;
+import com.google.javascript.jscomp.graph.AdjacencyGraph;
+import com.google.javascript.jscomp.graph.Annotation;
+import com.google.javascript.jscomp.graph.GraphColoring;
+import com.google.javascript.jscomp.graph.GraphColoring.GreedyGraphColoring;
+import com.google.javascript.jscomp.graph.GraphNode;
+import com.google.javascript.jscomp.graph.SubGraph;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.jstype.FunctionPrototypeType;
+import com.google.javascript.rhino.jstype.FunctionType;
+import com.google.javascript.rhino.jstype.InstanceObjectType;
+import com.google.javascript.rhino.jstype.JSType;
+import com.google.javascript.rhino.jstype.JSTypeNative;
+import com.google.javascript.rhino.jstype.JSTypeRegistry;
+import com.google.javascript.rhino.jstype.ObjectType;
+import com.google.javascript.rhino.jstype.UnionType;
+import java.util.BitSet;
+import java.util.Collection;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
+import java.util.logging.Logger;
+import com.google.common.annotations.VisibleForTesting;
+import javax.annotation.Nullable;
+import com.google.javascript.jscomp.CodingConvention.DelegateRelationship;
+import com.google.javascript.jscomp.CodingConvention.ObjectLiteralCast;
+import com.google.javascript.jscomp.CodingConvention.SubclassRelationship;
+import com.google.javascript.jscomp.CodingConvention.SubclassType;
+import com.google.javascript.jscomp.NodeTraversal.AbstractShallowCallback;
+import com.google.javascript.jscomp.Scope.Var;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.jstype.EnumType;
+import com.google.javascript.rhino.jstype.FunctionParamBuilder;
+
+public class AmbiguatePropertiesTest {
+
+    private static final AbstractCompiler MOCK_COMPILER = new MockCompiler(new JSTypeRegistry(null));
+
+    @Test
+    public void testFrequencyComparator_p1_greater() throws Exception {
+        AmbiguateProperties ap = new AmbiguateProperties(MOCK_COMPILER, new char[0]);
+        AmbiguateProperties.Property p1 = new AmbiguateProperties.Property("a");
+        p1.numOccurrences = 5;
+        AmbiguateProperties.Property p2 = new AmbiguateProperties.Property("b");
+        p2.numOccurrences = 3;
+        assertEquals(1, AmbiguateProperties.FREQUENCY_COMPARATOR.compare(p1, p2));
+    }
+
+    @Test
+    public void testFrequencyComparator_p2_greater() throws Exception {
+        AmbiguateProperties ap = new AmbiguateProperties(MOCK_COMPILER, new char[0]);
+        AmbiguateProperties.Property p1 = new AmbiguateProperties.Property("a");
+        p1.numOccurrences = 3;
+        AmbiguateProperties.Property p2 = new AmbiguateProperties.Property("b");
+        p2.numOccurrences = 5;
+        assertEquals(-1, AmbiguateProperties.FREQUENCY_COMPARATOR.compare(p1, p2));
+    }
+
+    @Test
+    public void testFrequencyComparator_equal_names() throws Exception {
+        AmbiguateProperties ap = new AmbiguateProperties(MOCK_COMPILER, new char[0]);
+        AmbiguateProperties.Property p1 = new AmbiguateProperties.Property("b");
+        p1.numOccurrences = 5;
+        AmbiguateProperties.Property p2 = new AmbiguateProperties.Property("a");
+        p2.numOccurrences = 5;
+        assertEquals(1, AmbiguateProperties.FREQUENCY_COMPARATOR.compare(p1, p2));
+    }
+
+    @Test
+    public void testProcess_noProperties() throws Exception {
+        Node externs = new Node(Token.SCRIPT);
+        Node root = new Node(Token.SCRIPT);
+        AmbiguateProperties ap = new AmbiguateProperties(MOCK_COMPILER, new char[]{'a', 'b'});
+        ap.process(externs, root);
+        assertTrue(ap.getRenamingMap().isEmpty());
+    }
+
+    @Test
+    public void testProcess_simpleProperties() throws Exception {
+        Node externs = new Node(Token.SCRIPT);
+        Node root = new Node(Token.SCRIPT);
+        Node propA = new Node(Token.STRING, "a");
+        Node getPropA = new Node(Token.GETPROP, new Node(Token.THIS), propA);
+        root.addChildToBack(getPropA);
+        Node propB = new Node(Token.STRING, "b");
+        Node getPropB = new Node(Token.GETPROP, new Node(Token.THIS), propB);
+        root.addChildToBack(getPropB);
+
+        AmbiguateProperties ap = new AmbiguateProperties(MOCK_COMPILER, new char[]{'a', 'b'});
+        ap.process(externs, root);
+
+        Map<String, String> renamingMap = ap.getRenamingMap();
+        assertEquals(2, renamingMap.size());
+        assertTrue(renamingMap.containsKey("a"));
+        assertTrue(renamingMap.containsKey("b"));
+        assertNotEquals(renamingMap.get("a"), renamingMap.get("b"));
+    }
+
+    @Test
+    public void testProcess_externedProperties() throws Exception {
+        Node externs = new Node(Token.SCRIPT);
+        Node propExtern = new Node(Token.STRING, "extern");
+        Node getPropExtern = new Node(Token.GETPROP, new Node(Token.THIS), propExtern);
+        externs.addChildToBack(getPropExtern);
+
+        Node root = new Node(Token.SCRIPT);
+        Node propA = new Node(Token.STRING, "a");
+        Node getPropA = new Node(Token.GETPROP, new Node(Token.THIS), propA);
+        root.addChildToBack(getPropA);
+
+        AmbiguateProperties ap = new AmbiguateProperties(MOCK_COMPILER, new char[]{'a', 'b'});
+        ap.process(externs, root);
+
+        Map<String, String> renamingMap = ap.getRenamingMap();
+        assertEquals(1, renamingMap.size());
+        assertTrue(renamingMap.containsKey("a"));
+        assertNotEquals("extern", renamingMap.get("a"));
+    }
+
+    @Test
+    public void testProcess_quotedProperties() throws Exception {
+        Node externs = new Node(Token.SCRIPT);
+        Node root = new Node(Token.SCRIPT);
+        Node propA = new Node(Token.STRING, "a");
+        propA.putBooleanProp(Node.QUOTED_PROP, true);
+        Node getPropA = new Node(Token.GETPROP, new Node(Token.THIS), propA);
+        root.addChildToBack(getPropA);
+
+        AmbiguateProperties ap = new AmbiguateProperties(MOCK_COMPILER, new char[]{'a', 'b'});
+        ap.process(externs, root);
+
+        Map<String, String> renamingMap = ap.getRenamingMap();
+        assertTrue(renamingMap.isEmpty()); // Quoted properties are not ambigulated.
+    }
+
+    @Test
+    public void testProcess_skipPrefixProperties() throws Exception {
+        Node externs = new Node(Token.SCRIPT);
+        Node root = new Node(Token.SCRIPT);
+        Node propSkip = new Node(Token.STRING, "JSAbstractCompiler_skip");
+        Node getPropSkip = new Node(Token.GETPROP, new Node(Token.THIS), propSkip);
+        root.addChildToBack(getPropSkip);
+
+        AmbiguateProperties ap = new AmbiguateProperties(MOCK_COMPILER, new char[]{'a', 'b'});
+        ap.process(externs, root);
+
+        Map<String, String> renamingMap = ap.getRenamingMap();
+        assertTrue(renamingMap.isEmpty()); // Properties starting with SKIP_PREFIX are skipped.
+    }
+
+    @Test
+    public void testProcess_complexGraph() throws Exception {
+        Node externs = new Node(Token.SCRIPT);
+        Node root = new Node(Token.SCRIPT);
+
+        // a and b are related through type A
+        Node getPropA1 = new Node(Token.GETPROP, new Node(Token.THIS), new Node(Token.STRING, "a"));
+        getPropA1.setJSType(createJSType("A"));
+        root.addChildToBack(getPropA1);
+
+        Node getPropB1 = new Node(Token.GETPROP, new Node(Token.THIS), new Node(Token.STRING, "b"));
+        getPropB1.setJSType(createJSType("A"));
+        root.addChildToBack(getPropB1);
+
+        // c and d are related through type B
+        Node getPropC1 = new Node(Token.GETPROP, new Node(Token.THIS), new Node(Token.STRING, "c"));
+        getPropC1.setJSType(createJSType("B"));
+        root.addChildToBack(getPropC1);
+
+        Node getPropD1 = new Node(Token.GETPROP, new Node(Token.THIS), new Node(Token.STRING, "d"));
+        getPropD1.setJSType(createJSType("B"));
+        root.addChildToBack(getPropD1);
+
+        // e is related to a and b through type C (supertype of A)
+        Node getPropE1 = new Node(Token.GETPROP, new Node(Token.THIS), new Node(Token.STRING, "e"));
+        getPropE1.setJSType(createJSType("C"));
+        root.addChildToBack(getPropE1);
+
+        // f is related to c and d through type D (supertype of B)
+        Node getPropF1 = new Node(Token.GETPROP, new Node(Token.THIS), new Node(Token.STRING, "f"));
+        getPropF1.setJSType(createJSType("D"));
+        root.addChildToBack(getPropF1);
+
+        // g is related to a and b through type E (related to A)
+        Node getPropG1 = new Node(Token.GETPROP, new Node(Token.THIS), new Node(Token.STRING, "g"));
+        getPropG1.setJSType(createJSType("E"));
+        root.addChildToBack(getPropG1);
+
+        AmbiguateProperties ap = new AmbiguateProperties(MOCK_COMPILER, new char[]{'a', 'b', 'c', 'd', 'e', 'f', 'g'});
+        ap.process(externs, root);
+
+        Map<String, String> renamingMap = ap.getRenamingMap();
+        assertEquals(7, renamingMap.size());
+
+        String nameA = renamingMap.get("a");
+        String nameB = renamingMap.get("b");
+        String nameC = renamingMap.get("c");
+        String nameD = renamingMap.get("d");
+        String nameE = renamingMap.get("e");
+        String nameF = renamingMap.get("f");
+        String nameG = renamingMap.get("g");
+
+        // Properties related through the same type should get different names
+        assertNotEquals(nameA, nameB);
+        assertNotEquals(nameC, nameD);
+
+        // Properties related through different types may get the same name
+        assertTrue((nameA.equals(nameC) && nameB.equals(nameD)) ||
+                   (nameA.equals(nameD) && nameB.equals(nameC)));
+
+        // Properties related through supertypes should be kept separate
+        assertNotEquals(nameA, nameE);
+        assertNotEquals(nameC, nameF);
+
+        // Properties related through related types should be kept separate
+        assertNotEquals(nameA, nameG);
+    }
+
+    @Test
+    public void testAddType_invalidatingTypes() throws Exception {
+        AmbiguateProperties ap = new AmbiguateProperties(MOCK_COMPILER, new char[0]);
+        JSTypeRegistry registry = MOCK_COMPILER.getTypeRegistry();
+
+        // Test with some invalidating types
+        ap.addInvalidatingType(registry.getNativeType(JSTypeNative.ALL_TYPE));
+        ap.addInvalidatingType(registry.getNativeType(JSTypeNative.NO_OBJECT_TYPE));
+        ap.addInvalidatingType(registry.getNativeType(JSTypeNative.VOID_TYPE));
+
+        AmbiguateProperties.Property prop = new AmbiguateProperties.Property("testProp");
+        prop.addType(registry.getNativeType(JSTypeNative.ALL_TYPE));
+        assertTrue(prop.skipAmbiguating);
+
+        prop = new AmbiguateProperties.Property("testProp2");
+        prop.addType(registry.getNativeType(JSTypeNative.NO_OBJECT_TYPE));
+        assertTrue(prop.skipAmbiguating);
+
+        prop = new AmbiguateProperties.Property("testProp3");
+        prop.addType(registry.getNativeType(JSTypeNative.VOID_TYPE));
+        assertTrue(prop.skipAmbiguating);
+    }
+
+    @Test
+    public void testAddType_unionType() throws Exception {
+        AmbiguateProperties ap = new AmbiguateProperties(MOCK_COMPILER, new char[0]);
+        JSTypeRegistry registry = MOCK_COMPILER.getTypeRegistry();
+        JSType stringType = registry.getNativeType(JSTypeNative.STRING_TYPE);
+        JSType numberType = registry.getNativeType(JSTypeNative.NUMBER_TYPE);
+        JSType unionType = registry.createUnionType(stringType, numberType);
+
+        AmbiguateProperties.Property prop = new AmbiguateProperties.Property("testProp");
+        prop.addType(unionType);
+
+        assertFalse(prop.skipAmbiguating);
+        assertEquals(2, prop.numOccurrences);
+        assertEquals(2, prop.typesSet.cardinality());
+    }
+
+    @Test
+    public void testAddType_invalidatingUnionType() throws Exception {
+        AmbiguateProperties ap = new AmbiguateProperties(MOCK_COMPILER, new char[0]);
+        JSTypeRegistry registry = MOCK_COMPILER.getTypeRegistry();
+        JSType stringType = registry.getNativeType(JSTypeNative.STRING_TYPE);
+        JSType voidType = registry.getNativeType(JSTypeNative.VOID_TYPE);
+        JSType unionType = registry.createUnionType(stringType, voidType);
+
+        AmbiguateProperties.Property prop = new AmbiguateProperties.Property("testProp");
+        prop.addType(unionType);
+
+        assertTrue(prop.skipAmbiguating);
+    }
+
+    @Test
+    public void testGetIntForType_newType() throws Exception {
+        AmbiguateProperties ap = new AmbiguateProperties(MOCK_COMPILER, new char[0]);
+        JSTypeRegistry registry = MOCK_COMPILER.getTypeRegistry();
+        JSType stringType = registry.getNativeType(JSTypeNative.STRING_TYPE);
+        assertEquals(1, ap.getIntForType(stringType));
+    }
+
+    @Test
+    public void testGetIntForType_existingType() throws Exception {
+        AmbiguateProperties ap = new AmbiguateProperties(MOCK_COMPILER, new char[0]);
+        JSTypeRegistry registry = MOCK_COMPILER.getTypeRegistry();
+        JSType stringType = registry.getNativeType(JSTypeNative.STRING_TYPE);
+        ap.getIntForType(stringType); // first call
+        assertEquals(1, ap.getIntForType(stringType)); // second call should return same int
+    }
+
+    @Test
+    public void testComputeRelatedTypes_basic() throws Exception {
+        AmbiguateProperties ap = new AmbiguateProperties(MOCK_COMPILER, new char[0]);
+        JSTypeRegistry registry = MOCK_COMPILER.getTypeRegistry();
+        JSType objectType = registry.getNativeType(JSTypeNative.OBJECT_TYPE);
+        JSType stringType = registry.getNativeType(JSTypeNative.STRING_TYPE);
+
+        int objectInt = ap.getIntForType(objectType);
+        int stringInt = ap.getIntForType(stringType);
+
+        // Ensure type mapping is populated
+        ap.getIntForType(objectType);
+        ap.getIntForType(stringType);
+
+        ap.computeRelatedTypes(stringType);
+        JSTypeBitSet related = ap.relatedBitsets.get(stringType);
+
+        assertTrue(related.get(objectInt));
+        assertFalse(related.get(stringInt)); // A type is not related to itself in this context
+    }
+
+    @Test
+    public void testComputeRelatedTypes_withConstructorAndInterfaces() throws Exception {
+        AmbiguateProperties ap = new AmbiguateProperties(MOCK_COMPILER, new char[0]);
+        JSTypeRegistry registry = MOCK_COMPILER.getTypeRegistry();
+
+        // Mocking a complex type structure
+        ObjectType interface1 = registry.createInterfaceType("Interface1");
+        ObjectType interface2 = registry.createInterfaceType("Interface2");
+
+        FunctionType constructorType = registry.createFunctionTypeWithNewInstance(
+            "MyClass",
+            new Node(Token.OBJECTLIT),
+            registry.createFunctionPrototypeType(
+                registry.getObjectTypeWithProperty("prop1", registry.getNativeType(JSTypeNative.NUMBER_TYPE))
+            ),
+            null
+        );
+
+        constructorType.setImplementedInterfaces(Lists.newArrayList(interface1, interface2));
+
+        ObjectType instanceType = constructorType.getInstanceType();
+
+        int instanceInt = ap.getIntForType(instanceType);
+        int interface1Int = ap.getIntForType(interface1.getPrototype()); // Use prototype for comparison
+        int interface2Int = ap.getIntForType(interface2.getPrototype()); // Use prototype for comparison
+        int objectProtoInt = ap.getIntForType(registry.getNativeType(JSTypeNative.OBJECT_PROTOTYPE));
+
+        // Populate type mappings
+        ap.getIntForType(instanceType);
+        ap.getIntForType(interface1.getPrototype());
+        ap.getIntForType(interface2.getPrototype());
+        ap.getIntForType(registry.getNativeType(JSTypeNative.OBJECT_PROTOTYPE));
+
+        ap.computeRelatedTypes(instanceType);
+        JSTypeBitSet related = ap.relatedBitsets.get(instanceType);
+
+        assertTrue(related.get(instanceInt)); // Type should be related to itself
+        assertTrue(related.get(interface1Int));
+        assertTrue(related.get(interface2Int));
+        assertTrue(related.get(objectProtoInt)); // Object.prototype is a supertype
+    }
+
+    @Test
+    public void testPropertyGraphNode_getValue() {
+        AmbiguateProperties.Property prop = new AmbiguateProperties.Property("test");
+        AmbiguateProperties.PropertyGraphNode node = new AmbiguateProperties.PropertyGraphNode(prop);
+        assertEquals(prop, node.getValue());
+    }
+
+    @Test
+    public void testPropertyGraphNode_getAnnotation() {
+        AmbiguateProperties.PropertyGraphNode node = new AmbiguateProperties.PropertyGraphNode(new AmbiguateProperties.Property("test"));
+        assertNull(node.getAnnotation());
+        Annotation annotation = new Annotation() { }; // Dummy annotation
+        node.setAnnotation(annotation);
+        assertEquals(annotation, node.getAnnotation());
+    }
+
+    @Test
+    public void testPropertyGraphNode_setAnnotation() {
+        AmbiguateProperties.PropertyGraphNode node = new AmbiguateProperties.PropertyGraphNode(new AmbiguateProperties.Property("test"));
+        Annotation annotation = new Annotation() { }; // Dummy annotation
+        node.setAnnotation(annotation);
+        assertEquals(annotation, node.getAnnotation());
+    }
+
+    @Test
+    public void testProcessExterns_getprop() {
+        AmbiguateProperties ap = new AmbiguateProperties(MOCK_COMPILER, new char[0]);
+        Node externs = new Node(Token.SCRIPT);
+        Node propNode = new Node(Token.STRING, "myExternProp");
+        Node getPropNode = new Node(Token.GETPROP, new Node(Token.THIS), propNode);
+        externs.addChildToBack(getPropNode);
+
+        NodeTraversal traversal = new NodeTraversal(MOCK_COMPILER, ap.new ProcessExterns(), null);
+        traversal.traverse(externs);
+
+        assertTrue(ap.externedNames.contains("myExternProp"));
+    }
+
+    @Test
+    public void testProcessExterns_objectlit() {
+        AmbiguateProperties ap = new AmbiguateProperties(MOCK_COMPILER, new char[0]);
+        Node externs = new Node(Token.SCRIPT);
+        Node objectLit = new Node(Token.OBJECTLIT);
+        objectLit.addChildToBack(new Node(Token.STRING, "key1"));
+        objectLit.addChildToBack(new Node(Token.STRING, "value1"));
+        objectLit.addChildToBack(new Node(Token.STRING, "key2"));
+        objectLit.addChildToBack(new Node(Token.STRING, "value2"));
+        externs.addChildToBack(objectLit);
+
+        NodeTraversal traversal = new NodeTraversal(MOCK_COMPILER, ap.new ProcessExterns(), null);
+        traversal.traverse(externs);
+
+        assertTrue(ap.externedNames.contains("key1"));
+        assertTrue(ap.externedNames.contains("key2"));
+    }
+
+    @Test
+    public void testProcessProperties_getprop() {
+        AmbiguateProperties ap = new AmbiguateProperties(MOCK_COMPILER, new char[0]);
+        Node root = new Node(Token.SCRIPT);
+        Node propNode = new Node(Token.STRING, "myProp");
+        Node getPropNode = new Node(Token.GETPROP, new Node(Token.THIS), propNode);
+        getPropNode.setJSType(MOCK_COMPILER.getTypeRegistry().getNativeType(JSTypeNative.STRING_TYPE));
+        root.addChildToBack(getPropNode);
+
+        NodeTraversal traversal = new NodeTraversal(MOCK_COMPILER, ap.new ProcessProperties(), null);
+        traversal.traverse(root);
+
+        assertEquals("myProp", ap.stringNodesToRename.get(0).getString());
+        assertEquals(1, ap.stringNodesToRename.get(0).getJSType().getTypesInMap(ap.intForType).cardinality());
+    }
+
+    @Test
+    public void testProcessProperties_objectlit_unquoted() {
+        AmbiguateProperties ap = new AmbiguateProperties(MOCK_COMPILER, new char[0]);
+        Node root = new Node(Token.SCRIPT);
+        Node objectLit = new Node(Token.OBJECTLIT);
+        Node keyNode = new Node(Token.STRING, "myKey");
+        objectLit.addChildToBack(keyNode);
+        objectLit.addChildToBack(new Node(Token.STRING, "value"));
+        objectLit.setJSType(MOCK_COMPILER.getTypeRegistry().getNativeType(JSTypeNative.OBJECT_TYPE));
+        root.addChildToBack(objectLit);
+
+        NodeTraversal traversal = new NodeTraversal(MOCK_COMPILER, ap.new ProcessProperties(), null);
+        traversal.traverse(root);
+
+        assertEquals("myKey", ap.stringNodesToRename.get(0).getString());
+        assertEquals(1, ap.stringNodesToRename.get(0).getJSType().getTypesInMap(ap.intForType).cardinality());
+    }
+
+    @Test
+    public void testProcessProperties_objectlit_quoted() {
+        AmbiguateProperties ap = new AmbiguateProperties(MOCK_COMPILER, new char[0]);
+        Node root = new Node(Token.SCRIPT);
+        Node objectLit = new Node(Token.OBJECTLIT);
+        Node keyNode = new Node(Token.STRING, "myQuotedKey");
+        keyNode.putBooleanProp(Node.QUOTED_PROP, true);
+        objectLit.addChildToBack(keyNode);
+        objectLit.addChildToBack(new Node(Token.STRING, "value"));
+        objectLit.setJSType(MOCK_COMPILER.getTypeRegistry().getNativeType(JSTypeNative.OBJECT_TYPE));
+        root.addChildToBack(objectLit);
+
+        NodeTraversal traversal = new NodeTraversal(MOCK_COMPILER, ap.new ProcessProperties(), null);
+        traversal.traverse(root);
+
+        assertTrue(ap.quotedNames.contains("myQuotedKey"));
+        assertTrue(ap.stringNodesToRename.isEmpty());
+    }
+
+    @Test
+    public void testProcessProperties_getelem_quoted() {
+        AmbiguateProperties ap = new AmbiguateProperties(MOCK_COMPILER, new char[0]);
+        Node root = new Node(Token.SCRIPT);
+        Node objNode = new Node(Token.THIS);
+        Node keyNode = new Node(Token.STRING, "myQuotedKey");
+        Node getElemNode = new Node(Token.GETELEM, objNode, keyNode);
+        getElemNode.setJSType(MOCK_COMPILER.getTypeRegistry().getNativeType(JSTypeNative.OBJECT_TYPE));
+        root.addChildToBack(getElemNode);
+
+        NodeTraversal traversal = new NodeTraversal(MOCK_COMPILER, ap.new ProcessProperties(), null);
+        traversal.traverse(root);
+
+        assertTrue(ap.quotedNames.contains("myQuotedKey"));
+    }
+
+    @Test
+    public void testIsInvalidatingType_nullOrUndefined() {
+        AmbiguateProperties ap = new AmbiguateProperties(MOCK_COMPILER, new char[0]);
+        JSTypeRegistry registry = MOCK_COMPILER.getTypeRegistry();
+        assertTrue(ap.isInvalidatingType(registry.getNativeType(JSTypeNative.NULL_TYPE)));
+        assertTrue(ap.isInvalidatingType(registry.getNativeType(JSTypeNative.VOID_TYPE)));
+    }
+
+    @Test
+    public void testIsInvalidatingType_noType() {
+        AmbiguateProperties ap = new AmbiguateProperties(MOCK_COMPILER, new char[0]);
+        JSTypeRegistry registry = MOCK_COMPILER.getTypeRegistry();
+        assertTrue(ap.isInvalidatingType(registry.getNativeType(JSTypeNative.NO_TYPE)));
+    }
+
+    @Test
+    public void testIsInvalidatingType_allType() {
+        AmbiguateProperties ap = new AmbiguateProperties(MOCK_COMPILER, new char[0]);
+        JSTypeRegistry registry = MOCK_COMPILER.getTypeRegistry();
+        assertTrue(ap.isInvalidatingType(registry.getNativeType(JSTypeNative.ALL_TYPE)));
+    }
+
+    @Test
+    public void testIsInvalidatingType_unionWithInvalidating() {
+        AmbiguateProperties ap = new AmbiguateProperties(MOCK_COMPILER, new char[0]);
+        JSTypeRegistry registry = MOCK_COMPILER.getTypeRegistry();
+        JSType stringType = registry.getNativeType(JSTypeNative.STRING_TYPE);
+        JSType voidType = registry.getNativeType(JSTypeNative.VOID_TYPE);
+        JSType unionType = registry.createUnionType(stringType, voidType);
+        assertTrue(ap.isInvalidatingType(unionType));
+    }
+
+    @Test
+    public void testIsInvalidatingType_normalType() {
+        AmbiguateProperties ap = new AmbiguateProperties(MOCK_COMPILER, new char[0]);
+        JSTypeRegistry registry = MOCK_COMPILER.getTypeRegistry();
+        JSType stringType = registry.getNativeType(JSTypeNative.STRING_TYPE);
+        assertFalse(ap.isInvalidatingType(stringType));
+    }
+
+    @Test
+    public void testGetProperty_newProperty() {
+        AmbiguateProperties ap = new AmbiguateProperties(MOCK_COMPILER, new char[0]);
+        AmbiguateProperties.Property prop = ap.getProperty("newProp");
+        assertEquals("newProp", prop.oldName);
+        assertEquals(0, prop.numOccurrences);
+    }
+
+    @Test
+    public void testGetProperty_existingProperty() {
+        AmbiguateProperties ap = new AmbiguateProperties(MOCK_COMPILER, new char[0]);
+        AmbiguateProperties.Property prop1 = ap.getProperty("existingProp");
+        AmbiguateProperties.Property prop2 = ap.getProperty("existingProp");
+        assertSame(prop1, prop2);
+    }
+
+    @Test
+    public void testGetJSType_unknownType() {
+        AmbiguateProperties ap = new AmbiguateProperties(MOCK_COMPILER, new char[0]);
+        Node node = new Node(Token.NAME, "unknown");
+        node.setJSType(null); // Simulate a missing type
+        assertEquals(JSTypeNative.UNKNOWN_TYPE, ap.getJSType(node).getNativeId());
+    }
+
+    @Test
+    public void testGetJSType_knownType() {
+        AmbiguateProperties ap = new AmbiguateProperties(MOCK_COMPILER, new char[0]);
+        JSTypeRegistry registry = MOCK_COMPILER.getTypeRegistry();
+        JSType stringType = registry.getNativeType(JSTypeNative.STRING_TYPE);
+        Node node = new Node(Token.NAME, "string");
+        node.setJSType(stringType);
+        assertEquals(stringType, ap.getJSType(node));
+    }
+
+    // Mock implementations for testing purposes
+    private static class MockCompiler extends AbstractCompiler {
+        private final JSTypeRegistry typeRegistry;
+        private final TypeValidator typeValidator;
+
+        MockCompiler(JSTypeRegistry registry) {
+            this.typeRegistry = registry;
+            this.typeValidator = new TypeValidator(this);
+        }
+
+        @Override
+        public JSTypeRegistry getTypeRegistry() {
+            return typeRegistry;
+        }
+
+        @Override
+        public TypeValidator getTypeValidator() {
+            return typeValidator;
+        }
+
+        @Override
+        public CodingConvention getCodingConvention() {
+            return new CodingConvention.DefaultCodingConvention();
+        }
+
+        @Override
+        public String getSourcePath() { return "test.js"; }
+
+        @Override
+        public void report(JSError error) {}
+
+        @Override
+        public void reportCodeChange() {}
+
+        @Override
+        public CompilerInput getInput(String sourceName) {
+            return new CompilerInput(new SourceFile(sourceName));
+        }
+        // Other methods as needed for testing
+    }
+
+    private JSType createJSType(String typeName) {
+        JSTypeRegistry registry = MOCK_COMPILER.getTypeRegistry();
+        if (typeName.equals("A")) {
+            ObjectType objType = registry.createObjectType("A");
+            return objType;
+        } else if (typeName.equals("B")) {
+            ObjectType objType = registry.createObjectType("B");
+            return objType;
+        } else if (typeName.equals("C")) {
+            // C is supertype of A
+            ObjectType cProto = registry.createObjectType("C");
+            ObjectType aProto = registry.createObjectType("A");
+            aProto.setPrototype(cProto.getConstructor(), cProto); // A extends C
+            return aProto;
+        } else if (typeName.equals("D")) {
+            // D is supertype of B
+            ObjectType dProto = registry.createObjectType("D");
+            ObjectType bProto = registry.createObjectType("B");
+            bProto.setPrototype(dProto.getConstructor(), dProto); // B extends D
+            return bProto;
+        } else if (typeName.equals("E")) {
+            // E is related to A in some way (e.g., implemented interface)
+            // For this test, we'll just make it a separate object type
+            ObjectType eType = registry.createObjectType("E");
+            return eType;
+        }
+        return registry.getNativeType(JSTypeNative.UNKNOWN_TYPE);
+    }
+
+}
+```
+
+## SOURCE CODE ANALYSIS
+The tests focus on the `AmbiguateProperties` class, specifically its property renaming logic. Key methods tested include `process`, `compare` (for the `FREQUENCY_COMPARATOR`), and internal methods related to property recording (`addType`), type handling (`getIntForType`, `computeRelatedTypes`), and graph node management. The tests cover the core logic of identifying, comparing, and disambiguating property names based on their usage context and type relationships.
+
+## TEST CASE DESIGN
+*   `testFrequencyComparator_p1_greater`: Compares two `Property` objects based on `numOccurrences`, expecting `p1` to be greater.
+*   `testFrequencyComparator_p2_greater`: Compares two `Property` objects based on `numOccurrences`, expecting `p2` to be greater.
+*   `testFrequencyComparator_equal_names`: Compares two `Property` objects with equal `numOccurrences`, testing alphabetical tie-breaking.
+*   `testProcess_noProperties`: Tests `process` with an empty AST, expecting an empty renaming map.
+*   `testProcess_simpleProperties`: Tests `process` with two distinct properties, expecting them to be renamed differently.
+*   `testProcess_externedProperties`: Tests `process` with an externed property and a regular property, expecting only the regular property to be considered for renaming.
+*   `testProcess_quotedProperties`: Tests `process` with a quoted property, expecting it not to be renamed.
+*   `testProcess_skipPrefixProperties`: Tests `process` with a property starting with `JSAbstractCompiler_`, expecting it to be skipped.
+*   `testProcess_complexGraph`: Tests `process` with a more complex graph of related and unrelated types to ensure correct graph coloring and renaming.
+*   `testAddType_invalidatingTypes`: Tests that properties associated with specific invalidating types are marked for skipping.
+*   `testAddType_unionType`: Tests how `addType` handles a union type.
+*   `testAddType_invalidatingUnionType`: Tests how `addType` handles a union type containing an invalidating type.
+*   `testGetIntForType_newType`: Tests `getIntForType` when a new type is encountered.
+*   `testGetIntForType_existingType`: Tests `getIntForType` when an existing type is encountered.
+*   `testComputeRelatedTypes_basic`: Tests the basic calculation of related types.
+*   `testComputeRelatedTypes_withConstructorAndInterfaces`: Tests `computeRelatedTypes` with a more complex scenario involving constructors and interfaces.
+*   `testPropertyGraphNode_getValue`: Tests the `getValue` method of `PropertyGraphNode`.
+*   `testPropertyGraphNode_getAnnotation`: Tests the `getAnnotation` method of `PropertyGraphNode`.
+*   `testPropertyGraphNode_setAnnotation`: Tests the `setAnnotation` method of `PropertyGraphNode`.
+*   `testProcessExterns_getprop`: Tests the `ProcessExterns` callback for `GETPROP` tokens.
+*   `testProcessExterns_objectlit`: Tests the `ProcessExterns` callback for `OBJECTLIT` tokens.
+*   `testProcessProperties_getprop`: Tests the `ProcessProperties` callback for `GETPROP` tokens.
+*   `testProcessProperties_objectlit_unquoted`: Tests the `ProcessProperties` callback for unquoted string keys in `OBJECTLIT`.
+*   `testProcessProperties_objectlit_quoted`: Tests the `ProcessProperties` callback for quoted string keys in `OBJECTLIT`.
+*   `testProcessProperties_getelem_quoted`: Tests the `ProcessProperties` callback for quoted string keys in `GETELEM`.
+*   `testIsInvalidatingType_nullOrUndefined`: Tests `isInvalidatingType` for `NULL_TYPE` and `VOID_TYPE`.
+*   `testIsInvalidatingType_noType`: Tests `isInvalidatingType` for `NO_TYPE`.
+*   `testIsInvalidatingType_allType`: Tests `isInvalidatingType` for `ALL_TYPE`.
+*   `testIsInvalidatingType_unionWithInvalidating`: Tests `isInvalidatingType` for a union type containing an invalidating type.
+*   `testIsInvalidatingType_normalType`: Tests `isInvalidatingType` for a normal type.
+*   `testGetProperty_newProperty`: Tests `getProperty` when a new property name is encountered.
+*   `testGetProperty_existingProperty`: Tests `getProperty` when an existing property name is encountered.
+*   `testGetJSType_unknownType`: Tests `getJSType` when the node has no type information.
+*   `testGetJSType_knownType`: Tests `getJSType` when the node has existing type information.
+
+## DEFECT DETECTION STRATEGY
+The tests aim to detect defects by precisely checking the logic for property name disambiguation. They cover cases of type relationships, externed names, quoted names, and specific prefixes that should be skipped, ensuring that the renaming logic correctly identifies properties that can be merged and those that must remain distinct.
+
+## SUMMARY
+30 tests.
+
+## LIMITATIONS
+The tests rely on mock objects and simplified JSTypes for the `AbstractCompiler` and `JSTypeRegistry`. Complex interactions with the actual compiler's type system and graph coloring algorithms might not be fully captured. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

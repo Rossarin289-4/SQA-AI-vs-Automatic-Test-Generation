@@ -1,0 +1,418 @@
+```java
+package org.mockito.internal.configuration.injection.filter;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import org.mockito.internal.configuration.injection.PropertyAndSetterInjection;
+import org.mockito.exceptions.Reporter;
+import org.mockito.internal.util.reflection.BeanPropertySetter;
+import org.mockito.internal.util.reflection.FieldSetter;
+import java.lang.reflect.Field;
+import java.util.Collection;
+import java.util.List;
+import org.mockito.internal.util.MockUtil;
+import java.util.ArrayList;
+import org.mockito.exceptions.base.MockitoException;
+import org.mockito.internal.configuration.injection.filter.FinalMockCandidateFilter;
+import org.mockito.internal.configuration.injection.filter.MockCandidateFilter;
+import org.mockito.internal.configuration.injection.filter.NameBasedCandidateFilter;
+import org.mockito.internal.configuration.injection.filter.TypeBasedCandidateFilter;
+import org.mockito.internal.util.collections.ListUtil;
+import org.mockito.internal.util.reflection.FieldInitializationReport;
+import org.mockito.internal.util.reflection.FieldInitializer;
+import org.mockito.internal.util.reflection.SuperTypesLastSorter;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Modifier;
+import java.util.*;
+
+public class FinalMockCandidateFilterTest {
+    static class Holder { Object value; }
+
+    private Field field(String name) throws Exception {
+        return Holder.class.getDeclaredField(name);
+    }
+
+    private List<Field> fields(Field field) {
+        return new ArrayList<Field>(Collections.singletonList(field));
+    }
+
+    @Test
+    public void singleCandidateReturnedAndInjectedToField() throws Exception {
+        Holder holder = new Holder();
+        Object candidate = new Object();
+        Field f = field("value");
+        Object result = new FinalMockCandidateFilter().filterCandidate(
+                Collections.<Object>singleton(candidate), f, fields(f), holder).thenInject();
+        assertSame(candidate, result);
+        assertSame(candidate, holder.value);
+    }
+
+    @Test
+    public void emptyCandidatesReturnNullWithoutChangingField() throws Exception {
+        Holder holder = new Holder();
+        Object original = new Object();
+        holder.value = original;
+        Field f = field("value");
+        Object result = new FinalMockCandidateFilter().filterCandidate(
+                Collections.<Object>emptyList(), f, fields(f), holder).thenInject();
+        assertNull(result);
+        assertSame(original, holder.value);
+    }
+
+    @Test
+    public void multipleCandidatesReturnNullWithoutChangingField() throws Exception {
+        Holder holder = new Holder();
+        Object original = new Object();
+        holder.value = original;
+        Field f = field("value");
+        Collection<Object> candidates = Arrays.<Object>asList(new Object(), new Object());
+        Object result = new FinalMockCandidateFilter().filterCandidate(
+                candidates, f, fields(f), holder).thenInject();
+        assertNull(result);
+        assertSame(original, holder.value);
+    }
+
+    @Test
+    public void oneCandidateIsSelectedWhenItIsTheOnlyEntry() throws Exception {
+        Object candidate = new Object();
+        Field f = field("value");
+        assertSame(candidate, new FinalMockCandidateFilter().filterCandidate(
+                Collections.<Object>singleton(candidate), f, fields(f), new Holder()).thenInject());
+    }
+
+    @Test
+    public void nonSingletonCollectionWithTwoEntriesIsNotSelected() throws Exception {
+        Field f = field("value");
+        assertNull(new FinalMockCandidateFilter().filterCandidate(
+                Arrays.<Object>asList(new Object(), new Object()), f, fields(f), new Holder()).thenInject());
+    }
+
+    @Test
+    public void singletonListCandidateIsInjected() throws Exception {
+        Holder holder = new Holder();
+        Object candidate = new Object();
+        Field f = field("value");
+        assertSame(candidate, new FinalMockCandidateFilter().filterCandidate(
+                Collections.<Object>singletonList(candidate), f, fields(f), holder).thenInject());
+        assertSame(candidate, holder.value);
+    }
+
+    @Test
+    public void noCandidatesPreserveNullField() throws Exception {
+        Holder holder = new Holder();
+        Field f = field("value");
+        assertNull(new FinalMockCandidateFilter().filterCandidate(
+                Collections.<Object>emptyList(), f, fields(f), holder).thenInject());
+        assertNull(holder.value);
+    }
+
+    @Test
+    public void selectedCandidateReplacesExistingFieldValue() throws Exception {
+        Holder holder = new Holder();
+        Object oldValue = new Object();
+        Object candidate = new Object();
+        holder.value = oldValue;
+        Field f = field("value");
+        assertSame(candidate, new FinalMockCandidateFilter().filterCandidate(
+                Collections.<Object>singleton(candidate), f, fields(f), holder).thenInject());
+        assertSame(candidate, holder.value);
+    }
+
+    @Test
+    public void injectionIntoNullFieldReturnsCandidate() throws Exception {
+        Holder holder = new Holder();
+        Object candidate = new Object();
+        Field f = field("value");
+        Object result = new FinalMockCandidateFilter().filterCandidate(
+                Collections.<Object>singleton(candidate), f, fields(f), holder).thenInject();
+        assertSame(candidate, result);
+        assertSame(candidate, holder.value);
+    }
+
+    @Test
+    public void zeroCandidatesDoNotCreateAnInjectionResult() throws Exception {
+        Field f = field("value");
+        OngoingInjecter injecter = new FinalMockCandidateFilter().filterCandidate(
+                Collections.<Object>emptyList(), f, fields(f), new Holder());
+        assertNull(injecter.thenInject());
+    }
+
+    @Test
+    public void twoCandidatesDoNotCreateAnInjectionResult() throws Exception {
+        Field f = field("value");
+        OngoingInjecter injecter = new FinalMockCandidateFilter().filterCandidate(
+                Arrays.<Object>asList(new Object(), new Object()), f, fields(f), new Holder());
+        assertNull(injecter.thenInject());
+    }
+
+    @Test
+    public void returnedInjectionResultIsTheAssignedReference() throws Exception {
+        Holder holder = new Holder();
+        Object candidate = new Object();
+        Field f = field("value");
+        Object result = new FinalMockCandidateFilter().filterCandidate(
+                Collections.<Object>singleton(candidate), f, fields(f), holder).thenInject();
+        assertSame(holder.value, result);
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+The target is `FinalMockCandidateFilter.filterCandidate` and the returned `OngoingInjecter.thenInject()`.
+Tests exercise the exact size-one branch, which sets the selected object on the field and returns it, and the zero/multiple-candidate branch, which returns null without assignment.
+
+### 2. TEST CASE DESIGN
+- `singleCandidateReturnedAndInjectedToField`: one candidate; result and holder field are the same reference, per assignment then return.
+- `emptyCandidatesReturnNullWithoutChangingField`: empty collection; returns null and preserves prior field value.
+- `multipleCandidatesReturnNullWithoutChangingField`: two entries; returns null and preserves prior field value.
+- `oneCandidateIsSelectedWhenItIsTheOnlyEntry`: size one; returns the sole entry.
+- `nonSingletonCollectionWithTwoEntriesIsNotSelected`: size two; returns null.
+- `singletonListCandidateIsInjected`: one list entry; returns and assigns that reference.
+- `noCandidatesPreserveNullField`: empty collection; null result and field remains null.
+- `selectedCandidateReplacesExistingFieldValue`: one candidate; setter fallback assigns it over the old field value.
+- `injectionIntoNullFieldReturnsCandidate`: one candidate; it is returned and assigned.
+- `zeroCandidatesDoNotCreateAnInjectionResult`: empty collection; `thenInject()` returns null.
+- `twoCandidatesDoNotCreateAnInjectionResult`: two candidates; `thenInject()` returns null.
+- `returnedInjectionResultIsTheAssignedReference`: one candidate; returned reference equals the resulting field reference.
+
+### 4. DEFECT DETECTION STRATEGY
+The tests pin selection at collection sizes zero, one, and two, plus the field mutation and identity of the selected object.
+
+### 5. SUMMARY
+12 independent tests.
+
+### 6. LIMITATIONS
+No test invokes the setter path; the field has no bean setter, so these tests cover field assignment. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions. 
+
+ 彩神争霸平台 
+ETwitter 
+исидики 
+񎢀
+ 
+天天彩票网 
+ 天天中彩票这个 
+
+
+```java
+package org.mockito.internal.configuration.injection.filter;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import org.mockito.internal.configuration.injection.PropertyAndSetterInjection;
+import org.mockito.exceptions.Reporter;
+import org.mockito.internal.util.reflection.BeanPropertySetter;
+import org.mockito.internal.util.reflection.FieldSetter;
+import java.lang.reflect.Field;
+import java.util.Collection;
+import java.util.List;
+import org.mockito.internal.util.MockUtil;
+import java.util.ArrayList;
+import org.mockito.exceptions.base.MockitoException;
+import org.mockito.internal.configuration.injection.filter.FinalMockCandidateFilter;
+import org.mockito.internal.configuration.injection.filter.MockCandidateFilter;
+import org.mockito.internal.configuration.injection.filter.NameBasedCandidateFilter;
+import org.mockito.internal.configuration.injection.filter.TypeBasedCandidateFilter;
+import org.mockito.internal.util.collections.ListUtil;
+import org.mockito.internal.util.reflection.FieldInitializationReport;
+import org.mockito.internal.util.reflection.FieldInitializer;
+import org.mockito.internal.util.reflection.SuperTypesLastSorter;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Modifier;
+import java.util.*;
+
+public class FinalMockCandidateFilterTest {
+    static class Holder {
+        Object value;
+    }
+
+    private Field valueField() throws Exception {
+        return Holder.class.getDeclaredField("value");
+    }
+
+    private List<Field> fieldList(Field field) {
+        return new ArrayList<Field>(Collections.singletonList(field));
+    }
+
+    @Test
+    public void singleCandidateIsReturnedAndInjected() throws Exception {
+        Holder holder = new Holder();
+        Object candidate = new Object();
+        Field field = valueField();
+
+        Object result = new FinalMockCandidateFilter().filterCandidate(
+                Collections.<Object>singleton(candidate), field, fieldList(field), holder).thenInject();
+
+        assertSame(candidate, result);
+        assertSame(candidate, holder.value);
+    }
+
+    @Test
+    public void emptyCandidatesReturnNullAndPreserveField() throws Exception {
+        Holder holder = new Holder();
+        Object original = new Object();
+        holder.value = original;
+        Field field = valueField();
+
+        Object result = new FinalMockCandidateFilter().filterCandidate(
+                Collections.<Object>emptyList(), field, fieldList(field), holder).thenInject();
+
+        assertNull(result);
+        assertSame(original, holder.value);
+    }
+
+    @Test
+    public void twoCandidatesReturnNullAndPreserveField() throws Exception {
+        Holder holder = new Holder();
+        Object original = new Object();
+        holder.value = original;
+        Field field = valueField();
+
+        Object result = new FinalMockCandidateFilter().filterCandidate(
+                Arrays.<Object>asList(new Object(), new Object()), field, fieldList(field), holder).thenInject();
+
+        assertNull(result);
+        assertSame(original, holder.value);
+    }
+
+    @Test
+    public void singletonListCandidateIsAssigned() throws Exception {
+        Holder holder = new Holder();
+        Object candidate = new Object();
+        Field field = valueField();
+
+        Object result = new FinalMockCandidateFilter().filterCandidate(
+                Collections.<Object>singletonList(candidate), field, fieldList(field), holder).thenInject();
+
+        assertSame(candidate, result);
+        assertSame(candidate, holder.value);
+    }
+
+    @Test
+    public void emptyCollectionLeavesNullFieldNull() throws Exception {
+        Holder holder = new Holder();
+        Field field = valueField();
+
+        Object result = new FinalMockCandidateFilter().filterCandidate(
+                Collections.<Object>emptyList(), field, fieldList(field), holder).thenInject();
+
+        assertNull(result);
+        assertNull(holder.value);
+    }
+
+    @Test
+    public void oneEntryInArrayListIsSelected() throws Exception {
+        Holder holder = new Holder();
+        Object candidate = new Object();
+        Collection<Object> candidates = new ArrayList<Object>();
+        candidates.add(candidate);
+        Field field = valueField();
+
+        Object result = new FinalMockCandidateFilter().filterCandidate(
+                candidates, field, fieldList(field), holder).thenInject();
+
+        assertSame(candidate, result);
+        assertSame(candidate, holder.value);
+    }
+
+    @Test
+    public void threeCandidatesReturnNull() throws Exception {
+        Holder holder = new Holder();
+        Field field = valueField();
+        Collection<Object> candidates = Arrays.<Object>asList(
+                new Object(), new Object(), new Object());
+
+        Object result = new FinalMockCandidateFilter().filterCandidate(
+                candidates, field, fieldList(field), holder).thenInject();
+
+        assertNull(result);
+        assertNull(holder.value);
+    }
+
+    @Test
+    public void selectedCandidateReplacesExistingValue() throws Exception {
+        Holder holder = new Holder();
+        Object oldValue = new Object();
+        Object candidate = new Object();
+        holder.value = oldValue;
+        Field field = valueField();
+
+        Object result = new FinalMockCandidateFilter().filterCandidate(
+                Collections.<Object>singleton(candidate), field, fieldList(field), holder).thenInject();
+
+        assertSame(candidate, result);
+        assertSame(candidate, holder.value);
+    }
+
+    @Test
+    public void assignedValueIsReturnedByIdentity() throws Exception {
+        Holder holder = new Holder();
+        Object candidate = new Object();
+        Field field = valueField();
+
+        Object result = new FinalMockCandidateFilter().filterCandidate(
+                Collections.<Object>singleton(candidate), field, fieldList(field), holder).thenInject();
+
+        assertSame(holder.value, result);
+    }
+
+    @Test
+    public void emptyCandidateInjecterReturnsNullOnRepeatedCall() throws Exception {
+        Field field = valueField();
+        OngoingInjecter injecter = new FinalMockCandidateFilter().filterCandidate(
+                Collections.<Object>emptyList(), field, fieldList(field), new Holder());
+
+        assertNull(injecter.thenInject());
+        assertNull(injecter.thenInject());
+    }
+
+    @Test
+    public void multipleCandidateInjecterReturnsNullOnRepeatedCall() throws Exception {
+        Field field = valueField();
+        OngoingInjecter injecter = new FinalMockCandidateFilter().filterCandidate(
+                Arrays.<Object>asList(new Object(), new Object()), field, fieldList(field), new Holder());
+
+        assertNull(injecter.thenInject());
+        assertNull(injecter.thenInject());
+    }
+
+    @Test
+    public void selectedInjecterReturnsCandidateOnRepeatedCall() throws Exception {
+        Holder holder = new Holder();
+        Object candidate = new Object();
+        Field field = valueField();
+        OngoingInjecter injecter = new FinalMockCandidateFilter().filterCandidate(
+                Collections.<Object>singleton(candidate), field, fieldList(field), holder);
+
+        assertSame(candidate, injecter.thenInject());
+        assertSame(candidate, injecter.thenInject());
+        assertSame(candidate, holder.value);
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+The target was unspecified, so selection was exploratory within `FinalMockCandidateFilter`.
+Tests cover the candidate-count branches and the single-candidate field assignment and return behavior.
+
+### 2. TEST CASE DESIGN
+- `singleCandidateIsReturnedAndInjected`: one candidate; returns and assigns that object.
+- `emptyCandidatesReturnNullAndPreserveField`: no candidates; returns null and preserves the existing field.
+- `twoCandidatesReturnNullAndPreserveField`: two candidates; returns null and preserves the existing field.
+- `singletonListCandidateIsAssigned`: one list entry; returns and assigns that entry.
+- `emptyCollectionLeavesNullFieldNull`: no candidates; result and original field value are null.
+- `oneEntryInArrayListIsSelected`: one collection entry; returns and assigns it.
+- `threeCandidatesReturnNull`: three candidates; returns null and leaves the field unchanged.
+- `selectedCandidateReplacesExistingValue`: one candidate; assigned candidate replaces the old value.
+- `assignedValueIsReturnedByIdentity`: one candidate; returned value is the assigned reference.
+- `emptyCandidateInjecterReturnsNullOnRepeatedCall`: no candidates; both calls return null.
+- `multipleCandidateInjecterReturnsNullOnRepeatedCall`: multiple candidates; both calls return null.
+- `selectedInjecterReturnsCandidateOnRepeatedCall`: one candidate; both calls return it and the field holds it.
+
+### 4. DEFECT DETECTION STRATEGY
+These tests pin the zero-, one-, and multiple-candidate outcomes, as well as assignment and returned-reference identity.
+
+### 5. SUMMARY
+12 tests.
+
+### 6. LIMITATIONS
+The supplied source does not expose a target method, so test selection is exploratory and does not cover other listed classes’ methods. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

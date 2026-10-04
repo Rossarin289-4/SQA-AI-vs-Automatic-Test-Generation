@@ -1,0 +1,172 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Predicate;
+import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.common.collect.Sets;
+import com.google.javascript.jscomp.CodingConvention.SubclassRelationship;
+import com.google.javascript.jscomp.GatherSideEffectSubexpressionsCallback.CopySideEffectSubexpressions;
+import com.google.javascript.jscomp.GatherSideEffectSubexpressionsCallback.SideEffectAccumulator;
+import com.google.javascript.jscomp.NodeTraversal.AbstractPostOrderCallback;
+import com.google.javascript.jscomp.NodeTraversal.Callback;
+import com.google.javascript.jscomp.Scope.Var;
+import com.google.javascript.jscomp.graph.DiGraph;
+import com.google.javascript.jscomp.graph.FixedPointGraphTraversal;
+import com.google.javascript.jscomp.graph.LinkedDirectedGraph;
+import com.google.javascript.jscomp.graph.DiGraph.DiGraphEdge;
+import com.google.javascript.jscomp.graph.FixedPointGraphTraversal.EdgeCallback;
+import com.google.javascript.rhino.IR;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+public class NameAnalyzerTest {
+
+    @Test
+    public void testProcessKeepsDefaultGlobalReference() throws Exception {
+        NameAnalyzer analyzer = new NameAnalyzer(new Compiler(), true);
+        Node root = IR.script(IR.var(IR.name("window"), IR.objectlit()));
+        analyzer.process(IR.script(), root);
+        assertEquals(1, root.getChildCount());
+    }
+
+    @Test
+    public void testProcessRemovesUnreferencedVariable() throws Exception {
+        NameAnalyzer analyzer = new NameAnalyzer(new Compiler(), true);
+        Node root = IR.script(IR.var(IR.name("unused"), IR.number(1)));
+        analyzer.process(IR.script(), root);
+        assertEquals(0, root.getChildCount());
+    }
+
+    @Test
+    public void testProcessKeepsExportedName() throws Exception {
+        NameAnalyzer analyzer = new NameAnalyzer(new Compiler(), false);
+        Node root = IR.script(IR.var(IR.name("local"), IR.number(1)));
+        analyzer.process(IR.script(), root);
+        assertEquals(1, root.getChildCount());
+    }
+
+    @Test
+    public void testProcessHandlesEmptyScript() throws Exception {
+        NameAnalyzer analyzer = new NameAnalyzer(new Compiler(), true);
+        Node root = IR.script();
+        analyzer.process(IR.script(), root);
+        assertEquals(0, root.getChildCount());
+    }
+
+    @Test
+    public void testProcessPreservesReferencedDeclaration() throws Exception {
+        NameAnalyzer analyzer = new NameAnalyzer(new Compiler(), true);
+        Node root = IR.script(
+            IR.var(IR.name("used"), IR.number(1)),
+            IR.exprResult(IR.name("used")));
+        analyzer.process(IR.script(), root);
+        assertEquals(2, root.getChildCount());
+    }
+
+    @Test
+    public void testProcessRemovesUnreferencedFunction() throws Exception {
+        NameAnalyzer analyzer = new NameAnalyzer(new Compiler(), true);
+        Node fn = IR.function(IR.name("unusedFn"), IR.paramList(), IR.block());
+        Node root = IR.script(fn);
+        analyzer.process(IR.script(), root);
+        assertEquals(0, root.getChildCount());
+    }
+
+    @Test
+    public void testProcessKeepsFunctionReferencedByWindow() throws Exception {
+        NameAnalyzer analyzer = new NameAnalyzer(new Compiler(), true);
+        Node fn = IR.function(IR.name("keepFn"), IR.paramList(), IR.block());
+        Node root = IR.script(
+            fn,
+            IR.exprResult(IR.assign(IR.getprop(IR.name("window"), "entry"),
+                                    IR.name("keepFn"))));
+        analyzer.process(IR.script(), root);
+        assertEquals(2, root.getChildCount());
+    }
+
+    @Test
+    public void testProcessKeepsExternDeclaration() throws Exception {
+        NameAnalyzer analyzer = new NameAnalyzer(new Compiler(), true);
+        Node externs = IR.script(IR.var(IR.name("externalName")));
+        Node root = IR.script(IR.var(IR.name("externalName"), IR.number(1)));
+        analyzer.process(externs, root);
+        assertEquals(1, root.getChildCount());
+    }
+
+    @Test
+    public void testProcessDoesNotRemoveWhenRemovalDisabled() throws Exception {
+        NameAnalyzer analyzer = new NameAnalyzer(new Compiler(), false);
+        Node root = IR.script(IR.var(IR.name("unused"), IR.number(1)));
+        analyzer.process(IR.script(), root);
+        assertEquals(1, root.getChildCount());
+    }
+
+    @Test
+    public void testProcessHandlesSeveralUnreferencedDeclarations() throws Exception {
+        NameAnalyzer analyzer = new NameAnalyzer(new Compiler(), true);
+        Node root = IR.script(
+            IR.var(IR.name("first"), IR.number(1)),
+            IR.var(IR.name("last"), IR.number(2)));
+        analyzer.process(IR.script(), root);
+        assertEquals(0, root.getChildCount());
+    }
+
+    @Test
+    public void testProcessTracksQualifiedGlobalProperty() throws Exception {
+        NameAnalyzer analyzer = new NameAnalyzer(new Compiler(), true);
+        Node root = IR.script(
+            IR.exprResult(IR.assign(
+                IR.getprop(IR.name("window"), "api"), IR.number(1))));
+        analyzer.process(IR.script(), root);
+        assertEquals(1, root.getChildCount());
+    }
+
+    @Test
+    public void testProcessHandlesExternFunctionDeclaration() throws Exception {
+        NameAnalyzer analyzer = new NameAnalyzer(new Compiler(), true);
+        Node externs = IR.script(
+            IR.function(IR.name("externalFn"), IR.paramList(), IR.block()));
+        Node root = IR.script(
+            IR.function(IR.name("externalFn"), IR.paramList(), IR.block()));
+        analyzer.process(externs, root);
+        assertEquals(1, root.getChildCount());
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+Method selection is exploratory: no target method was specified. The public `process` method is the only listed method available through the class API; tests exercise name retention/removal, references, externs, qualified names, and the removal option.
+The source also defines many private or nested implementation methods, but those are not directly callable as public `NameAnalyzer` APIs.
+
+### 2. TEST CASE DESIGN
+- `testProcessKeepsDefaultGlobalReference`: `window` declaration; expect one root child after processing.
+- `testProcessRemovesUnreferencedVariable`: unused global declaration with removal enabled; expect zero root children.
+- `testProcessKeepsExportedName`: local global declaration with removal disabled; expect one child.
+- `testProcessHandlesEmptyScript`: empty root; expect zero children.
+- `testProcessPreservesReferencedDeclaration`: declaration and reference; expect both statements remain.
+- `testProcessRemovesUnreferencedFunction`: unused function declaration; expect zero children.
+- `testProcessKeepsFunctionReferencedByWindow`: function assigned to `window.entry`; expect both statements remain.
+- `testProcessKeepsExternDeclaration`: declared extern name also defined in root; expect the root declaration remains.
+- `testProcessDoesNotRemoveWhenRemovalDisabled`: unused declaration with removal disabled; expect one child.
+- `testProcessHandlesSeveralUnreferencedDeclarations`: two unused declarations with removal enabled; expect zero children.
+- `testProcessTracksQualifiedGlobalProperty`: assignment to `window.api`; expect the expression statement remains.
+- `testProcessHandlesExternFunctionDeclaration`: extern function declaration also present in root; expect the root function remains.
+
+### 4. DEFECT DETECTION STRATEGY
+The tests pin observable `process` behavior for root mutations and preservation of referenced or externally declared names. They do not establish that any test detects a particular defect.
+
+### 5. SUMMARY
+12 tests.
+
+### 6. LIMITATIONS
+No target method was supplied, and the available source does not show a concrete compiler setup or exported-name behavior sufficient to validate all chosen scenarios independently. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

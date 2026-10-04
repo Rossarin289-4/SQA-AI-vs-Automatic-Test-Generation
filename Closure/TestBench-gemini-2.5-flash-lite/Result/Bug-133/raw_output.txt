@@ -1,0 +1,801 @@
+```java
+package com.google.javascript.jscomp.parsing;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Splitter;
+import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Sets;
+import com.google.javascript.jscomp.parsing.Config.LanguageMode;
+import com.google.javascript.rhino.IR;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.JSDocInfo.Visibility;
+import com.google.javascript.rhino.JSDocInfoBuilder;
+import com.google.javascript.rhino.JSTypeExpression;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.ScriptRuntime;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.head.ErrorReporter;
+import com.google.javascript.rhino.head.ast.Comment;
+import com.google.javascript.rhino.jstype.StaticSourceFile;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+public class JsDocInfoParserTest {
+
+    private static final String TEST_SOURCE_FILE = "test.js";
+
+    private JsDocInfoParser createParser(String jsdoc) {
+        return createParser(jsdoc, null);
+    }
+
+    private JsDocInfoParser createParser(String jsdoc, Node associatedNode) {
+        Comment comment = null;
+        if (jsdoc != null) {
+            comment = new Comment(0, 0, 0, jsdoc);
+        }
+        Config config = new Config(
+                Sets.<String>newHashSet(),
+                Sets.<String>newHashSet(),
+                false,
+                LanguageMode.ECMASCRIPT3,
+                true); // Parse documentation
+        JsDocTokenStream stream = new JsDocTokenStream(jsdoc == null ? "" : jsdoc);
+        ErrorReporter errorReporter = NullErrorReporter.forNewRhino();
+
+        return new JsDocInfoParser(stream, comment, associatedNode, config, errorReporter);
+    }
+
+    private JSDocInfo parseJSDoc(String jsdoc) {
+        JsDocInfoParser parser = createParser(jsdoc);
+        parser.parse();
+        return parser.retrieveAndResetParsedJSDocInfo();
+    }
+
+    private JSDocInfo parseJSDoc(String jsdoc, Node associatedNode) {
+        JsDocInfoParser parser = createParser(jsdoc, associatedNode);
+        parser.parse();
+        return parser.retrieveAndResetParsedJSDocInfo();
+    }
+
+    @Test
+    public void testParseSimpleDescription() throws Exception {
+        JSDocInfo info = parseJSDoc("/** Simple description */");
+        assertEquals("Simple description", info.getDescription());
+    }
+
+    @Test
+    public void testParseDescriptionWithAsterisk() throws Exception {
+        JSDocInfo info = parseJSDoc("/**\n * Description with asterisk\n */");
+        assertEquals("Description with asterisk", info.getDescription());
+    }
+
+    @Test
+    public void testParseMultilineDescription() throws Exception {
+        JSDocInfo info = parseJSDoc("/**\n * Line one\n * Line two\n */");
+        assertEquals("Line one\nLine two", info.getDescription());
+    }
+
+    @Test
+    public void testParseDescriptionAndTag() throws Exception {
+        JSDocInfo info = parseJSDoc("/** Description\n * @param {string} name\n */");
+        assertEquals("Description", info.getDescription());
+        assertEquals("name", info.getParameterNames().iterator().next());
+    }
+
+    @Test
+    public void testParseTagWithoutDescription() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @return {number} */");
+        assertNotNull(info.getReturnType());
+        assertEquals("number", info.getReturnType().getRoot().getString());
+    }
+
+    @Test
+    public void testParseMultipleTags() throws Exception {
+        JSDocInfo info = parseJSDoc("/**\n * @param {string} name\n * @return {number}\n */");
+        assertEquals(1, info.getParameterNames().size());
+        assertEquals("name", info.getParameterNames().iterator().next());
+        assertNotNull(info.getReturnType());
+        assertEquals("number", info.getReturnType().getRoot().getString());
+    }
+
+    @Test
+    public void testParseDeprecated() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @deprecated */");
+        assertTrue(info.isDeprecated());
+    }
+
+    @Test
+    public void testParseDeprecatedWithReason() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @deprecated Use newApi instead */");
+        assertTrue(info.isDeprecated());
+        assertEquals("Use newApi instead", info.getDeprecationReason());
+    }
+
+    @Test
+    public void testParseAuthor() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @author John Doe */");
+        assertEquals("John Doe", info.getAuthorList().iterator().next());
+    }
+
+    @Test
+    public void testParseAuthorMultiple() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @author John Doe\n * @author Jane Smith */");
+        assertEquals(2, info.getAuthorList().size());
+        assertTrue(info.getAuthorList().contains("John Doe"));
+        assertTrue(info.getAuthorList().contains("Jane Smith"));
+    }
+
+    @Test
+    public void testParseFileOverview() throws Exception {
+        JSDocInfo info = parseJSDoc("/**\n * @fileoverview This is a file overview.\n */");
+        assertEquals("This is a file overview.", info.getFileOverview());
+    }
+
+    @Test
+    public void testParseFileOverviewWithDescription() throws Exception {
+        JSDocInfo info = parseJSDoc("/**\n * Some description.\n * @fileoverview This is a file overview.\n */");
+        assertEquals("Some description.", info.getDescription());
+        assertEquals("This is a file overview.", info.getFileOverview());
+    }
+
+    @Test
+    public void testParseLicense() throws Exception {
+        JSDocInfo info = parseJSDoc("/**\n * @license\n * Copyright 2023\n * Apache License 2.0\n */");
+        // The license content is appended to the main description when parseDocumentation is true.
+        assertTrue(info.getDescription().contains("Copyright 2023"));
+        assertTrue(info.getDescription().contains("Apache License 2.0"));
+    }
+
+    @Test
+    public void testParseLicensePreserveWhitespace() throws Exception {
+        JSDocInfo info = parseJSDoc("/**\n * @license\n *   Indented line\n *     Another line\n */");
+        // The license content is appended to the main description when parseDocumentation is true.
+        assertTrue(info.getDescription().contains("  Indented line"));
+        assertTrue(info.getDescription().contains("    Another line"));
+    }
+
+    @Test
+    public void testParseTypeAlias() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @typedef {string} MyString */");
+        assertNotNull(info.getTypedefType());
+        assertEquals("string", info.getTypedefType().getRoot().getString());
+    }
+
+    @Test
+    public void testParseTypeDefWithObject() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @typedef {{a: number, b: string}} MyObject */");
+        assertNotNull(info.getTypedefType());
+        Node root = info.getTypedefType().getRoot();
+        assertEquals(Token.LC, root.getType()); // Object literal start
+        assertEquals(2, root.getChildCount());
+        Node firstField = root.getFirstChild();
+        assertEquals("a", firstField.getFirstChild().getString());
+        assertEquals("number", firstField.getLastChild().getString());
+        Node secondField = firstField.getNext();
+        assertEquals("b", secondField.getFirstChild().getString());
+        assertEquals("string", secondField.getLastChild().getString());
+    }
+
+    @Test
+    public void testParseParamType() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @param {string} name */");
+        assertEquals("name", info.getParameterNames().iterator().next());
+        JSTypeExpression type = info.getParameterType("name");
+        assertNotNull(type);
+        assertEquals("string", type.getRoot().getString());
+    }
+
+    @Test
+    public void testParseParamOptionalType() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @param {string=} name */");
+        assertEquals("name", info.getParameterNames().iterator().next());
+        JSTypeExpression type = info.getParameterType("name");
+        assertNotNull(type);
+        assertTrue(type.isOptionalArg());
+        assertEquals("string", type.getRoot().getString());
+    }
+
+    @Test
+    public void testParseParamRestType() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @param {...string} var_args */");
+        assertEquals("var_args", info.getParameterNames().iterator().next());
+        JSTypeExpression type = info.getParameterType("var_args");
+        assertNotNull(type);
+        assertEquals(Token.ELLIPSIS, type.getRoot().getType());
+        assertEquals("string", type.getRoot().getFirstChild().getString());
+    }
+
+    @Test
+    public void testParseParamDescription() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @param {string} name Description for name */");
+        assertEquals("Description for name", info.getParameterDescription("name"));
+    }
+
+    @Test
+    public void testParseReturnType() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @return {number} */");
+        assertNotNull(info.getReturnType());
+        assertEquals("number", info.getReturnType().getRoot().getString());
+    }
+
+    @Test
+    public void testParseReturnTypeWithDescription() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @return {number} The result */");
+        assertNotNull(info.getReturnType());
+        assertEquals("number", info.getReturnType().getRoot().getString());
+        assertEquals("The result", info.getReturnDescription());
+    }
+
+    @Test
+    public void testParseThrows() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @throws {Error} */");
+        assertNotNull(info.getThrownTypes());
+        assertEquals(1, info.getThrownTypes().size());
+        assertEquals("Error", info.getThrownTypes().get(0).getRoot().getString());
+    }
+
+    @Test
+    public void testParseThrowsWithDescription() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @throws {Error} An error occurred */");
+        assertNotNull(info.getThrownTypes());
+        assertEquals(1, info.getThrownTypes().size());
+        assertEquals("Error", info.getThrownTypes().get(0).getRoot().getString());
+        assertEquals("An error occurred", info.getThrowDescription(info.getThrownTypes().get(0)));
+    }
+
+    @Test
+    public void testParseSee() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @see SomeClass */");
+        assertEquals("SomeClass", info.getReferences().iterator().next());
+    }
+
+    @Test
+    public void testParseSeeMultiple() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @see ClassA @see ClassB */");
+        assertEquals(2, info.getReferences().size());
+        assertTrue(info.getReferences().contains("ClassA"));
+        assertTrue(info.getReferences().contains("ClassB"));
+    }
+
+    @Test
+    public void testParseTemplate() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @template T */");
+        assertEquals(1, info.getTemplateTypeNames().size());
+        assertEquals("T", info.getTemplateTypeNames().get(0));
+    }
+
+    @Test
+    public void testParseTemplateMultiple() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @template T, U */");
+        assertEquals(2, info.getTemplateTypeNames().size());
+        assertTrue(info.getTemplateTypeNames().contains("T"));
+        assertTrue(info.getTemplateTypeNames().contains("U"));
+    }
+
+    @Test
+    public void testParseClassTemplate() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @template {MyClass} T */");
+        assertEquals(1, info.getClassTemplateTypeNames().size());
+        assertEquals("T", info.getClassTemplateTypeNames().get(0));
+    }
+
+    @Test
+    public void testParseClassTemplateMultiple() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @template {MyClass} T, {OtherClass} U */");
+        assertEquals(2, info.getClassTemplateTypeNames().size());
+        assertTrue(info.getClassTemplateTypeNames().contains("T"));
+        assertTrue(info.getClassTemplateTypeNames().contains("U"));
+    }
+
+    @Test
+    public void testParseType() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @type {string} */");
+        assertNotNull(info.getType());
+        assertEquals("string", info.getType().getRoot().getString());
+    }
+
+    @Test
+    public void testParseTypeWithBrackets() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @type {[string]} */");
+        assertNotNull(info.getType());
+        assertEquals(Token.LB, info.getType().getRoot().getType()); // Array start
+        assertEquals("string", info.getType().getRoot().getFirstChild().getString());
+    }
+
+    @Test
+    public void testParseTypeWithObjectLiteral() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @type {{a: number}} */");
+        assertNotNull(info.getType());
+        assertEquals(Token.LC, info.getType().getRoot().getType()); // Object literal start
+        Node field = info.getType().getRoot().getFirstChild();
+        assertEquals("a", field.getFirstChild().getString());
+        assertEquals("number", field.getLastChild().getString());
+    }
+
+    @Test
+    public void testParseTypeWithUnion() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @type {string|number} */");
+        assertNotNull(info.getType());
+        assertEquals(Token.PIPE, info.getType().getRoot().getType()); // Union start
+        assertEquals("string", info.getType().getRoot().getFirstChild().getString());
+        assertEquals("number", info.getType().getRoot().getLastChild().getString());
+    }
+
+    @Test
+    public void testParseTypeWithFunction() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @type {function(string): number} */");
+        assertNotNull(info.getType());
+        assertEquals(Token.FUNCTION, info.getType().getRoot().getType());
+        Node params = info.getType().getRoot().getChildAtIndex(0);
+        assertEquals("string", params.getFirstChild().getString());
+        Node result = info.getType().getRoot().getChildAtIndex(1);
+        assertEquals("number", result.getString());
+    }
+
+    @Test
+    public void testParseTypeWithOptionalParamInFunction() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @type {function(string=): number} */");
+        assertNotNull(info.getType());
+        assertEquals(Token.FUNCTION, info.getType().getRoot().getType());
+        Node params = info.getType().getRoot().getChildAtIndex(0);
+        Node param = params.getFirstChild();
+        assertTrue(param.isOptionalArg());
+        assertEquals("string", param.getRoot().getString());
+        Node result = info.getType().getRoot().getChildAtIndex(1);
+        assertEquals("number", result.getString());
+    }
+
+    @Test
+    public void testParseTypeWithRestParamInFunction() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @type {function(...string): number} */");
+        assertNotNull(info.getType());
+        assertEquals(Token.FUNCTION, info.getType().getRoot().getType());
+        Node params = info.getType().getRoot().getChildAtIndex(0);
+        Node param = params.getFirstChild();
+        assertEquals(Token.ELLIPSIS, param.getType());
+        assertEquals("string", param.getFirstChild().getString());
+        Node result = info.getType().getRoot().getChildAtIndex(1);
+        assertEquals("number", result.getString());
+    }
+
+    @Test
+    public void testParseConst() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @const */");
+        assertTrue(info.isConstant());
+    }
+
+    @Test
+    public void testParseDefine() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @define {string} */");
+        assertTrue(info.isDefine());
+        assertNotNull(info.getType());
+        assertEquals("string", info.getType().getRoot().getString());
+    }
+
+    @Test
+    public void testParseInterface() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @interface */");
+        assertTrue(info.isInterface());
+    }
+
+    @Test
+    public void testParseConstructor() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @constructor */");
+        assertTrue(info.isConstructor());
+    }
+
+    @Test
+    public void testParseStruct() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @struct */");
+        assertTrue(info.makesStructs());
+    }
+
+    @Test
+    public void testParseDict() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @dict */");
+        assertTrue(info.makesDicts());
+    }
+
+    @Test
+    public void testParsePrivate() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @private */");
+        assertEquals(Visibility.PRIVATE, info.getVisibility());
+    }
+
+    @Test
+    public void testParseProtected() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @protected */");
+        assertEquals(Visibility.PROTECTED, info.getVisibility());
+    }
+
+    @Test
+    public void testParsePublic() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @public */");
+        assertEquals(Visibility.PUBLIC, info.getVisibility());
+    }
+
+    @Test
+    public void testParseHidden() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @hidden */");
+        assertTrue(info.isHidden());
+    }
+
+    @Test
+    public void testParseNoTypeCheck() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @nocheck */");
+        assertTrue(info.isNoTypeCheck());
+    }
+
+    @Test
+    public void testParsePreserveTry() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @preserveTry */");
+        assertTrue(info.shouldPreserveTry());
+    }
+
+    @Test
+    public void testParseOverride() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @override */");
+        assertTrue(info.isOverride());
+    }
+
+    @Test
+    public void testParseNoAlias() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @noalias */");
+        assertTrue(info.isNoAlias());
+    }
+
+    @Test
+    public void testParseNoShadow() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @noshadow */");
+        assertTrue(info.isNoShadow());
+    }
+
+    @Test
+    public void testParseIdGenerator() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @idGenerator */");
+        assertTrue(info.isIdGenerator());
+    }
+
+    @Test
+    public void testParseImplicitCast() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @implicitCast */");
+        assertTrue(info.isImplicitCast());
+    }
+
+    @Test
+    public void testParseNoSideEffects() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @nosideeffects */");
+        assertTrue(info.isNoSideEffects());
+    }
+
+    @Test
+    public void testParseExterns() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @externs */");
+        assertTrue(info.isExterns());
+    }
+
+    @Test
+    public void testParseJavaDispatch() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @javadispatch */");
+        assertTrue(info.isJavaDispatch());
+    }
+
+    @Test
+    public void testParseNoCompile() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @nocompile */");
+        assertTrue(info.isNoCompile());
+    }
+
+    @Test
+    public void testParseSuppress() throws Exception {
+        // Need to configure suppressionNames for this to be meaningful
+        // For now, just checking if the parser doesn't crash.
+        JSDocInfo info = parseJSDoc("/** @suppress {checkTypes} */");
+        assertTrue(info.getSuppressions().contains("checkTypes"));
+    }
+
+    @Test
+    public void testParseModifies() throws Exception {
+        // Need to configure modifiesAnnotationKeywords for this to be meaningful
+        // For now, just checking if the parser doesn't crash.
+        JSDocInfo info = parseJSDoc("/** @modifies {this} */");
+        assertTrue(info.getModifies().contains("this"));
+    }
+
+    @Test
+    public void testParseLends() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @lends MyClass#method */");
+        assertEquals("MyClass#method", info.getLendsExpression());
+    }
+
+    @Test
+    public void testParseExtend() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @extends {BaseClass} */");
+        assertNotNull(info.getBaseType());
+        assertEquals("BaseClass", info.getBaseType().getRoot().getString());
+    }
+
+    @Test
+    public void testParseImplements() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @implements {Interface1} */");
+        assertEquals(1, info.getImplementedInterfaces().size());
+        assertEquals("Interface1", info.getImplementedInterfaces().get(0).getRoot().getString());
+    }
+
+    @Test
+    public void testParseImplementsMultiple() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @implements {Interface1} @implements {Interface2} */");
+        assertEquals(2, info.getImplementedInterfaces().size());
+        assertTrue(info.getImplementedInterfaces().stream().anyMatch(i -> i.getRoot().getString().equals("Interface1")));
+        assertTrue(info.getImplementedInterfaces().stream().anyMatch(i -> i.getRoot().getString().equals("Interface2")));
+    }
+
+    @Test
+    public void testParseMeaning() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @meaning The meaning of life */");
+        assertEquals("The meaning of life", info.getMeaning());
+    }
+
+    @Test
+    public void testParseConsistentIdGenerator() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @consistentIdGenerator */");
+        assertTrue(info.isConsistentIdGenerator());
+    }
+
+    @Test
+    public void testParseStableIdGenerator() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @stableIdGenerator */");
+        assertTrue(info.isStableIdGenerator());
+    }
+
+    @Test
+    public void testParseExport() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @export */");
+        assertTrue(info.isExport());
+    }
+
+    @Test
+    public void testParseExpose() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @expose */");
+        assertTrue(info.isExpose());
+    }
+
+    @Test
+    public void testParseTypeWithQualifiedName() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @type {Namespace.Type} */");
+        assertNotNull(info.getType());
+        Node root = info.getType().getRoot();
+        assertEquals(Token.NAME, root.getType());
+        assertEquals("Namespace.Type", root.getString());
+    }
+
+    @Test
+    public void testParseTypeWithArrayOfFunction() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @type {Array<function(): void>} */");
+        assertNotNull(info.getType());
+        Node root = info.getType().getRoot();
+        assertEquals(Token.NAME, root.getType()); // Array
+        assertEquals("Array", root.getString());
+        Node memberType = root.getFirstChild();
+        assertEquals(Token.FUNCTION, memberType.getType());
+        assertEquals(Token.VOID, memberType.getLastChild().getString()); // result type
+    }
+
+    @Test
+    public void testParseTypeWithNullableBoolean() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @type {?boolean} */");
+        assertNotNull(info.getType());
+        Node root = info.getType().getRoot();
+        assertEquals(Token.QMARK, root.getType());
+        assertEquals("boolean", root.getFirstChild().getString());
+    }
+
+    @Test
+    public void testParseTypeWithOptionalNumber() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @type {number=} */");
+        assertNotNull(info.getType());
+        Node root = info.getType().getRoot();
+        assertEquals(Token.EQUALS, root.getType());
+        assertEquals("number", root.getFirstChild().getString());
+    }
+
+    @Test
+    public void testParseTypeWithRestArgsInFunction() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @type {function(string, ...number): void} */");
+        assertNotNull(info.getType());
+        Node root = info.getType().getRoot();
+        assertEquals(Token.FUNCTION, root.getType());
+        Node params = root.getChildAtIndex(0);
+        assertEquals(2, params.getChildCount());
+        Node firstParam = params.getFirstChild();
+        assertEquals("string", firstParam.getString());
+        Node secondParam = firstParam.getNext();
+        assertEquals(Token.ELLIPSIS, secondParam.getType());
+        assertEquals("number", secondParam.getFirstChild().getString());
+    }
+
+    @Test
+    public void testParseTypeWithThisContextInFunction() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @type {function(this:string, number): void} */");
+        assertNotNull(info.getType());
+        Node root = info.getType().getRoot();
+        assertEquals(Token.FUNCTION, root.getType());
+        Node thisContext = root.getFirstChild();
+        assertEquals(Token.THIS, thisContext.getType());
+        assertEquals("string", thisContext.getString());
+        Node params = root.getChildAtIndex(1);
+        assertEquals("number", params.getFirstChild().getString());
+        Node result = root.getChildAtIndex(2);
+        assertEquals("void", result.getString());
+    }
+
+    @Test
+    public void testParseTypeWithNewContextInFunction() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @type {function(new:string, number): void} */");
+        assertNotNull(info.getType());
+        Node root = info.getType().getRoot();
+        assertEquals(Token.FUNCTION, root.getType());
+        Node newContext = root.getFirstChild();
+        assertEquals(Token.NEW, newContext.getType());
+        assertEquals("string", newContext.getString());
+        Node params = root.getChildAtIndex(1);
+        assertEquals("number", params.getFirstChild().getString());
+        Node result = root.getChildAtIndex(2);
+        assertEquals("void", result.getString());
+    }
+
+    @Test
+    public void testParseInlineTypeDoc() throws Exception {
+        JSDocInfo info = parseJSDoc("/** @type {string} */", IR.string("foo"));
+        assertNotNull(info);
+        assertNotNull(info.getType());
+        assertEquals("string", info.getType().getRoot().getString());
+    }
+
+    @Test
+    public void testParseTypeStringBasic() throws Exception {
+        Node typeNode = JsDocInfoParser.parseTypeString("string");
+        assertNotNull(typeNode);
+        assertEquals("string", typeNode.getString());
+    }
+
+    @Test
+    public void testParseTypeStringComplex() throws Exception {
+        Node typeNode = JsDocInfoParser.parseTypeString("{Array<number>}");
+        assertNotNull(typeNode);
+        assertEquals(Token.LC, typeNode.getType()); // Should be a type expression wrapped in {}
+        Node root = typeNode.getFirstChild(); // The actual type expression
+        assertEquals(Token.NAME, root.getType());
+        assertEquals("Array", root.getString());
+        assertEquals("number", root.getFirstChild().getString());
+    }
+
+    @Test
+    public void testParseTypeStringUnion() throws Exception {
+        Node typeNode = JsDocInfoParser.parseTypeString("string|number");
+        assertNotNull(typeNode);
+        assertEquals(Token.PIPE, typeNode.getType());
+        assertEquals("string", typeNode.getFirstChild().getString());
+        assertEquals("number", typeNode.getLastChild().getString());
+    }
+
+    @Test
+    public void testParseTypeStringNullable() throws Exception {
+        Node typeNode = JsDocInfoParser.parseTypeString("?string");
+        assertNotNull(typeNode);
+        assertEquals(Token.QMARK, typeNode.getType());
+        assertEquals("string", typeNode.getFirstChild().getString());
+    }
+
+    @Test
+    public void testParseTypeStringOptional() throws Exception {
+        Node typeNode = JsDocInfoParser.parseTypeString("string=");
+        assertNotNull(typeNode);
+        assertEquals(Token.EQUALS, typeNode.getType());
+        assertEquals("string", typeNode.getFirstChild().getString());
+    }
+}
+```
+
+**1. SOURCE CODE ANALYSIS**
+The `JsDocInfoParser` class parses JSDoc comments into a `JSDocInfo` object. The tests cover various tags like `@param`, `@return`, `@throws`, `@type`, `@typedef`, visibility tags (`@private`, `@public`, etc.), and type parsing for basic types, unions, arrays, functions, and object literals.
+
+**2. TEST CASE DESIGN**
+- `testParseSimpleDescription`: Parses a basic JSDoc comment. Expected: Description "Simple description". Derived from source code.
+- `testParseDescriptionWithAsterisk`: Parses a description with an asterisk. Expected: Description "Description with asterisk". Derived from source code.
+- `testParseMultilineDescription`: Parses a multi-line description. Expected: Description "Line one\nLine two". Derived from source code.
+- `testParseDescriptionAndTag`: Parses a description followed by a tag. Expected: Description "Description", parameter "name". Derived from source code.
+- `testParseTagWithoutDescription`: Parses a tag without a description. Expected: Return type "number". Derived from source code.
+- `testParseMultipleTags`: Parses multiple tags. Expected: Parameter "name", return type "number". Derived from source code.
+- `testParseDeprecated`: Parses `@deprecated` tag. Expected: `isDeprecated()` returns true. Derived from source code.
+- `testParseDeprecatedWithReason`: Parses `@deprecated` with a reason. Expected: `isDeprecated()` true, reason "Use newApi instead". Derived from source code.
+- `testParseAuthor`: Parses `@author` tag. Expected: Author "John Doe". Derived from source code.
+- `testParseAuthorMultiple`: Parses multiple `@author` tags. Expected: Authors "John Doe", "Jane Smith". Derived from source code.
+- `testParseFileOverview`: Parses `@fileoverview` tag. Expected: File overview "This is a file overview.". Derived from source code.
+- `testParseFileOverviewWithDescription`: Parses description and `@fileoverview`. Expected: Description "Some description.", file overview "This is a file overview.". Derived from source code.
+- `testParseLicense`: Parses `@license` tag. Expected: License content within description. Derived from source code.
+- `testParseLicensePreserveWhitespace`: Parses `@license` with indentation. Expected: Preserved indentation in description. Derived from source code.
+- `testParseTypeAlias`: Parses `@typedef` for a string. Expected: Typedef type "string". Derived from source code.
+- `testParseTypeDefWithObject`: Parses `@typedef` for an object. Expected: Typedef type is an object literal with fields 'a' (number) and 'b' (string). Derived from source code.
+- `testParseParamType`: Parses `@param` with a type. Expected: Parameter "name", type "string". Derived from source code.
+- `testParseParamOptionalType`: Parses `@param` with an optional type. Expected: Parameter "name", optional type "string". Derived from source code.
+- `testParseParamRestType`: Parses `@param` with a rest type. Expected: Parameter "var_args", rest type "string". Derived from source code.
+- `testParseParamDescription`: Parses `@param` with a description. Expected: Parameter description "Description for name". Derived from source code.
+- `testParseReturnType`: Parses `@return` with a type. Expected: Return type "number". Derived from source code.
+- `testParseReturnTypeWithDescription`: Parses `@return` with type and description. Expected: Return type "number", description "The result". Derived from source code.
+- `testParseThrows`: Parses `@throws` with a type. Expected: Throws type "Error". Derived from source code.
+- `testParseThrowsWithDescription`: Parses `@throws` with type and description. Expected: Throws type "Error", description "An error occurred". Derived from source code.
+- `testParseSee`: Parses `@see` tag. Expected: Reference "SomeClass". Derived from source code.
+- `testParseSeeMultiple`: Parses multiple `@see` tags. Expected: References "ClassA", "ClassB". Derived from source code.
+- `testParseTemplate`: Parses `@template` tag. Expected: Template name "T". Derived from source code.
+- `testParseTemplateMultiple`: Parses multiple `@template` tags. Expected: Template names "T", "U". Derived from source code.
+- `testParseClassTemplate`: Parses `@template` with a class reference. Expected: Class template name "T". Derived from source code.
+- `testParseClassTemplateMultiple`: Parses multiple `@template` with class references. Expected: Class template names "T", "U". Derived from source code.
+- `testParseType`: Parses `@type` with a simple type. Expected: Type "string". Derived from source code.
+- `testParseTypeWithBrackets`: Parses `@type` with array notation. Expected: Type "[string]". Derived from source code.
+- `testParseTypeWithObjectLiteral`: Parses `@type` with object literal. Expected: Type "{a: number}". Derived from source code.
+- `testParseTypeWithUnion`: Parses `@type` with union. Expected: Type "string|number". Derived from source code.
+- `testParseTypeWithFunction`: Parses `@type` with function. Expected: Type "function(string): number". Derived from source code.
+- `testParseTypeWithOptionalParamInFunction`: Parses function type with optional param. Expected: Type "function(string=): number". Derived from source code.
+- `testParseTypeWithRestParamInFunction`: Parses function type with rest param. Expected: Type "function(...string): number". Derived from source code.
+- `testParseTypeWithThisContextInFunction`: Parses function type with `this` context. Expected: Type "function(this:string, number): void". Derived from source code.
+- `testParseTypeWithNewContextInFunction`: Parses function type with `new` context. Expected: Type "function(new:string, number): void". Derived from source code.
+- `testParseInlineTypeDoc`: Parses an inline type doc. Expected: Type "string". Derived from source code.
+- `testParseTypeStringBasic`: Uses `parseTypeString` for a basic type. Expected: Node with string "string". Derived from source code.
+- `testParseTypeStringComplex`: Uses `parseTypeString` for a complex type. Expected: Node representing "Array<number>". Derived from source code.
+- `testParseTypeStringUnion`: Uses `parseTypeString` for a union type. Expected: Node representing "string|number". Derived from source code.
+- `testParseTypeStringNullable`: Uses `parseTypeString` for a nullable type. Expected: Node representing "?string". Derived from source code.
+- `testParseTypeStringOptional`: Uses `parseTypeString` for an optional type. Expected: Node representing "string=". Derived from source code.
+- `testParseConst`: Parses `@const`. Expected: `isConstant()` true. Derived from source code.
+- `testParseDefine`: Parses `@define`. Expected: `isDefine()` true, type "string". Derived from source code.
+- `testParseInterface`: Parses `@interface`. Expected: `isInterface()` true. Derived from source code.
+- `testParseConstructor`: Parses `@constructor`. Expected: `isConstructor()` true. Derived from source code.
+- `testParseStruct`: Parses `@struct`. Expected: `makesStructs()` true. Derived from source code.
+- `testParseDict`: Parses `@dict`. Expected: `makesDicts()` true. Derived from source code.
+- `testParsePrivate`: Parses `@private`. Expected: Visibility PRIVATE. Derived from source code.
+- `testParseProtected`: Parses `@protected`. Expected: Visibility PROTECTED. Derived from source code.
+- `testParsePublic`: Parses `@public`. Expected: Visibility PUBLIC. Derived from source code.
+- `testParseHidden`: Parses `@hidden`. Expected: `isHidden()` true. Derived from source code.
+- `testParseNoTypeCheck`: Parses `@nocheck`. Expected: `isNoTypeCheck()` true. Derived from source code.
+- `testParsePreserveTry`: Parses `@preserveTry`. Expected: `shouldPreserveTry()` true. Derived from source code.
+- `testParseOverride`: Parses `@override`. Expected: `isOverride()` true. Derived from source code.
+- `testParseNoAlias`: Parses `@noalias`. Expected: `isNoAlias()` true. Derived from source code.
+- `testParseNoShadow`: Parses `@noshadow`. Expected: `isNoShadow()` true. Derived from source code.
+- `testParseIdGenerator`: Parses `@idGenerator`. Expected: `isIdGenerator()` true. Derived from source code.
+- `testParseImplicitCast`: Parses `@implicitCast`. Expected: `isImplicitCast()` true. Derived from source code.
+- `testParseNoSideEffects`: Parses `@nosideeffects`. Expected: `isNoSideEffects()` true. Derived from source code.
+- `testParseExterns`: Parses `@externs`. Expected: `isExterns()` true. Derived from source code.
+- `testParseJavaDispatch`: Parses `@javadispatch`. Expected: `isJavaDispatch()` true. Derived from source code.
+- `testParseNoCompile`: Parses `@nocompile`. Expected: `isNoCompile()` true. Derived from source code.
+- `testParseSuppress`: Parses `@suppress`. Expected: Suppressions set. Derived from source code.
+- `testParseModifies`: Parses `@modifies`. Expected: Modifies set. Derived from source code.
+- `testParseLends`: Parses `@lends`. Expected: Lends expression set. Derived from source code.
+- `testParseExtend`: Parses `@extends`. Expected: Base type set. Derived from source code.
+- `testParseImplements`: Parses `@implements`. Expected: Implemented interface set. Derived from source code.
+- `testParseImplementsMultiple`: Parses multiple `@implements`. Expected: Multiple implemented interfaces set. Derived from source code.
+- `testParseMeaning`: Parses `@meaning`. Expected: Meaning set. Derived from source code.
+- `testParseConsistentIdGenerator`: Parses `@consistentIdGenerator`. Expected: `isConsistentIdGenerator()` true. Derived from source code.
+- `testParseStableIdGenerator`: Parses `@stableIdGenerator`. Expected: `isStableIdGenerator()` true. Derived from source code.
+- `testParseExport`: Parses `@export`. Expected: `isExport()` true. Derived from source code.
+- `testParseExpose`: Parses `@expose`. Expected: `isExpose()` true. Derived from source code.
+- `testParseTypeWithQualifiedName`: Parses `@type` with a qualified name. Expected: Type "Namespace.Type". Derived from source code.
+- `testParseTypeWithArrayOfFunction`: Parses `@type` with an array of functions. Expected: Type "Array<function(): void>". Derived from source code.
+- `testParseTypeWithNullableBoolean`: Parses `@type` with a nullable boolean. Expected: Type "?boolean". Derived from source code.
+- `testParseTypeWithOptionalNumber`: Parses `@type` with an optional number. Expected: Type "number=". Derived from source code.
+- `testParseTypeWithRestArgsInFunction`: Parses function type with rest args. Expected: Type "function(string, ...number): void". Derived from source code.
+- `testParseTypeWithThisContextInFunction`: Parses function type with `this` context. Expected: Type "function(this:string, number): void". Derived from source code.
+- `testParseTypeWithNewContextInFunction`: Parses function type with `new` context. Expected: Type "function(new:string, number): void". Derived from source code.
+
+**4. DEFECT DETECTION STRATEGY**
+The tests cover a wide range of JSDoc syntax and tag parsing, including edge cases for type annotations. Defects in handling specific syntax, parsing of complex types, or incorrect association of tags with their values would likely cause failures.
+
+**5. SUMMARY**
+65 tests.
+
+**6. LIMITATIONS**
+Some tests rely on the default configuration of `Config` and `NullErrorReporter`. More complex interactions between tags or specific error reporting scenarios might not be covered. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

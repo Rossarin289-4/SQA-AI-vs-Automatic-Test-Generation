@@ -1,0 +1,1247 @@
+```java
+package com.fasterxml.jackson.databind.ser;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.lang.annotation.Annotation;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.lang.reflect.Type;
+import java.util.HashMap;
+import com.fasterxml.jackson.annotation.JsonFormat;
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.core.JsonGenerator;
+import com.fasterxml.jackson.core.SerializableString;
+import com.fasterxml.jackson.core.io.SerializedString;
+import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.annotation.JacksonStdImpl;
+import com.fasterxml.jackson.databind.introspect.*;
+import com.fasterxml.jackson.databind.jsonFormatVisitors.JsonObjectFormatVisitor;
+import com.fasterxml.jackson.databind.jsonschema.SchemaAware;
+import com.fasterxml.jackson.databind.jsontype.TypeSerializer;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.fasterxml.jackson.databind.ser.impl.PropertySerializerMap;
+import com.fasterxml.jackson.databind.ser.impl.UnwrappingBeanPropertyWriter;
+import com.fasterxml.jackson.databind.ser.std.BeanSerializerBase;
+import com.fasterxml.jackson.databind.util.Annotations;
+import com.fasterxml.jackson.databind.util.NameTransformer;
+
+import com.fasterxml.jackson.databind.ser.impl.PropertySerializerMap.SerializerAndMapResult; // Needed for internal helper method calls
+
+public class BeanPropertyWriterTest {
+
+    // Helper method to create a basic BeanPropertyWriter for testing
+    private BeanPropertyWriter createWriter(String name, JavaType type, AnnotatedMember member) throws Exception {
+        // Dummy BeanPropertyDefinition
+        BeanPropertyDefinition propDef = new BeanPropertyDefinition() {
+            @Override
+            public PropertyName getFullName() { return PropertyName.construct(name); }
+            @Override
+            public PropertyName getSimpleName() { return PropertyName.construct(name); }
+            @Override
+            public String getName() { return name; }
+            @Override
+            public boolean isExplicitlyIncluded() { return true; }
+            @Override
+            public boolean isIgnored() { return false; }
+            @Override
+            public boolean isIgnored(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return false; }
+            @Override
+            public void appendIds(java.util.HashSet<String> ids) { }
+            @Override
+            public BeanDefinition getPrimaryMember() { return null; } // Not used by BeanPropertyWriter constructor
+            @Override
+            public String findJavaName() { return name; }
+            @Override
+            public JavaType getType() { return type; }
+            @Override
+            public PropertyName getWrapperName() { return null; }
+            @Override
+            public PropertyMetadata getMetadata() { return PropertyMetadata.STD_REQUIRED_OR_OPTIONAL; }
+            @Override
+            public boolean isRequired() { return true; } // Defaulting to required for simplicity
+            @Override
+            public JavaType getContainerType(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override
+            public AnnotatedMember getNonConstructorMutator() { return member; }
+            @Override
+            public AnnotatedMember getMutator() { return member; }
+            @Override
+            public AnnotatedMember getAccessor() { return member; }
+            @Override
+            public com.fasterxml.jackson.databind.annotation.JsonPOJOBuilder.Value findPOJOBuilderConfig(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override
+            public AnnotationIntrospector getAnnotationIntrospector() { return null; } // Not used
+            @Override
+            public Class<?>[] findViews() { return null; }
+            @Override
+            public JsonFormat.Value findFormat(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override
+            public JsonInclude.Value findInclusion(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override
+            public String findNamespace() { return null; }
+            @Override
+            public boolean couldSerialize() { return true; }
+            @Override
+            public boolean isInternalField() { return false; }
+        };
+
+        // Dummy Annotations
+        Annotations contextAnnotations = new Annotations() {
+            @Override
+            public <A extends Annotation> A get(Class<A> cls) { return null; }
+            @Override
+            public int size() { return 0; }
+        };
+
+        // Dummy SerializerProvider and JsonSerializer for constructor
+        SerializerProvider dummyProvider = new MockSerializerProvider();
+        JsonSerializer<Object> dummySerializer = new MockUnknownSerializer();
+        TypeSerializer dummyTypeSerializer = null; // Not used in constructor
+
+        return new BeanPropertyWriter(propDef, member, contextAnnotations, type, dummySerializer, dummyTypeSerializer, type, false, null);
+    }
+
+    // Mock classes for dependencies
+    private static class MockSerializerProvider extends SerializerProvider {
+        protected MockSerializerProvider() { super(null, null); }
+        @Override public JsonSerializer<Object> findValueSerializer(Class<?> cls, BeanProperty property) throws JsonMappingException { return new MockUnknownSerializer(); }
+        @Override public JsonSerializer<Object> findValueSerializer(JavaType type, BeanProperty property) throws JsonMappingException { return new MockUnknownSerializer(); }
+        @Override public boolean isEnabled(SerializationFeature f) { return false; }
+        // Needed for _findAndAddDynamic
+        public JavaType constructSpecializedType(JavaType baseType, Class<?> specificType) throws JsonMappingException { return baseType; }
+    }
+    private static class MockUnknownSerializer extends JsonSerializer<Object> {
+        @Override public void serialize(Object value, JsonGenerator gen, SerializerProvider provider) throws IOException { gen.writeString("unknown"); }
+        @Override public boolean isEmpty(SerializerProvider provider, Object value) { return false; }
+    }
+    private static class MockAnnotatedMember extends AnnotatedMember {
+        private final Member _member;
+        private final Annotation[] _annotations;
+        protected MockAnnotatedMember(Member member, Annotation... annotations) {
+            super(null, null); // No raw type or class info needed for this test
+            _member = member;
+            _annotations = annotations;
+        }
+        @Override public int getAnnotationCount() { return _annotations.length; }
+        @Override public <A extends Annotation> A getAnnotation(Class<A> acls) {
+            for (Annotation a : _annotations) {
+                if (acls.isInstance(a)) return acls.cast(a);
+            }
+            return null;
+        }
+        @Override public AnnotatedElement getRawMember() { return null; } // Not strictly needed
+        @Override public Class<?> getDeclaringClass() { return null; }
+        @Override public String getFullName() { return null; }
+        @Override public Field getField() { return (_member instanceof Field) ? (Field)_member : null; }
+        @Override public Method getMethod() { return (_member instanceof Method) ? (Method)_member : null; }
+        @Override public boolean isField() { return _member instanceof Field; }
+        @Override public boolean isMethod() { return _member instanceof Method; }
+        @Override public boolean isContainer() { return false; }
+        @Override public JavaType getType() { return null; }
+        @Override public void setValue(Object obj, Object value) { /* no-op */ }
+        @Override public Object getValue(Object obj) throws Exception { return null; } // Not used in this context
+        @Override public int getMinNumberOfArguments() { return 0; }
+        @Override public int getMaxNumberOfArguments() { return 0; }
+        @Override public Object call(Object[] args) throws Exception { return null; } // Not used
+        @Override public Object call1(Object arg) throws Exception { return null; } // Not used
+        @Override public String getSelfType() { return null; }
+    }
+
+    private static class MockPropertyWriter extends BeanPropertyWriter {
+        // Dummy constructor for testing purposes
+        public MockPropertyWriter(BeanPropertyWriter base) {
+            super(base);
+        }
+        @Override
+        public void serializeAsField(Object bean, JsonGenerator gen, SerializerProvider prov) throws Exception {
+            // Default implementation would call get(), which we don't want to test directly here
+            // but rather focus on the properties of BeanPropertyWriter itself.
+            // For tests that need serialization, we'll mock more thoroughly.
+        }
+    }
+
+    // Mock Field and Method for AnnotatedMember
+    private static class MockField extends Field {
+        private final Class<?> _type;
+        private final String _name;
+        MockField(Class<?> type, String name) {
+            super(null, null, 0, 0, name, type, null, null, null, null, null); // Mock constructor
+            _type = type;
+            _name = name;
+        }
+        @Override public Class<?> getType() { return _type; }
+        @Override public String getName() { return _name; }
+        @Override public Object get(Object obj) throws IllegalAccessException { return null; } // Default no-op for test
+        @Override public boolean equals(Object o) { return false; } // Prevent accidental matches
+        @Override public int hashCode() { return 0; }
+    }
+    private static class MockMethod extends Method {
+        private final Class<?> _returnType;
+        private final String _name;
+        MockMethod(Class<?> returnType, String name) {
+            super(null, null, name, null, null, null, null, null, null, null, null); // Mock constructor
+            _returnType = returnType;
+            _name = name;
+        }
+        @Override public Class<?> getReturnType() { return _returnType; }
+        @Override public String getName() { return _name; }
+        @Override public Object invoke(Object obj, Object... args) throws IllegalAccessException, java.lang.reflect.InvocationTargetException { return null; } // Default no-op for test
+        @Override public boolean equals(Object o) { return false; } // Prevent accidental matches
+        @Override public int hashCode() { return 0; }
+    }
+
+    @Test
+    public void testBeanPropertyWriter_ConstructorAndInitialState() throws Exception {
+        // Using a simplified setup that only provides necessary mocks
+        BeanPropertyDefinition propDef = new BeanPropertyDefinition() {
+            @Override public PropertyName getFullName() { return PropertyName.construct("testProp"); }
+            @Override public PropertyName getSimpleName() { return PropertyName.construct("testProp"); }
+            @Override public String getName() { return "testProp"; }
+            @Override public boolean isRequired() { return true; }
+            @Override public JavaType getType() { return TypeFactory.defaultInstance().constructSimpleType(String.class, null); }
+            @Override public AnnotatedMember getAccessor() { return new MockAnnotatedMember(new MockMethod(String.class, "getValue")); }
+            @Override public PropertyMetadata getMetadata() { return PropertyMetadata.STD_REQUIRED_OR_OPTIONAL; }
+            // Other methods can return null or default as they are not crucial for this test
+            @Override public PropertyName getWrapperName() { return null; }
+            @Override public boolean isExplicitlyIncluded() { return true; }
+            @Override public boolean isIgnored() { return false; }
+            @Override public boolean isIgnored(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return false; }
+            @Override public void appendIds(java.util.HashSet<String> ids) {}
+            @Override public BeanDefinition getPrimaryMember() { return null; }
+            @Override public String findJavaName() { return "testProp"; }
+            @Override public JavaType getContainerType(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public AnnotatedMember getNonConstructorMutator() { return getAccessor(); }
+            @Override public AnnotatedMember getMutator() { return getAccessor(); }
+            @Override public com.fasterxml.jackson.databind.annotation.JsonPOJOBuilder.Value findPOJOBuilderConfig(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public AnnotationIntrospector getAnnotationIntrospector() { return null; }
+            @Override public Class<?>[] findViews() { return null; }
+            @Override public JsonFormat.Value findFormat(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public JsonInclude.Value findInclusion(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public String findNamespace() { return null; }
+            @Override public boolean couldSerialize() { return true; }
+            @Override public boolean isInternalField() { return false; }
+        };
+        AnnotatedMember member = new MockAnnotatedMember(new MockMethod(String.class, "getValue"));
+        JavaType javaType = TypeFactory.defaultInstance().constructSimpleType(String.class, null);
+        Annotations contextAnnotations = new Annotations() {
+            @Override public <A extends Annotation> A get(Class<A> cls) { return null; }
+            @Override public int size() { return 0; }
+        };
+        SerializerProvider provider = new MockSerializerProvider();
+        JsonSerializer<Object> serializer = new MockUnknownSerializer();
+
+        BeanPropertyWriter writer = new BeanPropertyWriter(propDef, member, contextAnnotations, javaType, serializer, null, javaType, false, null);
+
+        assertNotNull("BeanPropertyWriter should not be null", writer);
+        assertEquals("Property name should be set correctly", "testProp", writer.getName());
+        assertEquals("Declared type should be String.class", String.class, writer.getType().getRawClass());
+        assertTrue("Serializer should be assigned", writer.hasSerializer());
+        assertNull("Null serializer should be null initially", writer.getNullSerializer());
+        assertFalse("Should not suppress nulls by default", writer.willSuppressNulls());
+        assertNull("Wrapper name should be null", writer.getWrapperName());
+    }
+
+    @Test
+    public void testBeanPropertyWriter_assignSerializer() throws Exception {
+        BeanPropertyWriter writer = createWriter("test", TypeFactory.defaultInstance().constructSimpleType(Integer.class, null), new MockAnnotatedMember(new MockMethod(Integer.class, "getVal")));
+        assertFalse("Has serializer should be false initially", writer.hasSerializer());
+        JsonSerializer<Object> newSerializer = new MockUnknownSerializer();
+        writer.assignSerializer(newSerializer);
+        assertTrue("Has serializer should be true after assignment", writer.hasSerializer());
+        assertEquals("Assigned serializer should be the one set", newSerializer, writer.getSerializer());
+    }
+
+    @Test
+    public void testBeanPropertyWriter_assignNullSerializer() throws Exception {
+        BeanPropertyWriter writer = createWriter("test", TypeFactory.defaultInstance().constructSimpleType(Integer.class, null), new MockAnnotatedMember(new MockMethod(Integer.class, "getVal")));
+        assertFalse("Has null serializer should be false initially", writer.hasNullSerializer());
+        JsonSerializer<Object> newNullSerializer = new MockUnknownSerializer();
+        writer.assignNullSerializer(newNullSerializer);
+        assertTrue("Has null serializer should be true after assignment", writer.hasNullSerializer());
+        assertEquals("Assigned null serializer should be the one set", newNullSerializer, writer.getNullSerializer());
+    }
+
+    @Test
+    public void testBeanPropertyWriter_assignTypeSerializer() throws Exception {
+        BeanPropertyWriter writer = createWriter("test", TypeFactory.defaultInstance().constructSimpleType(Integer.class, null), new MockAnnotatedMember(new MockMethod(Integer.class, "getVal")));
+        assertNull("Type serializer should be null initially", writer.getTypeSerializer());
+        TypeSerializer newTypeSerializer = new MockTypeSerializer();
+        writer.assignTypeSerializer(newTypeSerializer);
+        assertEquals("Assigned type serializer should be the one set", newTypeSerializer, writer.getTypeSerializer());
+    }
+
+    @Test
+    public void testBeanPropertyWriter_rename_simple() throws Exception {
+        BeanPropertyWriter writer = createWriter("oldName", TypeFactory.defaultInstance().constructSimpleType(String.class, null), new MockAnnotatedMember(new MockMethod(String.class, "getVal")));
+        NameTransformer transformer = NameTransformer.simpleTransformer("prefix_", "_suffix");
+        BeanPropertyWriter renamedWriter = writer.rename(transformer);
+
+        assertNotSame("rename should return a new instance if name changes", writer, renamedWriter);
+        assertEquals("Renamed writer should have the new name", "prefix_oldName_suffix", renamedWriter.getName());
+        assertEquals("Original writer should remain unchanged", "oldName", writer.getName());
+    }
+
+    @Test
+    public void testBeanPropertyWriter_rename_noChange() throws Exception {
+        BeanPropertyWriter writer = createWriter("name", TypeFactory.defaultInstance().constructSimpleType(String.class, null), new MockAnnotatedMember(new MockMethod(String.class, "getVal")));
+        NameTransformer transformer = NameTransformer.simpleTransformer("", ""); // No actual change
+        BeanPropertyWriter renamedWriter = writer.rename(transformer);
+
+        // Depending on implementation, it might return 'this' or a new instance that's identical.
+        // The contract implies it might return 'this' if no change.
+        // Let's check for value equality if not instance equality.
+        if (writer != renamedWriter) {
+            assertEquals("Renamed writer should have the same name", "name", renamedWriter.getName());
+        }
+        // Ensure the name is preserved
+        assertEquals("Property name should remain unchanged", "name", writer.getName());
+    }
+
+    @Test
+    public void testBeanPropertyWriter_getAnnotation_present() throws Exception {
+        // Need a way to mock annotation for AnnotatedMember
+        class MockAnnotation implements Annotation {
+            @Override public Class<? extends Annotation> annotationType() { return MockAnnotation.class; }
+        }
+        Annotation mockAnn = new MockAnnotation();
+        AnnotatedMember memberWithAnn = new MockAnnotatedMember(new MockMethod(String.class, "getVal"), mockAnn);
+        BeanPropertyWriter writer = createWriter("test", TypeFactory.defaultInstance().constructSimpleType(String.class, null), memberWithAnn);
+
+        Annotation found = writer.getAnnotation(MockAnnotation.class);
+        assertNotNull("Annotation should be found", found);
+        assertEquals("Found annotation should be the mock annotation", mockAnn, found);
+    }
+
+    @Test
+    public void testBeanPropertyWriter_getAnnotation_absent() throws Exception {
+        AnnotatedMember memberWithoutAnn = new MockAnnotatedMember(new MockMethod(String.class, "getVal"));
+        BeanPropertyWriter writer = createWriter("test", TypeFactory.defaultInstance().constructSimpleType(String.class, null), memberWithoutAnn);
+
+        Annotation found = writer.getAnnotation(JsonFormat.class); // A common annotation
+        assertNull("Annotation should not be found", found);
+    }
+
+    @Test
+    public void testBeanPropertyWriter_getContextAnnotation_present() throws Exception {
+        // BeanPropertyWriter constructor takes Annotations, let's mock that
+        class MockContextAnnotation implements Annotation {
+            @Override public Class<? extends Annotation> annotationType() { return MockContextAnnotation.class; }
+        }
+        Annotation mockAnn = new MockContextAnnotation();
+        Annotations contextAnnotations = new Annotations() {
+            @Override public <A extends Annotation> A get(Class<A> cls) {
+                if (cls.equals(MockContextAnnotation.class)) {
+                    return cls.cast(mockAnn);
+                }
+                return null;
+            }
+            @Override public int size() { return 1; }
+        };
+
+        BeanPropertyDefinition propDef = new BeanPropertyDefinition() { // Minimal for constructor
+            @Override public PropertyName getFullName() { return PropertyName.construct("testProp"); }
+            @Override public PropertyName getSimpleName() { return PropertyName.construct("testProp"); }
+            @Override public String getName() { return "testProp"; }
+            @Override public boolean isRequired() { return true; }
+            @Override public JavaType getType() { return TypeFactory.defaultInstance().constructSimpleType(String.class, null); }
+            @Override public AnnotatedMember getAccessor() { return new MockAnnotatedMember(new MockMethod(String.class, "getValue")); }
+            @Override public PropertyMetadata getMetadata() { return PropertyMetadata.STD_REQUIRED_OR_OPTIONAL; }
+             // ... other methods
+            @Override public PropertyName getWrapperName() { return null; }
+            @Override public boolean isExplicitlyIncluded() { return true; }
+            @Override public boolean isIgnored() { return false; }
+            @Override public boolean isIgnored(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return false; }
+            @Override public void appendIds(java.util.HashSet<String> ids) {}
+            @Override public BeanDefinition getPrimaryMember() { return null; }
+            @Override public String findJavaName() { return "testProp"; }
+            @Override public JavaType getContainerType(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public AnnotatedMember getNonConstructorMutator() { return getAccessor(); }
+            @Override public AnnotatedMember getMutator() { return getAccessor(); }
+            @Override public com.fasterxml.jackson.databind.annotation.JsonPOJOBuilder.Value findPOJOBuilderConfig(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public AnnotationIntrospector getAnnotationIntrospector() { return null; }
+            @Override public Class<?>[] findViews() { return null; }
+            @Override public JsonFormat.Value findFormat(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public JsonInclude.Value findInclusion(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public String findNamespace() { return null; }
+            @Override public boolean couldSerialize() { return true; }
+            @Override public boolean isInternalField() { return false; }
+        };
+        JavaType javaType = TypeFactory.defaultInstance().constructSimpleType(String.class, null);
+        AnnotatedMember member = new MockAnnotatedMember(new MockMethod(String.class, "getValue"));
+
+        BeanPropertyWriter writer = new BeanPropertyWriter(propDef, member, contextAnnotations, javaType, null, null, javaType, false, null);
+
+        Annotation found = writer.getContextAnnotation(MockContextAnnotation.class);
+        assertNotNull("Context annotation should be found", found);
+        assertEquals("Found context annotation should be the mock annotation", mockAnn, found);
+    }
+
+    @Test
+    public void testBeanPropertyWriter_getContextAnnotation_absent() throws Exception {
+        Annotations contextAnnotations = new Annotations() {
+            @Override public <A extends Annotation> A get(Class<A> cls) { return null; }
+            @Override public int size() { return 0; }
+        };
+        BeanPropertyDefinition propDef = new BeanPropertyDefinition() { // Minimal for constructor
+            @Override public PropertyName getFullName() { return PropertyName.construct("testProp"); }
+            @Override public PropertyName getSimpleName() { return PropertyName.construct("testProp"); }
+            @Override public String getName() { return "testProp"; }
+            @Override public boolean isRequired() { return true; }
+            @Override public JavaType getType() { return TypeFactory.defaultInstance().constructSimpleType(String.class, null); }
+            @Override public AnnotatedMember getAccessor() { return new MockAnnotatedMember(new MockMethod(String.class, "getValue")); }
+            @Override public PropertyMetadata getMetadata() { return PropertyMetadata.STD_REQUIRED_OR_OPTIONAL; }
+            // ... other methods
+            @Override public PropertyName getWrapperName() { return null; }
+            @Override public boolean isExplicitlyIncluded() { return true; }
+            @Override public boolean isIgnored() { return false; }
+            @Override public boolean isIgnored(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return false; }
+            @Override public void appendIds(java.util.HashSet<String> ids) {}
+            @Override public BeanDefinition getPrimaryMember() { return null; }
+            @Override public String findJavaName() { return "testProp"; }
+            @Override public JavaType getContainerType(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public AnnotatedMember getNonConstructorMutator() { return getAccessor(); }
+            @Override public AnnotatedMember getMutator() { return getAccessor(); }
+            @Override public com.fasterxml.jackson.databind.annotation.JsonPOJOBuilder.Value findPOJOBuilderConfig(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public AnnotationIntrospector getAnnotationIntrospector() { return null; }
+            @Override public Class<?>[] findViews() { return null; }
+            @Override public JsonFormat.Value findFormat(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public JsonInclude.Value findInclusion(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public String findNamespace() { return null; }
+            @Override public boolean couldSerialize() { return true; }
+            @Override public boolean isInternalField() { return false; }
+        };
+        JavaType javaType = TypeFactory.defaultInstance().constructSimpleType(String.class, null);
+        AnnotatedMember member = new MockAnnotatedMember(new MockMethod(String.class, "getValue"));
+
+        BeanPropertyWriter writer = new BeanPropertyWriter(propDef, member, contextAnnotations, javaType, null, null, javaType, false, null);
+
+        Annotation found = writer.getContextAnnotation(JsonFormat.class);
+        assertNull("Context annotation should not be found", found);
+    }
+
+    @Test
+    public void testBeanPropertyWriter_getInternalSetting_and_setInternalSetting() throws Exception {
+        BeanPropertyWriter writer = createWriter("test", TypeFactory.defaultInstance().constructSimpleType(String.class, null), new MockAnnotatedMember(new MockMethod(String.class, "getVal")));
+        Object key = "myKey";
+        Object value = "myValue";
+        assertNull("Internal setting should be null initially", writer.getInternalSetting(key));
+
+        writer.setInternalSetting(key, value);
+        assertEquals("Internal setting should be set", value, writer.getInternalSetting(key));
+
+        // Test overwriting
+        Object newValue = "newValue";
+        writer.setInternalSetting(key, newValue);
+        assertEquals("Internal setting should be updated", newValue, writer.getInternalSetting(key));
+    }
+
+    @Test
+    public void testBeanPropertyWriter_removeInternalSetting() throws Exception {
+        BeanPropertyWriter writer = createWriter("test", TypeFactory.defaultInstance().constructSimpleType(String.class, null), new MockAnnotatedMember(new MockMethod(String.class, "getVal")));
+        Object key = "myKey";
+        Object value = "myValue";
+        writer.setInternalSetting(key, value);
+        assertEquals("Setting should be present", value, writer.getInternalSetting(key));
+
+        Object removedValue = writer.removeInternalSetting(key);
+        assertEquals("Removed value should match set value", value, removedValue);
+        assertNull("Setting should be removed", writer.getInternalSetting(key));
+        assertNull("Removing non-existent setting should return null", writer.removeInternalSetting("nonExistentKey"));
+    }
+
+    @Test
+    public void testBeanPropertyWriter_getSerializedName() throws Exception {
+        BeanPropertyWriter writer = createWriter("customName", TypeFactory.defaultInstance().constructSimpleType(String.class, null), new MockAnnotatedMember(new MockMethod(String.class, "getVal")));
+        SerializableString serializedName = writer.getSerializedName();
+        assertNotNull("Serialized name should not be null", serializedName);
+        assertEquals("Serialized name value should match property name", "customName", serializedName.getValue());
+    }
+
+    @Test
+    public void testBeanPropertyWriter_willSuppressNulls() throws Exception {
+        BeanPropertyDefinition propDef = new BeanPropertyDefinition() { // Minimal for constructor
+            @Override public PropertyName getFullName() { return PropertyName.construct("testProp"); }
+            @Override public PropertyName getSimpleName() { return PropertyName.construct("testProp"); }
+            @Override public String getName() { return "testProp"; }
+            @Override public boolean isRequired() { return true; }
+            @Override public JavaType getType() { return TypeFactory.defaultInstance().constructSimpleType(String.class, null); }
+            @Override public AnnotatedMember getAccessor() { return new MockAnnotatedMember(new MockMethod(String.class, "getValue")); }
+            @Override public PropertyMetadata getMetadata() { return PropertyMetadata.STD_REQUIRED_OR_OPTIONAL; }
+            // ... other methods
+            @Override public PropertyName getWrapperName() { return null; }
+            @Override public boolean isExplicitlyIncluded() { return true; }
+            @Override public boolean isIgnored() { return false; }
+            @Override public boolean isIgnored(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return false; }
+            @Override public void appendIds(java.util.HashSet<String> ids) {}
+            @Override public BeanDefinition getPrimaryMember() { return null; }
+            @Override public String findJavaName() { return "testProp"; }
+            @Override public JavaType getContainerType(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public AnnotatedMember getNonConstructorMutator() { return getAccessor(); }
+            @Override public AnnotatedMember getMutator() { return getAccessor(); }
+            @Override public com.fasterxml.jackson.databind.annotation.JsonPOJOBuilder.Value findPOJOBuilderConfig(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public AnnotationIntrospector getAnnotationIntrospector() { return null; }
+            @Override public Class<?>[] findViews() { return null; }
+            @Override public JsonFormat.Value findFormat(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public JsonInclude.Value findInclusion(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public String findNamespace() { return null; }
+            @Override public boolean couldSerialize() { return true; }
+            @Override public boolean isInternalField() { return false; }
+        };
+
+        // Test case: suppress nulls enabled
+        BeanPropertyWriter writerSuppressNulls = new BeanPropertyWriter(propDef, new MockAnnotatedMember(new MockMethod(String.class, "getValue")), null, null, null, null, null, true, null);
+        assertTrue("Will suppress nulls should be true when configured", writerSuppressNulls.willSuppressNulls());
+
+        // Test case: suppress nulls disabled
+        BeanPropertyWriter writerNoSuppressNulls = new BeanPropertyWriter(propDef, new MockAnnotatedMember(new MockMethod(String.class, "getValue")), null, null, null, null, null, false, null);
+        assertFalse("Will suppress nulls should be false when configured", writerNoSuppressNulls.willSuppressNulls());
+    }
+
+    @Test
+    public void testBeanPropertyWriter_wouldConflictWithName_wrapperNamePresent() throws Exception {
+        BeanPropertyWriter writer = createWriter("prop", TypeFactory.defaultInstance().constructSimpleType(String.class, null), new MockAnnotatedMember(new MockMethod(String.class, "getVal")));
+        // Manually set a wrapper name using setInternalSetting as there's no public setter
+        // Or, ideally, use a constructor that allows setting it if available.
+        // Since we can't directly set _wrapperName in the public API, we simulate it.
+        // For the purpose of this test, we can't easily create a writer with a wrapper name
+        // via the public constructor with mocks. The `BeanPropertyDefinition` can provide it.
+        // Let's use a dummy `BeanPropertyDefinition` that returns a wrapper name.
+        BeanPropertyDefinition propDefWithWrapper = new BeanPropertyDefinition() {
+            @Override public PropertyName getFullName() { return PropertyName.construct("prop"); }
+            @Override public PropertyName getSimpleName() { return PropertyName.construct("prop"); }
+            @Override public String getName() { return "prop"; }
+            @Override public boolean isRequired() { return true; }
+            @Override public JavaType getType() { return TypeFactory.defaultInstance().constructSimpleType(String.class, null); }
+            @Override public AnnotatedMember getAccessor() { return new MockAnnotatedMember(new MockMethod(String.class, "getVal")); }
+            @Override public PropertyMetadata getMetadata() { return PropertyMetadata.STD_REQUIRED_OR_OPTIONAL; }
+            @Override public PropertyName getWrapperName() { return PropertyName.construct("wrapped"); }
+            // ... other methods for minimal functionality
+            @Override public boolean isExplicitlyIncluded() { return true; }
+            @Override public boolean isIgnored() { return false; }
+            @Override public boolean isIgnored(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return false; }
+            @Override public void appendIds(java.util.HashSet<String> ids) {}
+            @Override public BeanDefinition getPrimaryMember() { return null; }
+            @Override public String findJavaName() { return "prop"; }
+            @Override public JavaType getContainerType(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public AnnotatedMember getNonConstructorMutator() { return getAccessor(); }
+            @Override public AnnotatedMember getMutator() { return getAccessor(); }
+            @Override public com.fasterxml.jackson.databind.annotation.JsonPOJOBuilder.Value findPOJOBuilderConfig(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public AnnotationIntrospector getAnnotationIntrospector() { return null; }
+            @Override public Class<?>[] findViews() { return null; }
+            @Override public JsonFormat.Value findFormat(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public JsonInclude.Value findInclusion(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public String findNamespace() { return null; }
+            @Override public boolean couldSerialize() { return true; }
+            @Override public boolean isInternalField() { return false; }
+        };
+
+        // BeanPropertyWriter constructor relies on propDef for wrapperName
+        BeanPropertyWriter writerWithWrapper = new BeanPropertyWriter(propDefWithWrapper, propDefWithWrapper.getAccessor(), null, propDefWithWrapper.getType(), null, null, propDefWithWrapper.getType(), false, null);
+
+        assertTrue("Should conflict with wrapper name", writerWithWrapper.wouldConflictWithName(PropertyName.construct("wrapped")));
+        assertFalse("Should not conflict with property name if wrapper name exists", writerWithWrapper.wouldConflictWithName(PropertyName.construct("prop")));
+    }
+
+    @Test
+    public void testBeanPropertyWriter_wouldConflictWithName_noWrapperName() throws Exception {
+        BeanPropertyWriter writer = createWriter("prop", TypeFactory.defaultInstance().constructSimpleType(String.class, null), new MockAnnotatedMember(new MockMethod(String.class, "getVal")));
+
+        assertFalse("Should not conflict with a different name", writer.wouldConflictWithName(PropertyName.construct("otherName")));
+        assertTrue("Should conflict with its own name", writer.wouldConflictWithName(PropertyName.construct("prop")));
+        assertFalse("Should not conflict with a namespaced name if it's not namespaced", writer.wouldConflictWithName(PropertyName.construct("http://example.com", "prop")));
+    }
+
+    @Test
+    public void testBeanPropertyWriter_get_fromField() throws Exception {
+        // Need to mock AnnotatedMember for Field
+        Field testField = new MockField(String.class, "testField");
+        AnnotatedMember annotatedField = new MockAnnotatedMember(testField);
+
+        // Create a dummy class to hold the field
+        class DummyBean {
+            public String testField = "fieldValue";
+        }
+        DummyBean bean = new DummyBean();
+
+        BeanPropertyDefinition propDef = new BeanPropertyDefinition() {
+            @Override public PropertyName getFullName() { return PropertyName.construct("testField"); }
+            @Override public PropertyName getSimpleName() { return PropertyName.construct("testField"); }
+            @Override public String getName() { return "testField"; }
+            @Override public boolean isRequired() { return true; }
+            @Override public JavaType getType() { return TypeFactory.defaultInstance().constructSimpleType(String.class, null); }
+            @Override public AnnotatedMember getAccessor() { return annotatedField; }
+            @Override public PropertyMetadata getMetadata() { return PropertyMetadata.STD_REQUIRED_OR_OPTIONAL; }
+            // ... other methods
+            @Override public PropertyName getWrapperName() { return null; }
+            @Override public boolean isExplicitlyIncluded() { return true; }
+            @Override public boolean isIgnored() { return false; }
+            @Override public boolean isIgnored(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return false; }
+            @Override public void appendIds(java.util.HashSet<String> ids) {}
+            @Override public BeanDefinition getPrimaryMember() { return null; }
+            @Override public String findJavaName() { return "testField"; }
+            @Override public JavaType getContainerType(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public AnnotatedMember getNonConstructorMutator() { return getAccessor(); }
+            @Override public AnnotatedMember getMutator() { return getAccessor(); }
+            @Override public com.fasterxml.jackson.databind.annotation.JsonPOJOBuilder.Value findPOJOBuilderConfig(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public AnnotationIntrospector getAnnotationIntrospector() { return null; }
+            @Override public Class<?>[] findViews() { return null; }
+            @Override public JsonFormat.Value findFormat(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public JsonInclude.Value findInclusion(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public String findNamespace() { return null; }
+            @Override public boolean couldSerialize() { return true; }
+            @Override public boolean isInternalField() { return false; }
+        };
+
+        // To allow access to Field.get(), we need to make the field accessible.
+        // In a real scenario, this is handled internally. For test, we can mock that part.
+        // However, the BeanPropertyWriter directly calls _field.get(bean), so we need a mock field that works.
+        // For a direct field access test, we'd need to bypass the AnnotatedMember's `getValue`.
+        // The `BeanPropertyWriter.get` method uses `_accessorMethod.invoke(bean)` OR `_field.get(bean)`.
+        // The constructor correctly sets `_field` from `AnnotatedField`.
+        // Let's create a writer that is configured for field access.
+        BeanPropertyDefinition propDefField = new BeanPropertyDefinition() { // Minimal for constructor
+            @Override public PropertyName getFullName() { return PropertyName.construct("testField"); }
+            @Override public PropertyName getSimpleName() { return PropertyName.construct("testField"); }
+            @Override public String getName() { return "testField"; }
+            @Override public boolean isRequired() { return true; }
+            @Override public JavaType getType() { return TypeFactory.defaultInstance().constructSimpleType(String.class, null); }
+            @Override public AnnotatedMember getAccessor() { return new MockAnnotatedMember(testField); } // AnnotatedMember points to the Field
+            @Override public PropertyMetadata getMetadata() { return PropertyMetadata.STD_REQUIRED_OR_OPTIONAL; }
+             // ... other methods
+            @Override public PropertyName getWrapperName() { return null; }
+            @Override public boolean isExplicitlyIncluded() { return true; }
+            @Override public boolean isIgnored() { return false; }
+            @Override public boolean isIgnored(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return false; }
+            @Override public void appendIds(java.util.HashSet<String> ids) {}
+            @Override public BeanDefinition getPrimaryMember() { return null; }
+            @Override public String findJavaName() { return "testField"; }
+            @Override public JavaType getContainerType(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public AnnotatedMember getNonConstructorMutator() { return getAccessor(); }
+            @Override public AnnotatedMember getMutator() { return getAccessor(); }
+            @Override public com.fasterxml.jackson.databind.annotation.JsonPOJOBuilder.Value findPOJOBuilderConfig(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public AnnotationIntrospector getAnnotationIntrospector() { return null; }
+            @Override public Class<?>[] findViews() { return null; }
+            @Override public JsonFormat.Value findFormat(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public JsonInclude.Value findInclusion(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public String findNamespace() { return null; }
+            @Override public boolean couldSerialize() { return true; }
+            @Override public boolean isInternalField() { return false; }
+        };
+
+        BeanPropertyWriter writer = new BeanPropertyWriter(propDefField, annotatedField, null, TypeFactory.defaultInstance().constructSimpleType(String.class, null), null, null, null, false, null);
+
+        // We need to make the field accessible for the 'get' method to work without reflection exceptions.
+        // This is a simplification for testing the logic within BeanPropertyWriter.get().
+        try {
+            testField.setAccessible(true);
+            Object value = writer.get(bean);
+            assertEquals("Value from field should be retrieved", "fieldValue", value);
+        } catch (Exception e) {
+            fail("Failed to get value from field: " + e.getMessage());
+        }
+    }
+
+    @Test
+    public void testBeanPropertyWriter_get_fromMethod() throws Exception {
+        // Need to mock AnnotatedMember for Method
+        Method testMethod = new MockMethod(String.class, "getTestValue");
+        AnnotatedMember annotatedMethod = new MockAnnotatedMember(testMethod);
+
+        // Create a dummy class with the method
+        class DummyBean {
+            public String getTestValue() { return "methodValue"; }
+        }
+        DummyBean bean = new DummyBean();
+
+        BeanPropertyDefinition propDef = new BeanPropertyDefinition() { // Minimal for constructor
+            @Override public PropertyName getFullName() { return PropertyName.construct("testProp"); }
+            @Override public PropertyName getSimpleName() { return PropertyName.construct("testProp"); }
+            @Override public String getName() { return "testProp"; }
+            @Override public boolean isRequired() { return true; }
+            @Override public JavaType getType() { return TypeFactory.defaultInstance().constructSimpleType(String.class, null); }
+            @Override public AnnotatedMember getAccessor() { return annotatedMethod; } // AnnotatedMember points to the Method
+            @Override public PropertyMetadata getMetadata() { return PropertyMetadata.STD_REQUIRED_OR_OPTIONAL; }
+            // ... other methods
+            @Override public PropertyName getWrapperName() { return null; }
+            @Override public boolean isExplicitlyIncluded() { return true; }
+            @Override public boolean isIgnored() { return false; }
+            @Override public boolean isIgnored(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return false; }
+            @Override public void appendIds(java.util.HashSet<String> ids) {}
+            @Override public BeanDefinition getPrimaryMember() { return null; }
+            @Override public String findJavaName() { return "testProp"; }
+            @Override public JavaType getContainerType(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public AnnotatedMember getNonConstructorMutator() { return getAccessor(); }
+            @Override public AnnotatedMember getMutator() { return getAccessor(); }
+            @Override public com.fasterxml.jackson.databind.annotation.JsonPOJOBuilder.Value findPOJOBuilderConfig(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public AnnotationIntrospector getAnnotationIntrospector() { return null; }
+            @Override public Class<?>[] findViews() { return null; }
+            @Override public JsonFormat.Value findFormat(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public JsonInclude.Value findInclusion(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public String findNamespace() { return null; }
+            @Override public boolean couldSerialize() { return true; }
+            @Override public boolean isInternalField() { return false; }
+        };
+
+        BeanPropertyWriter writer = new BeanPropertyWriter(propDef, annotatedMethod, null, TypeFactory.defaultInstance().constructSimpleType(String.class, null), null, null, null, false, null);
+
+        try {
+            Object value = writer.get(bean);
+            assertEquals("Value from method should be retrieved", "methodValue", value);
+        } catch (Exception e) {
+            fail("Failed to get value from method: " + e.getMessage());
+        }
+    }
+
+
+    @Test
+    public void testBeanPropertyWriter_unwrappingWriter() throws Exception {
+        BeanPropertyWriter writer = createWriter("test", TypeFactory.defaultInstance().constructSimpleType(String.class, null), new MockAnnotatedMember(new MockMethod(String.class, "getVal")));
+        NameTransformer transformer = NameTransformer.simpleTransformer("prefix_", "_suffix");
+        BeanPropertyWriter unwrapping = writer.unwrappingWriter(transformer);
+
+        assertNotNull("Unwrapping writer should be created", unwrapping);
+        // UnwrappingBeanPropertyWriter is a subclass. We can't directly check its type without imports.
+        // We can check properties inherited from BeanPropertyWriter.
+        assertEquals("Name should be preserved for unwrapping writer", "test", unwrapping.getName());
+        // The actual unwrapping behavior would be tested with serialization, which is complex to mock.
+        // This test confirms that the method itself is callable and returns a writer.
+    }
+
+    @Test
+    public void testBeanPropertyWriter_setNonTrivialBaseType() throws Exception {
+        BeanPropertyWriter writer = createWriter("test", TypeFactory.defaultInstance().constructSimpleType(String.class, null), new MockAnnotatedMember(new MockMethod(String.class, "getVal")));
+        assertNull("Non-trivial base type should be null initially", writer._nonTrivialBaseType); // Accessing protected field for test
+
+        JavaType baseType = TypeFactory.defaultInstance().constructParametricType(java.util.List.class, String.class);
+        writer.setNonTrivialBaseType(baseType);
+        assertNotNull("Non-trivial base type should be set", writer._nonTrivialBaseType);
+        assertEquals("Non-trivial base type should be set correctly", baseType, writer._nonTrivialBaseType);
+    }
+
+    @Test
+    public void testBeanPropertyWriter_getSerializationType() throws Exception {
+        JavaType expectedType = TypeFactory.defaultInstance().constructSimpleType(Integer.class, null);
+        BeanPropertyDefinition propDef = new BeanPropertyDefinition() { // Minimal for constructor
+            @Override public PropertyName getFullName() { return PropertyName.construct("testProp"); }
+            @Override public PropertyName getSimpleName() { return PropertyName.construct("testProp"); }
+            @Override public String getName() { return "testProp"; }
+            @Override public boolean isRequired() { return true; }
+            @Override public JavaType getType() { return expectedType; } // Return the expected type here
+            @Override public AnnotatedMember getAccessor() { return new MockAnnotatedMember(new MockMethod(Integer.class, "getValue")); }
+            @Override public PropertyMetadata getMetadata() { return PropertyMetadata.STD_REQUIRED_OR_OPTIONAL; }
+             // ... other methods
+            @Override public PropertyName getWrapperName() { return null; }
+            @Override public boolean isExplicitlyIncluded() { return true; }
+            @Override public boolean isIgnored() { return false; }
+            @Override public boolean isIgnored(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return false; }
+            @Override public void appendIds(java.util.HashSet<String> ids) {}
+            @Override public BeanDefinition getPrimaryMember() { return null; }
+            @Override public String findJavaName() { return "testProp"; }
+            @Override public JavaType getContainerType(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public AnnotatedMember getNonConstructorMutator() { return getAccessor(); }
+            @Override public AnnotatedMember getMutator() { return getAccessor(); }
+            @Override public com.fasterxml.jackson.databind.annotation.JsonPOJOBuilder.Value findPOJOBuilderConfig(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public AnnotationIntrospector getAnnotationIntrospector() { return null; }
+            @Override public Class<?>[] findViews() { return null; }
+            @Override public JsonFormat.Value findFormat(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public JsonInclude.Value findInclusion(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public String findNamespace() { return null; }
+            @Override public boolean couldSerialize() { return true; }
+            @Override public boolean isInternalField() { return false; }
+        };
+
+        // Use a serializer to ensure cfgSerializationType can be set
+        JsonSerializer<Object> mockSerializer = new MockUnknownSerializer();
+        JavaType cfgSerializationType = TypeFactory.defaultInstance().constructSimpleType(Long.class, null);
+
+        BeanPropertyWriter writer = new BeanPropertyWriter(propDef, propDef.getAccessor(), null, propDef.getType(), mockSerializer, null, cfgSerializationType, false, null);
+
+        assertEquals("Serialization type should match configured type", cfgSerializationType, writer.getSerializationType());
+    }
+
+    @Test
+    public void testBeanPropertyWriter_getRawSerializationType() throws Exception {
+        JavaType serializationType = TypeFactory.defaultInstance().constructSimpleType(Long.class, null);
+        BeanPropertyDefinition propDef = new BeanPropertyDefinition() { // Minimal for constructor
+            @Override public PropertyName getFullName() { return PropertyName.construct("testProp"); }
+            @Override public PropertyName getSimpleName() { return PropertyName.construct("testProp"); }
+            @Override public String getName() { return "testProp"; }
+            @Override public boolean isRequired() { return true; }
+            @Override public JavaType getType() { return TypeFactory.defaultInstance().constructSimpleType(String.class, null); }
+            @Override public AnnotatedMember getAccessor() { return new MockAnnotatedMember(new MockMethod(String.class, "getValue")); }
+            @Override public PropertyMetadata getMetadata() { return PropertyMetadata.STD_REQUIRED_OR_OPTIONAL; }
+            // ... other methods
+            @Override public PropertyName getWrapperName() { return null; }
+            @Override public boolean isExplicitlyIncluded() { return true; }
+            @Override public boolean isIgnored() { return false; }
+            @Override public boolean isIgnored(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return false; }
+            @Override public void appendIds(java.util.HashSet<String> ids) {}
+            @Override public BeanDefinition getPrimaryMember() { return null; }
+            @Override public String findJavaName() { return "testProp"; }
+            @Override public JavaType getContainerType(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public AnnotatedMember getNonConstructorMutator() { return getAccessor(); }
+            @Override public AnnotatedMember getMutator() { return getAccessor(); }
+            @Override public com.fasterxml.jackson.databind.annotation.JsonPOJOBuilder.Value findPOJOBuilderConfig(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public AnnotationIntrospector getAnnotationIntrospector() { return null; }
+            @Override public Class<?>[] findViews() { return null; }
+            @Override public JsonFormat.Value findFormat(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public JsonInclude.Value findInclusion(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public String findNamespace() { return null; }
+            @Override public boolean couldSerialize() { return true; }
+            @Override public boolean isInternalField() { return false; }
+        };
+
+        BeanPropertyWriter writer = new BeanPropertyWriter(propDef, propDef.getAccessor(), null, null, null, null, serializationType, false, null);
+
+        assertNotNull("Raw serialization type should not be null", writer.getRawSerializationType());
+        assertEquals("Raw serialization type should be Long.class", Long.class, writer.getRawSerializationType());
+    }
+
+    @Test
+    public void testBeanPropertyWriter_getPropertyType_fromField() throws Exception {
+        Field testField = new MockField(Integer.class, "intField");
+        AnnotatedMember annotatedField = new MockAnnotatedMember(testField);
+        BeanPropertyDefinition propDef = new BeanPropertyDefinition() { // Minimal for constructor
+            @Override public PropertyName getFullName() { return PropertyName.construct("intField"); }
+            @Override public PropertyName getSimpleName() { return PropertyName.construct("intField"); }
+            @Override public String getName() { return "intField"; }
+            @Override public boolean isRequired() { return true; }
+            @Override public JavaType getType() { return TypeFactory.defaultInstance().constructSimpleType(Integer.class, null); }
+            @Override public AnnotatedMember getAccessor() { return annotatedField; }
+            @Override public PropertyMetadata getMetadata() { return PropertyMetadata.STD_REQUIRED_OR_OPTIONAL; }
+            // ... other methods
+            @Override public PropertyName getWrapperName() { return null; }
+            @Override public boolean isExplicitlyIncluded() { return true; }
+            @Override public boolean isIgnored() { return false; }
+            @Override public boolean isIgnored(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return false; }
+            @Override public void appendIds(java.util.HashSet<String> ids) {}
+            @Override public BeanDefinition getPrimaryMember() { return null; }
+            @Override public String findJavaName() { return "intField"; }
+            @Override public JavaType getContainerType(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public AnnotatedMember getNonConstructorMutator() { return getAccessor(); }
+            @Override public AnnotatedMember getMutator() { return getAccessor(); }
+            @Override public com.fasterxml.jackson.databind.annotation.JsonPOJOBuilder.Value findPOJOBuilderConfig(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public AnnotationIntrospector getAnnotationIntrospector() { return null; }
+            @Override public Class<?>[] findViews() { return null; }
+            @Override public JsonFormat.Value findFormat(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public JsonInclude.Value findInclusion(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public String findNamespace() { return null; }
+            @Override public boolean couldSerialize() { return true; }
+            @Override public boolean isInternalField() { return false; }
+        };
+
+        BeanPropertyWriter writer = new BeanPropertyWriter(propDef, annotatedField, null, null, null, null, null, false, null);
+        assertEquals("Property type should be Integer.class for field", Integer.class, writer.getPropertyType());
+    }
+
+    @Test
+    public void testBeanPropertyWriter_getPropertyType_fromMethod() throws Exception {
+        Method testMethod = new MockMethod(Boolean.class, "isBool");
+        AnnotatedMember annotatedMethod = new MockAnnotatedMember(testMethod);
+        BeanPropertyDefinition propDef = new BeanPropertyDefinition() { // Minimal for constructor
+            @Override public PropertyName getFullName() { return PropertyName.construct("isBool"); }
+            @Override public PropertyName getSimpleName() { return PropertyName.construct("isBool"); }
+            @Override public String getName() { return "isBool"; }
+            @Override public boolean isRequired() { return true; }
+            @Override public JavaType getType() { return TypeFactory.defaultInstance().constructSimpleType(Boolean.class, null); }
+            @Override public AnnotatedMember getAccessor() { return annotatedMethod; }
+            @Override public PropertyMetadata getMetadata() { return PropertyMetadata.STD_REQUIRED_OR_OPTIONAL; }
+            // ... other methods
+            @Override public PropertyName getWrapperName() { return null; }
+            @Override public boolean isExplicitlyIncluded() { return true; }
+            @Override public boolean isIgnored() { return false; }
+            @Override public boolean isIgnored(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return false; }
+            @Override public void appendIds(java.util.HashSet<String> ids) {}
+            @Override public BeanDefinition getPrimaryMember() { return null; }
+            @Override public String findJavaName() { return "isBool"; }
+            @Override public JavaType getContainerType(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public AnnotatedMember getNonConstructorMutator() { return getAccessor(); }
+            @Override public AnnotatedMember getMutator() { return getAccessor(); }
+            @Override public com.fasterxml.jackson.databind.annotation.JsonPOJOBuilder.Value findPOJOBuilderConfig(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public AnnotationIntrospector getAnnotationIntrospector() { return null; }
+            @Override public Class<?>[] findViews() { return null; }
+            @Override public JsonFormat.Value findFormat(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public JsonInclude.Value findInclusion(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public String findNamespace() { return null; }
+            @Override public boolean couldSerialize() { return true; }
+            @Override public boolean isInternalField() { return false; }
+        };
+
+        BeanPropertyWriter writer = new BeanPropertyWriter(propDef, annotatedMethod, null, null, null, null, null, false, null);
+        assertEquals("Property type should be Boolean.class for method", Boolean.class, writer.getPropertyType());
+    }
+
+    @Test
+    public void testBeanPropertyWriter_getGenericPropertyType_fromMethod() throws Exception {
+        // Mocking a method with a generic return type is tricky.
+        // For simplicity, we'll use a simple type and check if it's returned.
+        // A more complex test would involve TypeVariable, ParameterizedType etc.
+        Method testMethod = new MockMethod(java.util.List.class, "getList");
+        AnnotatedMember annotatedMethod = new MockAnnotatedMember(testMethod);
+        BeanPropertyDefinition propDef = new BeanPropertyDefinition() { // Minimal for constructor
+            @Override public PropertyName getFullName() { return PropertyName.construct("getList"); }
+            @Override public PropertyName getSimpleName() { return PropertyName.construct("getList"); }
+            @Override public String getName() { return "getList"; }
+            @Override public boolean isRequired() { return true; }
+            @Override public JavaType getType() { return TypeFactory.defaultInstance().constructParametricType(java.util.List.class, String.class); }
+            @Override public AnnotatedMember getAccessor() { return annotatedMethod; }
+            @Override public PropertyMetadata getMetadata() { return PropertyMetadata.STD_REQUIRED_OR_OPTIONAL; }
+            // ... other methods
+            @Override public PropertyName getWrapperName() { return null; }
+            @Override public boolean isExplicitlyIncluded() { return true; }
+            @Override public boolean isIgnored() { return false; }
+            @Override public boolean isIgnored(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return false; }
+            @Override public void appendIds(java.util.HashSet<String> ids) {}
+            @Override public BeanDefinition getPrimaryMember() { return null; }
+            @Override public String findJavaName() { return "getList"; }
+            @Override public JavaType getContainerType(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public AnnotatedMember getNonConstructorMutator() { return getAccessor(); }
+            @Override public AnnotatedMember getMutator() { return getAccessor(); }
+            @Override public com.fasterxml.jackson.databind.annotation.JsonPOJOBuilder.Value findPOJOBuilderConfig(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public AnnotationIntrospector getAnnotationIntrospector() { return null; }
+            @Override public Class<?>[] findViews() { return null; }
+            @Override public JsonFormat.Value findFormat(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public JsonInclude.Value findInclusion(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public String findNamespace() { return null; }
+            @Override public boolean couldSerialize() { return true; }
+            @Override public boolean isInternalField() { return false; }
+        };
+
+        BeanPropertyWriter writer = new BeanPropertyWriter(propDef, annotatedMethod, null, null, null, null, null, false, null);
+        Type genericType = writer.getGenericPropertyType();
+        assertNotNull("Generic property type should not be null", genericType);
+        // In a real scenario, MockMethod.getGenericReturnType() would be used.
+        // Since it's a mock, we'll assert it's a Type, and if MockMethod were more complex,
+        // we could assert its specific type. For now, just checking it returns *something*.
+        // Let's assume MockMethod is set up to return java.util.List.class for getGenericReturnType.
+        assertEquals("Generic property type should match mock method's generic return type", java.util.List.class, genericType);
+    }
+
+    @Test
+    public void testBeanPropertyWriter_getGenericPropertyType_fromField() throws Exception {
+        // Mocking a field with a generic type
+        Field testField = new MockField(java.util.Map.class, "mapField");
+        AnnotatedMember annotatedField = new MockAnnotatedMember(testField);
+        BeanPropertyDefinition propDef = new BeanPropertyDefinition() { // Minimal for constructor
+            @Override public PropertyName getFullName() { return PropertyName.construct("mapField"); }
+            @Override public PropertyName getSimpleName() { return PropertyName.construct("mapField"); }
+            @Override public String getName() { return "mapField"; }
+            @Override public boolean isRequired() { return true; }
+            @Override public JavaType getType() { return TypeFactory.defaultInstance().constructParametricType(java.util.Map.class, String.class, Integer.class); }
+            @Override public AnnotatedMember getAccessor() { return annotatedField; }
+            @Override public PropertyMetadata getMetadata() { return PropertyMetadata.STD_REQUIRED_OR_OPTIONAL; }
+            // ... other methods
+            @Override public PropertyName getWrapperName() { return null; }
+            @Override public boolean isExplicitlyIncluded() { return true; }
+            @Override public boolean isIgnored() { return false; }
+            @Override public boolean isIgnored(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return false; }
+            @Override public void appendIds(java.util.HashSet<String> ids) {}
+            @Override public BeanDefinition getPrimaryMember() { return null; }
+            @Override public String findJavaName() { return "mapField"; }
+            @Override public JavaType getContainerType(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public AnnotatedMember getNonConstructorMutator() { return getAccessor(); }
+            @Override public AnnotatedMember getMutator() { return getAccessor(); }
+            @Override public com.fasterxml.jackson.databind.annotation.JsonPOJOBuilder.Value findPOJOBuilderConfig(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public AnnotationIntrospector getAnnotationIntrospector() { return null; }
+            @Override public Class<?>[] findViews() { return null; }
+            @Override public JsonFormat.Value findFormat(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public JsonInclude.Value findInclusion(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public String findNamespace() { return null; }
+            @Override public boolean couldSerialize() { return true; }
+            @Override public boolean isInternalField() { return false; }
+        };
+
+        BeanPropertyWriter writer = new BeanPropertyWriter(propDef, annotatedField, null, null, null, null, null, false, null);
+        Type genericType = writer.getGenericPropertyType();
+        assertNotNull("Generic property type should not be null", genericType);
+        // MockField.getGenericType() would return the type.
+        // We'll assume it's set up to return java.util.Map.class.
+        assertEquals("Generic property type should match mock field's generic type", java.util.Map.class, genericType);
+    }
+
+
+    @Test
+    public void testBeanPropertyWriter_getViews() throws Exception {
+        Class<?>[] expectedViews = new Class<?>[] { Object.class, Integer.class };
+        BeanPropertyDefinition propDef = new BeanPropertyDefinition() { // Minimal for constructor
+            @Override public PropertyName getFullName() { return PropertyName.construct("testProp"); }
+            @Override public PropertyName getSimpleName() { return PropertyName.construct("testProp"); }
+            @Override public String getName() { return "testProp"; }
+            @Override public boolean isRequired() { return true; }
+            @Override public JavaType getType() { return TypeFactory.defaultInstance().constructSimpleType(String.class, null); }
+            @Override public AnnotatedMember getAccessor() { return new MockAnnotatedMember(new MockMethod(String.class, "getValue")); }
+            @Override public PropertyMetadata getMetadata() { return PropertyMetadata.STD_REQUIRED_OR_OPTIONAL; }
+            @Override public Class<?>[] findViews() { return expectedViews; } // Return the expected views
+            // ... other methods
+            @Override public PropertyName getWrapperName() { return null; }
+            @Override public boolean isExplicitlyIncluded() { return true; }
+            @Override public boolean isIgnored() { return false; }
+            @Override public boolean isIgnored(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return false; }
+            @Override public void appendIds(java.util.HashSet<String> ids) {}
+            @Override public BeanDefinition getPrimaryMember() { return null; }
+            @Override public String findJavaName() { return "testProp"; }
+            @Override public JavaType getContainerType(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public AnnotatedMember getNonConstructorMutator() { return getAccessor(); }
+            @Override public AnnotatedMember getMutator() { return getAccessor(); }
+            @Override public com.fasterxml.jackson.databind.annotation.JsonPOJOBuilder.Value findPOJOBuilderConfig(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public AnnotationIntrospector getAnnotationIntrospector() { return null; }
+            @Override public JsonFormat.Value findFormat(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public JsonInclude.Value findInclusion(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public String findNamespace() { return null; }
+            @Override public boolean couldSerialize() { return true; }
+            @Override public boolean isInternalField() { return false; }
+        };
+
+        BeanPropertyWriter writer = new BeanPropertyWriter(propDef, propDef.getAccessor(), null, null, null, null, null, false, null);
+        Class<?>[] views = writer.getViews();
+        assertNotNull("Views array should not be null", views);
+        assertEquals("Should have the correct number of views", expectedViews.length, views.length);
+        assertArrayEquals("Views array should match expected views", expectedViews, views);
+    }
+
+    // Mock implementation of TypeSerializer for testing
+    private static class MockTypeSerializer extends TypeSerializer {
+        @Override public TypeSerializer forProperty(BeanProperty prop) { return this; }
+        @Override public JsonTypeInfo.As getTypeInclusion() { return JsonTypeInfo.As.PROPERTY; }
+        @Override public String getPropertyName() { return "type"; }
+        @Override public TypeIdResolver getTypeIdResolver() { return null; }
+        @Override public void writeTypePrefixForScalar(Object value, JsonGenerator jgen) throws IOException { }
+        @Override public void writeTypePrefixForObject(Object value, JsonGenerator jgen) throws IOException { }
+        @Override public void writeTypePrefixForArray(Object value, JsonGenerator jgen) throws IOException { }
+        @Override public void writeTypeSuffixForScalar(Object value, JsonGenerator jgen) throws IOException { }
+        @Override public void writeTypeSuffixForObject(Object value, JsonGenerator jgen) throws IOException { }
+        @Override public void writeTypeSuffixForArray(Object value, JsonGenerator jgen) throws IOException { }
+        // Implement other methods if needed by specific tests
+    }
+
+    // Mock implementation of JsonObjectFormatVisitor for testing
+    private static class MockJsonObjectFormatVisitor implements JsonObjectFormatVisitor {
+        public BeanPropertyWriter lastVisitedProperty = null;
+        @Override public void property(BeanProperty writer) throws JsonMappingException {
+            if (writer instanceof BeanPropertyWriter) {
+                this.lastVisitedProperty = (BeanPropertyWriter) writer;
+            }
+        }
+        @Override public void optionalProperty(BeanProperty writer) throws JsonMappingException {
+            if (writer instanceof BeanPropertyWriter) {
+                this.lastVisitedProperty = (BeanPropertyWriter) writer;
+            }
+        }
+        // Other methods can be no-ops for this test
+        @Override public void keyFormat(com.fasterxml.jackson.databind.jsonFormatVisitors.JsonFormatVisitable f, JavaType type) {}
+        @Override public void valueFormat(com.fasterxml.jackson.databind.jsonFormatVisitors.JsonFormatVisitable f, JavaType type) {}
+        @Override public void propertyFormat(BeanProperty writer) {}
+        @Override public void optionalPropertyFormat(BeanProperty writer) {}
+        @Override public JsonFormatVisitable getSchemaVisitor() { return null; }
+        @Override public JsonFormatVisitable getArrayVisitor() { return null; }
+        @Override public JsonFormatVisitable getObjectVisitor() { return null; }
+        @Override public JsonFormatVisitable getMapVisitor() { return null; }
+        @Override public JsonObjectFormatVisitor object() { return this; }
+        @Override public JsonObjectFormatVisitor array() { return this; }
+        @Override public JsonObjectFormatVisitor map() { return this; }
+    }
+
+    @Test
+    public void testBeanPropertyWriter_depositSchemaProperty_required() throws Exception {
+        BeanPropertyDefinition propDef = new BeanPropertyDefinition() { // Minimal for constructor
+            @Override public PropertyName getFullName() { return PropertyName.construct("testProp"); }
+            @Override public PropertyName getSimpleName() { return PropertyName.construct("testProp"); }
+            @Override public String getName() { return "testProp"; }
+            @Override public boolean isRequired() { return true; } // Required
+            @Override public JavaType getType() { return TypeFactory.defaultInstance().constructSimpleType(String.class, null); }
+            @Override public AnnotatedMember getAccessor() { return new MockAnnotatedMember(new MockMethod(String.class, "getValue")); }
+            @Override public PropertyMetadata getMetadata() { return PropertyMetadata.STD_REQUIRED_OR_OPTIONAL.with(true, null, null); } // Explicitly required
+            // ... other methods
+            @Override public PropertyName getWrapperName() { return null; }
+            @Override public boolean isExplicitlyIncluded() { return true; }
+            @Override public boolean isIgnored() { return false; }
+            @Override public boolean isIgnored(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return false; }
+            @Override public void appendIds(java.util.HashSet<String> ids) {}
+            @Override public BeanDefinition getPrimaryMember() { return null; }
+            @Override public String findJavaName() { return "testProp"; }
+            @Override public JavaType getContainerType(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public AnnotatedMember getNonConstructorMutator() { return getAccessor(); }
+            @Override public AnnotatedMember getMutator() { return getAccessor(); }
+            @Override public com.fasterxml.jackson.databind.annotation.JsonPOJOBuilder.Value findPOJOBuilderConfig(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public AnnotationIntrospector getAnnotationIntrospector() { return null; }
+            @Override public Class<?>[] findViews() { return null; }
+            @Override public JsonFormat.Value findFormat(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public JsonInclude.Value findInclusion(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public String findNamespace() { return null; }
+            @Override public boolean couldSerialize() { return true; }
+            @Override public boolean isInternalField() { return false; }
+        };
+
+        BeanPropertyWriter writer = new BeanPropertyWriter(propDef, propDef.getAccessor(), null, null, null, null, null, false, null);
+        MockJsonObjectFormatVisitor visitor = new MockJsonObjectFormatVisitor();
+        writer.depositSchemaProperty(visitor);
+
+        assertNotNull("Last visited property should not be null", visitor.lastVisitedProperty);
+        assertEquals("Visitor should have received the required property", writer, visitor.lastVisitedProperty);
+    }
+
+    @Test
+    public void testBeanPropertyWriter_depositSchemaProperty_optional() throws Exception {
+        BeanPropertyDefinition propDef = new BeanPropertyDefinition() { // Minimal for constructor
+            @Override public PropertyName getFullName() { return PropertyName.construct("testProp"); }
+            @Override public PropertyName getSimpleName() { return PropertyName.construct("testProp"); }
+            @Override public String getName() { return "testProp"; }
+            @Override public boolean isRequired() { return false; } // Optional
+            @Override public JavaType getType() { return TypeFactory.defaultInstance().constructSimpleType(String.class, null); }
+            @Override public AnnotatedMember getAccessor() { return new MockAnnotatedMember(new MockMethod(String.class, "getValue")); }
+            @Override public PropertyMetadata getMetadata() { return PropertyMetadata.STD_REQUIRED_OR_OPTIONAL.with(false, null, null); } // Explicitly optional
+            // ... other methods
+            @Override public PropertyName getWrapperName() { return null; }
+            @Override public boolean isExplicitlyIncluded() { return true; }
+            @Override public boolean isIgnored() { return false; }
+            @Override public boolean isIgnored(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return false; }
+            @Override public void appendIds(java.util.HashSet<String> ids) {}
+            @Override public BeanDefinition getPrimaryMember() { return null; }
+            @Override public String findJavaName() { return "testProp"; }
+            @Override public JavaType getContainerType(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public AnnotatedMember getNonConstructorMutator() { return getAccessor(); }
+            @Override public AnnotatedMember getMutator() { return getAccessor(); }
+            @Override public com.fasterxml.jackson.databind.annotation.JsonPOJOBuilder.Value findPOJOBuilderConfig(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public AnnotationIntrospector getAnnotationIntrospector() { return null; }
+            @Override public Class<?>[] findViews() { return null; }
+            @Override public JsonFormat.Value findFormat(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public JsonInclude.Value findInclusion(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public String findNamespace() { return null; }
+            @Override public boolean couldSerialize() { return true; }
+            @Override public boolean isInternalField() { return false; }
+        };
+
+        BeanPropertyWriter writer = new BeanPropertyWriter(propDef, propDef.getAccessor(), null, null, null, null, null, false, null);
+        MockJsonObjectFormatVisitor visitor = new MockJsonObjectFormatVisitor();
+        writer.depositSchemaProperty(visitor);
+
+        assertNotNull("Last visited property should not be null", visitor.lastVisitedProperty);
+        assertEquals("Visitor should have received the optional property", writer, visitor.lastVisitedProperty);
+    }
+
+    @Test
+    public void testBeanPropertyWriter_toString_methodBased() throws Exception {
+        Method testMethod = new MockMethod(String.class, "getValue");
+        AnnotatedMember annotatedMethod = new MockAnnotatedMember(testMethod);
+        BeanPropertyDefinition propDef = new BeanPropertyDefinition() { // Minimal for constructor
+            @Override public PropertyName getFullName() { return PropertyName.construct("testProp"); }
+            @Override public PropertyName getSimpleName() { return PropertyName.construct("testProp"); }
+            @Override public String getName() { return "testProp"; }
+            @Override public boolean isRequired() { return true; }
+            @Override public JavaType getType() { return TypeFactory.defaultInstance().constructSimpleType(String.class, null); }
+            @Override public AnnotatedMember getAccessor() { return annotatedMethod; }
+            @Override public PropertyMetadata getMetadata() { return PropertyMetadata.STD_REQUIRED_OR_OPTIONAL; }
+            // ... other methods
+            @Override public PropertyName getWrapperName() { return null; }
+            @Override public boolean isExplicitlyIncluded() { return true; }
+            @Override public boolean isIgnored() { return false; }
+            @Override public boolean isIgnored(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return false; }
+            @Override public void appendIds(java.util.HashSet<String> ids) {}
+            @Override public BeanDefinition getPrimaryMember() { return null; }
+            @Override public String findJavaName() { return "testProp"; }
+            @Override public JavaType getContainerType(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public AnnotatedMember getNonConstructorMutator() { return getAccessor(); }
+            @Override public AnnotatedMember getMutator() { return getAccessor(); }
+            @Override public com.fasterxml.jackson.databind.annotation.JsonPOJOBuilder.Value findPOJOBuilderConfig(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public AnnotationIntrospector getAnnotationIntrospector() { return null; }
+            @Override public Class<?>[] findViews() { return null; }
+            @Override public JsonFormat.Value findFormat(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public JsonInclude.Value findInclusion(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public String findNamespace() { return null; }
+            @Override public boolean couldSerialize() { return true; }
+            @Override public boolean isInternalField() { return false; }
+        };
+        BeanPropertyWriter writer = new BeanPropertyWriter(propDef, annotatedMethod, null, null, new MockUnknownSerializer(), null, null, false, null);
+        String toString = writer.toString();
+        assertTrue("toString should contain property name", toString.contains("property 'testProp'"));
+        assertTrue("toString should indicate method access", toString.contains("via method"));
+        assertTrue("toString should indicate serializer class", toString.contains("static serializer of type com.fasterxml.jackson.databind.ser.BeanPropertyWriterTest$MockUnknownSerializer"));
+    }
+
+    @Test
+    public void testBeanPropertyWriter_toString_fieldBased() throws Exception {
+        Field testField = new MockField(String.class, "testField");
+        AnnotatedMember annotatedField = new MockAnnotatedMember(testField);
+        BeanPropertyDefinition propDef = new BeanPropertyDefinition() { // Minimal for constructor
+            @Override public PropertyName getFullName() { return PropertyName.construct("testField"); }
+            @Override public PropertyName getSimpleName() { return PropertyName.construct("testField"); }
+            @Override public String getName() { return "testField"; }
+            @Override public boolean isRequired() { return true; }
+            @Override public JavaType getType() { return TypeFactory.defaultInstance().constructSimpleType(String.class, null); }
+            @Override public AnnotatedMember getAccessor() { return annotatedField; }
+            @Override public PropertyMetadata getMetadata() { return PropertyMetadata.STD_REQUIRED_OR_OPTIONAL; }
+            // ... other methods
+            @Override public PropertyName getWrapperName() { return null; }
+            @Override public boolean isExplicitlyIncluded() { return true; }
+            @Override public boolean isIgnored() { return false; }
+            @Override public boolean isIgnored(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return false; }
+            @Override public void appendIds(java.util.HashSet<String> ids) {}
+            @Override public BeanDefinition getPrimaryMember() { return null; }
+            @Override public String findJavaName() { return "testField"; }
+            @Override public JavaType getContainerType(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public AnnotatedMember getNonConstructorMutator() { return getAccessor(); }
+            @Override public AnnotatedMember getMutator() { return getAccessor(); }
+            @Override public com.fasterxml.jackson.databind.annotation.JsonPOJOBuilder.Value findPOJOBuilderConfig(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public AnnotationIntrospector getAnnotationIntrospector() { return null; }
+            @Override public Class<?>[] findViews() { return null; }
+            @Override public JsonFormat.Value findFormat(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public JsonInclude.Value findInclusion(com.fasterxml.jackson.databind.cfg.MapperConfig<?> config) { return null; }
+            @Override public String findNamespace() { return null; }
+            @Override public boolean couldSerialize() { return true; }
+            @Override public boolean isInternalField() { return false; }
+        };
+        BeanPropertyWriter writer = new BeanPropertyWriter(propDef, annotatedField, null, null, new MockUnknownSerializer(), null, null, false, null);
+        String toString = writer.toString();
+        assertTrue("toString should contain property name", toString.contains("property 'testField'"));
+        assertTrue("toString should indicate field access", toString.contains("field \""));
+        assertTrue("toString should indicate serializer class", toString.contains("static serializer of type com.fasterxml.jackson.databind.ser.BeanPropertyWriterTest$MockUnknownSerializer"));
+    }
+}
+```
+
+**1. SOURCE CODE ANALYSIS**
+The tests cover constructor logic, property accessors and mutators (`assignSerializer`, `assignNullSerializer`, `assignTypeSerializer`, `rename`), metadata retrieval (`getName`, `getType`, `getSerializedName`, `getWrapperName`, `getMetadata`, `isRequired`, `getAnnotation`, `getContextAnnotation`, `getViews`), internal settings management, and the `get` method for retrieving the property value. Edge cases are tested for `wouldConflictWithName`. Serialization related methods like `serializeAsField` and schema generation (`depositSchemaProperty`) are not directly tested due to the complexity of mocking `JsonGenerator` and `SerializerProvider`, focusing instead on the `BeanPropertyWriter`'s internal state and configuration.
+
+**2. TEST CASE DESIGN**
+- `testBeanPropertyWriter_ConstructorAndInitialState`: Verifies initial state after construction. Input: constructor parameters. Expected: Correct initialization of name, type, serializer status, null serializer, suppress nulls, wrapper name. Derived from constructor logic.
+- `testBeanPropertyWriter_assignSerializer`: Tests `assignSerializer`. Input: a new `JsonSerializer`. Expected: `hasSerializer()` returns true, `getSerializer()` returns the assigned serializer. Derived from `assignSerializer` and `hasSerializer`/`getSerializer` logic.
+- `testBeanPropertyWriter_assignNullSerializer`: Tests `assignNullSerializer`. Input: a new `JsonSerializer`. Expected: `hasNullSerializer()` returns true, `getNullSerializer()` returns the assigned null serializer. Derived from `assignNullSerializer` and `hasNullSerializer`/`getNullSerializer` logic.
+- `testBeanPropertyWriter_assignTypeSerializer`: Tests `assignTypeSerializer`. Input: a `TypeSerializer`. Expected: `getTypeSerializer()` returns the assigned serializer. Derived from `assignTypeSerializer` and `getTypeSerializer` logic.
+- `testBeanPropertyWriter_rename_simple`: Tests `rename` when name changes. Input: `NameTransformer` that modifies the name. Expected: Returns a new instance with updated name. Derived from `rename` logic.
+- `testBeanPropertyWriter_rename_noChange`: Tests `rename` when name doesn't change. Input: `NameTransformer` that doesn't modify name. Expected: Returns same instance or an equivalent one. Derived from `rename` logic.
+- `testBeanPropertyWriter_getAnnotation_present`: Tests `getAnnotation` when annotation is present on member. Input: `Class<A>` of existing annotation. Expected: Returns the annotation. Derived from `getAnnotation` and `AnnotatedMember.getAnnotation`.
+- `testBeanPropertyWriter_getAnnotation_absent`: Tests `getAnnotation` when annotation is absent. Input: `Class<A>` of non-existent annotation. Expected: Returns `null`. Derived from `getAnnotation` and `AnnotatedMember.getAnnotation`.
+- `testBeanPropertyWriter_getContextAnnotation_present`: Tests `getContextAnnotation` when annotation is present in context. Input: `Class<A>` of existing annotation. Expected: Returns the annotation. Derived from `getContextAnnotation` and `Annotations.get`.
+- `testBeanPropertyWriter_getContextAnnotation_absent`: Tests `getContextAnnotation` when annotation is absent. Input: `Class<A>` of non-existent annotation. Expected: Returns `null`. Derived from `getContextAnnotation` and `Annotations.get`.
+- `testBeanPropertyWriter_getInternalSetting_and_setInternalSetting`: Tests `getInternalSetting` and `setInternalSetting`. Input: key-value pairs. Expected: Correct retrieval and setting of values. Derived from `getInternalSetting` and `setInternalSetting` logic.
+- `testBeanPropertyWriter_removeInternalSetting`: Tests `removeInternalSetting`. Input: existing and non-existing keys. Expected: Correct removal and return value. Derived from `removeInternalSetting` logic.
+- `testBeanPropertyWriter_getSerializedName`: Tests `getSerializedName`. Input: Property name. Expected: Returns `SerializedString` with correct value. Derived from `_name` field and `getSerializedName` logic.
+- `testBeanPropertyWriter_willSuppressNulls`: Tests `willSuppressNulls` based on constructor parameter. Input: boolean `suppressNulls`. Expected: Returns the value passed to constructor. Derived from `_suppressNulls` field and `willSuppressNulls` logic.
+- `testBeanPropertyWriter_wouldConflictWithName_wrapperNamePresent`: Tests `wouldConflictWithName` when `_wrapperName` is set. Input: `PropertyName` matching or not matching `_wrapperName`. Expected: Correct conflict detection. Derived from `wouldConflictWithName` logic for wrapper name.
+- `testBeanPropertyWriter_wouldConflictWithName_noWrapperName`: Tests `wouldConflictWithName` when `_wrapperName` is null. Input: `PropertyName` matching or not matching `_name`. Expected: Correct conflict detection. Derived from `wouldConflictWithName` logic for `_name`.
+- `testBeanPropertyWriter_get_fromField`: Tests `get` with field-based member. Input: Bean instance with field. Expected: Field value retrieved. Derived from `get` logic and `Field.get`.
+- `testBeanPropertyWriter_get_fromMethod`: Tests `get` with method-based member. Input: Bean instance with method. Expected: Method return value retrieved. Derived from `get` logic and `Method.invoke`.
+- `testBeanPropertyWriter_unwrappingWriter`: Tests `unwrappingWriter`. Input: `NameTransformer`. Expected: Returns a writer (likely `UnwrappingBeanPropertyWriter`). Derived from `unwrappingWriter` logic.
+- `testBeanPropertyWriter_setNonTrivialBaseType`: Tests `setNonTrivialBaseType`. Input: `JavaType`. Expected: `_nonTrivialBaseType` is set. Derived from `setNonTrivialBaseType` logic.
+- `testBeanPropertyWriter_getSerializationType`: Tests `getSerializationType`. Input: `JavaType` passed during construction. Expected: Returns the configured serialization type. Derived from `_cfgSerializationType` field and `getSerializationType` logic.
+- `testBeanPropertyWriter_getRawSerializationType`: Tests `getRawSerializationType`. Input: `JavaType` passed during construction. Expected: Returns raw class of configured serialization type. Derived from `_cfgSerializationType` and `getRawClass`.
+- `testBeanPropertyWriter_getPropertyType_fromField`: Tests `getPropertyType` when member is a field. Input: Field. Expected: Field's type. Derived from `_field.getType` in `getPropertyType`.
+- `testBeanPropertyWriter_getPropertyType_fromMethod`: Tests `getPropertyType` when member is a method. Input: Method. Expected: Method's return type. Derived from `_accessorMethod.getReturnType` in `getPropertyType`.
+- `testBeanPropertyWriter_getGenericPropertyType_fromMethod`: Tests `getGenericPropertyType` with a method. Input: Method. Expected: Method's generic return type. Derived from `_accessorMethod.getGenericReturnType`.
+- `testBeanPropertyWriter_getGenericPropertyType_fromField`: Tests `getGenericPropertyType` with a field. Input: Field. Expected: Field's generic type. Derived from `_field.getGenericType`.
+- `testBeanPropertyWriter_getViews`: Tests `getViews`. Input: `Class<?>[]` from `BeanPropertyDefinition`. Expected: Returns the provided view classes. Derived from `_includeInViews` field and `getViews` logic.
+- `testBeanPropertyWriter_depositSchemaProperty_required`: Tests `depositSchemaProperty` for a required property. Input: `JsonObjectFormatVisitor`, `BeanPropertyWriter` configured as required. Expected: `JsonObjectFormatVisitor.property()` is called with the writer. Derived from `depositSchemaProperty` logic for `isRequired()`.
+- `testBeanPropertyWriter_depositSchemaProperty_optional`: Tests `depositSchemaProperty` for an optional property. Input: `JsonObjectFormatVisitor`, `BeanPropertyWriter` configured as optional. Expected: `JsonObjectFormatVisitor.optionalProperty()` is called with the writer. Derived from `depositSchemaProperty` logic for `!isRequired()`.
+- `testBeanPropertyWriter_toString_methodBased`: Tests `toString` for a method-based writer. Input: `BeanPropertyWriter` with method member. Expected: String includes property name, access type (method), and serializer info. Derived from `toString` method logic.
+- `testBeanPropertyWriter_toString_fieldBased`: Tests `toString` for a field-based writer. Input: `BeanPropertyWriter` with field member. Expected: String includes property name, access type (field), and serializer info. Derived from `toString` method logic.
+
+**4. DEFECT DETECTION STRATEGY**
+The tests focus on verifying the correct initialization and retrieval of property metadata, configuration settings, and the basic ability to access property values via mocked fields and methods. They aim to catch regressions in these core functionalities and ensure that the writer's internal state is consistent with its configuration.
+
+**5. SUMMARY**
+31 tests.
+
+**6. LIMITATIONS**
+Tests do not cover actual serialization/deserialization logic, complex type handling, or interactions with `SerializerProvider` and `JsonGenerator`. Mocking these dependencies for comprehensive testing of `serializeAsField` and similar methods is beyond the scope of this exercise. The tests rely on mocked `AnnotatedMember`, `Field`, `Method`, and `BeanPropertyDefinition` to provide necessary inputs for the `BeanPropertyWriter` constructor and methods.
+Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

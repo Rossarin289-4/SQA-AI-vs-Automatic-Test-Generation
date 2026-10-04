@@ -1,0 +1,586 @@
+package org.apache.commons.collections.list;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
+import java.util.ListIterator;
+import java.util.Set;
+import org.apache.commons.collections.iterators.AbstractIteratorDecorator;
+import org.apache.commons.collections.iterators.AbstractListIteratorDecorator;
+import org.apache.commons.collections.set.UnmodifiableSet;
+
+public class SetUniqueListTest {
+    // test methods (as many as the instructions ask for), each exactly in this form:
+    //     @Test
+    //     public void testWhatItChecks() throws Exception { ... }
+
+    @Test
+    public void testDecorateNullList() {
+        try {
+            SetUniqueList.decorate(null);
+            fail("List must not be null");
+        } catch (IllegalArgumentException expected) {
+        }
+    }
+
+    @Test
+    public void testDecorateEmptyList() {
+        List list = new ArrayList();
+        SetUniqueList uniqueList = SetUniqueList.decorate(list);
+        assertNotNull(uniqueList);
+        assertTrue(uniqueList.isEmpty());
+        assertEquals(0, uniqueList.size());
+        assertEquals(list, uniqueList); // Should decorate the same list instance
+    }
+
+    @Test
+    public void testDecorateListWithDuplicates() {
+        List list = new ArrayList();
+        list.add("A");
+        list.add("B");
+        list.add("A");
+        list.add("C");
+        list.add("B");
+
+        List originalList = new ArrayList(list); // Copy for comparison
+        SetUniqueList uniqueList = SetUniqueList.decorate(list);
+
+        assertEquals(3, uniqueList.size());
+        assertEquals("A", uniqueList.get(0));
+        assertEquals("B", uniqueList.get(1));
+        assertEquals("C", uniqueList.get(2));
+        assertFalse(uniqueList.contains("A")); // Original list modified by decorate
+
+        // Check the original list is cleared and then populated by the decorate method
+        assertEquals(3, list.size());
+        assertEquals("A", list.get(0));
+        assertEquals("B", list.get(1));
+        assertEquals("C", list.get(2));
+    }
+
+    @Test
+    public void testConstructorNullList() {
+        Set set = new HashSet();
+        try {
+            new SetUniqueList(null, set);
+            fail("List must not be null");
+        } catch (IllegalArgumentException expected) {
+        }
+    }
+
+    @Test
+    public void testConstructorNullSet() {
+        List list = new ArrayList();
+        try {
+            new SetUniqueList(list, null);
+            fail("Set must not be null");
+        } catch (IllegalArgumentException expected) {
+        }
+    }
+
+    @Test
+    public void testAsSet() {
+        List list = new ArrayList();
+        list.add("A");
+        list.add("B");
+        list.add("A");
+        SetUniqueList uniqueList = new SetUniqueList(list, new HashSet(list));
+        Set set = uniqueList.asSet();
+        assertNotNull(set);
+        assertEquals(2, set.size());
+        assertTrue(set.contains("A"));
+        assertTrue(set.contains("B"));
+        // Check it's unmodifiable
+        try {
+            set.add("C");
+            fail("Set should be unmodifiable");
+        } catch (UnsupportedOperationException expected) {
+        }
+    }
+
+    @Test
+    public void testAddUniqueElement() {
+        List list = new ArrayList();
+        Set set = new HashSet();
+        SetUniqueList uniqueList = new SetUniqueList(list, set);
+        boolean changed = uniqueList.add("A");
+        assertTrue(changed);
+        assertEquals(1, uniqueList.size());
+        assertTrue(uniqueList.contains("A"));
+        assertTrue(set.contains("A"));
+        assertEquals("A", list.get(0));
+    }
+
+    @Test
+    public void testAddDuplicateElement() {
+        List list = new ArrayList();
+        Set set = new HashSet();
+        set.add("A");
+        list.add("A");
+        SetUniqueList uniqueList = new SetUniqueList(list, set);
+        boolean changed = uniqueList.add("A");
+        assertFalse(changed);
+        assertEquals(1, uniqueList.size());
+        assertTrue(uniqueList.contains("A"));
+        assertTrue(set.contains("A"));
+        assertEquals(1, list.size());
+        assertEquals("A", list.get(0));
+    }
+
+    @Test
+    public void testAddAtIndexUniqueElement() {
+        List list = new ArrayList();
+        Set set = new HashSet();
+        SetUniqueList uniqueList = new SetUniqueList(list, set);
+        uniqueList.add(0, "A");
+        assertEquals(1, uniqueList.size());
+        assertTrue(uniqueList.contains("A"));
+        assertTrue(set.contains("A"));
+        assertEquals("A", list.get(0));
+    }
+
+    @Test
+    public void testAddAtIndexDuplicateElement() {
+        List list = new ArrayList();
+        Set set = new HashSet();
+        set.add("A");
+        list.add("A");
+        SetUniqueList uniqueList = new SetUniqueList(list, set);
+        uniqueList.add(0, "A"); // Attempt to add duplicate at index 0
+        assertEquals(1, uniqueList.size());
+        assertTrue(uniqueList.contains("A"));
+        assertTrue(set.contains("A"));
+        assertEquals(1, list.size());
+        assertEquals("A", list.get(0));
+    }
+
+    @Test
+    public void testAddAtIndexUniqueElementInMiddle() {
+        List list = new ArrayList();
+        Set set = new HashSet();
+        list.add("A");
+        list.add("C");
+        set.add("A");
+        set.add("C");
+        SetUniqueList uniqueList = new SetUniqueList(list, set);
+        uniqueList.add(1, "B");
+        assertEquals(3, uniqueList.size());
+        assertEquals("A", uniqueList.get(0));
+        assertEquals("B", uniqueList.get(1));
+        assertEquals("C", uniqueList.get(2));
+        assertTrue(set.contains("B"));
+    }
+
+    @Test
+    public void testAddAllEmptyCollection() {
+        List list = new ArrayList();
+        Set set = new HashSet();
+        SetUniqueList uniqueList = new SetUniqueList(list, set);
+        boolean changed = uniqueList.addAll(new ArrayList());
+        assertFalse(changed);
+        assertEquals(0, uniqueList.size());
+    }
+
+    @Test
+    public void testAddAllUniqueElements() {
+        List list = new ArrayList();
+        Set set = new HashSet();
+        SetUniqueList uniqueList = new SetUniqueList(list, set);
+        Collection<String> coll = new ArrayList<>();
+        coll.add("A");
+        coll.add("B");
+        boolean changed = uniqueList.addAll(coll);
+        assertTrue(changed);
+        assertEquals(2, uniqueList.size());
+        assertTrue(uniqueList.contains("A"));
+        assertTrue(uniqueList.contains("B"));
+        assertTrue(set.contains("A"));
+        assertTrue(set.contains("B"));
+    }
+
+    @Test
+    public void testAddAllWithDuplicatesInCollection() {
+        List list = new ArrayList();
+        Set set = new HashSet();
+        SetUniqueList uniqueList = new SetUniqueList(list, set);
+        Collection<String> coll = new ArrayList<>();
+        coll.add("A");
+        coll.add("B");
+        coll.add("A");
+        boolean changed = uniqueList.addAll(coll);
+        assertTrue(changed);
+        assertEquals(2, uniqueList.size());
+        assertTrue(uniqueList.contains("A"));
+        assertTrue(uniqueList.contains("B"));
+        assertTrue(set.contains("A"));
+        assertTrue(set.contains("B"));
+    }
+
+    @Test
+    public void testAddAllWithExistingElements() {
+        List list = new ArrayList();
+        Set set = new HashSet();
+        list.add("A");
+        set.add("A");
+        SetUniqueList uniqueList = new SetUniqueList(list, set);
+        Collection<String> coll = new ArrayList<>();
+        coll.add("B");
+        coll.add("A");
+        coll.add("C");
+        boolean changed = uniqueList.addAll(coll);
+        assertTrue(changed);
+        assertEquals(3, uniqueList.size());
+        assertTrue(uniqueList.contains("A"));
+        assertTrue(uniqueList.contains("B"));
+        assertTrue(uniqueList.contains("C"));
+        assertTrue(set.contains("A"));
+        assertTrue(set.contains("B"));
+        assertTrue(set.contains("C"));
+    }
+
+    @Test
+    public void testAddAllAtIndex() {
+        List list = new ArrayList();
+        Set set = new HashSet();
+        list.add("A");
+        set.add("A");
+        SetUniqueList uniqueList = new SetUniqueList(list, set);
+        Collection<String> coll = new ArrayList<>();
+        coll.add("B");
+        coll.add("C");
+        uniqueList.addAll(1, coll);
+        assertEquals(3, uniqueList.size());
+        assertEquals("A", uniqueList.get(0));
+        assertEquals("B", uniqueList.get(1));
+        assertEquals("C", uniqueList.get(2));
+        assertTrue(set.contains("B"));
+        assertTrue(set.contains("C"));
+    }
+
+    @Test
+    public void testSetUniqueElement() {
+        List list = new ArrayList();
+        Set set = new HashSet();
+        list.add("A");
+        set.add("A");
+        SetUniqueList uniqueList = new SetUniqueList(list, set);
+        Object previous = uniqueList.set(0, "B");
+        assertEquals("A", previous);
+        assertEquals(1, uniqueList.size());
+        assertTrue(uniqueList.contains("B"));
+        assertFalse(uniqueList.contains("A"));
+        assertTrue(set.contains("B"));
+        assertFalse(set.contains("A"));
+    }
+
+    @Test
+    public void testSetDuplicateElementDifferentIndex() {
+        List list = new ArrayList();
+        Set set = new HashSet();
+        list.add("A");
+        list.add("B");
+        set.add("A");
+        set.add("B");
+        SetUniqueList uniqueList = new SetUniqueList(list, set);
+        Object previous = uniqueList.set(1, "A"); // Set B at index 1 to A
+        assertEquals("B", previous);
+        assertEquals(1, uniqueList.size()); // A is already at index 0, so B is removed
+        assertTrue(uniqueList.contains("A"));
+        assertFalse(uniqueList.contains("B"));
+        assertTrue(set.contains("A"));
+        assertFalse(set.contains("B"));
+        assertEquals("A", uniqueList.get(0));
+    }
+
+    @Test
+    public void testSetDuplicateElementSameIndex() {
+        List list = new ArrayList();
+        Set set = new HashSet();
+        list.add("A");
+        set.add("A");
+        SetUniqueList uniqueList = new SetUniqueList(list, set);
+        Object previous = uniqueList.set(0, "A"); // Set A at index 0 to A
+        assertEquals("A", previous);
+        assertEquals(1, uniqueList.size());
+        assertTrue(uniqueList.contains("A"));
+        assertTrue(set.contains("A"));
+        assertEquals("A", uniqueList.get(0));
+    }
+
+    @Test
+    public void testRemoveByObjectUnique() {
+        List list = new ArrayList();
+        Set set = new HashSet();
+        list.add("A");
+        set.add("A");
+        SetUniqueList uniqueList = new SetUniqueList(list, set);
+        boolean removed = uniqueList.remove("A");
+        assertTrue(removed);
+        assertEquals(0, uniqueList.size());
+        assertFalse(uniqueList.contains("A"));
+        assertFalse(set.contains("A"));
+    }
+
+    @Test
+    public void testRemoveByObjectNonExistent() {
+        List list = new ArrayList();
+        Set set = new HashSet();
+        SetUniqueList uniqueList = new SetUniqueList(list, set);
+        boolean removed = uniqueList.remove("A");
+        assertFalse(removed);
+        assertEquals(0, uniqueList.size());
+    }
+
+    @Test
+    public void testRemoveByIndex() {
+        List list = new ArrayList();
+        Set set = new HashSet();
+        list.add("A");
+        list.add("B");
+        set.add("A");
+        set.add("B");
+        SetUniqueList uniqueList = new SetUniqueList(list, set);
+        Object removed = uniqueList.remove(0);
+        assertEquals("A", removed);
+        assertEquals(1, uniqueList.size());
+        assertTrue(uniqueList.contains("B"));
+        assertFalse(uniqueList.contains("A"));
+        assertTrue(set.contains("B"));
+        assertFalse(set.contains("A"));
+    }
+
+    @Test
+    public void testRemoveAllEmptyCollection() {
+        List list = new ArrayList();
+        Set set = new HashSet();
+        list.add("A");
+        set.add("A");
+        SetUniqueList uniqueList = new SetUniqueList(list, set);
+        boolean changed = uniqueList.removeAll(new ArrayList());
+        assertFalse(changed);
+        assertEquals(1, uniqueList.size());
+        assertTrue(uniqueList.contains("A"));
+        assertTrue(set.contains("A"));
+    }
+
+    @Test
+    public void testRemoveAllExistingElements() {
+        List list = new ArrayList();
+        Set set = new HashSet();
+        list.add("A");
+        list.add("B");
+        list.add("C");
+        set.add("A");
+        set.add("B");
+        set.add("C");
+        SetUniqueList uniqueList = new SetUniqueList(list, set);
+        Collection<String> coll = new ArrayList<>();
+        coll.add("A");
+        coll.add("C");
+        boolean changed = uniqueList.removeAll(coll);
+        assertTrue(changed);
+        assertEquals(1, uniqueList.size());
+        assertTrue(uniqueList.contains("B"));
+        assertFalse(uniqueList.contains("A"));
+        assertFalse(uniqueList.contains("C"));
+        assertTrue(set.contains("B"));
+        assertFalse(set.contains("A"));
+        assertFalse(set.contains("C"));
+    }
+
+    @Test
+    public void testRetainAllEmptyCollection() {
+        List list = new ArrayList();
+        Set set = new HashSet();
+        list.add("A");
+        set.add("A");
+        SetUniqueList uniqueList = new SetUniqueList(list, set);
+        boolean changed = uniqueList.retainAll(new ArrayList());
+        assertTrue(changed);
+        assertEquals(0, uniqueList.size());
+        assertFalse(set.contains("A"));
+    }
+
+    @Test
+    public void testRetainAllExistingElements() {
+        List list = new ArrayList();
+        Set set = new HashSet();
+        list.add("A");
+        list.add("B");
+        list.add("C");
+        set.add("A");
+        set.add("B");
+        set.add("C");
+        SetUniqueList uniqueList = new SetUniqueList(list, set);
+        Collection<String> coll = new ArrayList<>();
+        coll.add("A");
+        coll.add("C");
+        boolean changed = uniqueList.retainAll(coll);
+        assertTrue(changed);
+        assertEquals(2, uniqueList.size());
+        assertTrue(uniqueList.contains("A"));
+        assertTrue(uniqueList.contains("C"));
+        assertFalse(uniqueList.contains("B"));
+        assertTrue(set.contains("A"));
+        assertTrue(set.contains("C"));
+        assertFalse(set.contains("B"));
+    }
+
+    @Test
+    public void testClear() {
+        List list = new ArrayList();
+        Set set = new HashSet();
+        list.add("A");
+        set.add("A");
+        SetUniqueList uniqueList = new SetUniqueList(list, set);
+        uniqueList.clear();
+        assertEquals(0, uniqueList.size());
+        assertTrue(list.isEmpty());
+        assertTrue(set.isEmpty());
+    }
+
+    @Test
+    public void testContainsNonExistent() {
+        List list = new ArrayList();
+        Set set = new HashSet();
+        list.add("A");
+        set.add("A");
+        SetUniqueList uniqueList = new SetUniqueList(list, set);
+        assertFalse(uniqueList.contains("B"));
+    }
+
+    @Test
+    public void testContainsExistent() {
+        List list = new ArrayList();
+        Set set = new HashSet();
+        list.add("A");
+        set.add("A");
+        SetUniqueList uniqueList = new SetUniqueList(list, set);
+        assertTrue(uniqueList.contains("A"));
+    }
+
+    @Test
+    public void testContainsAllNonExistent() {
+        List list = new ArrayList();
+        Set set = new HashSet();
+        list.add("A");
+        set.add("A");
+        SetUniqueList uniqueList = new SetUniqueList(list, set);
+        Collection<String> coll = new ArrayList<>();
+        coll.add("B");
+        assertFalse(uniqueList.containsAll(coll));
+    }
+
+    @Test
+    public void testContainsAllExistent() {
+        List list = new ArrayList();
+        Set set = new HashSet();
+        list.add("A");
+        list.add("B");
+        set.add("A");
+        set.add("B");
+        SetUniqueList uniqueList = new SetUniqueList(list, set);
+        Collection<String> coll = new ArrayList<>();
+        coll.add("A");
+        coll.add("B");
+        assertTrue(uniqueList.containsAll(coll));
+    }
+
+    @Test
+    public void testIteratorRemove() {
+        List list = new ArrayList();
+        Set set = new HashSet();
+        list.add("A");
+        list.add("B");
+        list.add("C");
+        set.add("A");
+        set.add("B");
+        set.add("C");
+        SetUniqueList uniqueList = new SetUniqueList(list, set);
+        Iterator it = uniqueList.iterator();
+        it.next(); // "A"
+        it.next(); // "B"
+        it.remove(); // remove "B"
+        assertEquals(2, uniqueList.size());
+        assertTrue(uniqueList.contains("A"));
+        assertFalse(uniqueList.contains("B"));
+        assertTrue(uniqueList.contains("C"));
+        assertFalse(set.contains("B"));
+    }
+
+    @Test
+    public void testListIteratorAdd() {
+        List list = new ArrayList();
+        Set set = new HashSet();
+        list.add("A");
+        set.add("A");
+        SetUniqueList uniqueList = new SetUniqueList(list, set);
+        ListIterator it = uniqueList.listIterator();
+        it.next(); // "A"
+        it.add("B"); // add "B" after "A"
+        assertEquals(2, uniqueList.size());
+        assertEquals("A", uniqueList.get(0));
+        assertEquals("B", uniqueList.get(1));
+        assertTrue(set.contains("B"));
+    }
+
+    @Test
+    public void testListIteratorAddDuplicate() {
+        List list = new ArrayList();
+        Set set = new HashSet();
+        list.add("A");
+        set.add("A");
+        SetUniqueList uniqueList = new SetUniqueList(list, set);
+        ListIterator it = uniqueList.listIterator();
+        it.next(); // "A"
+        it.add("A"); // attempt to add duplicate "A"
+        assertEquals(1, uniqueList.size()); // size should not change
+        assertEquals("A", uniqueList.get(0));
+        assertTrue(set.contains("A"));
+    }
+
+    @Test
+    public void testListIteratorSetUnsupported() {
+        List list = new ArrayList();
+        Set set = new HashSet();
+        SetUniqueList uniqueList = new SetUniqueList(list, set);
+        ListIterator it = uniqueList.listIterator();
+        try {
+            it.set("A");
+            fail("ListIterator.set should be unsupported");
+        } catch (UnsupportedOperationException expected) {
+        }
+    }
+
+    @Test
+    public void testSubList() {
+        List list = new ArrayList();
+        Set set = new HashSet();
+        list.add("A");
+        list.add("B");
+        list.add("C");
+        set.add("A");
+        set.add("B");
+        set.add("C");
+        SetUniqueList uniqueList = new SetUniqueList(list, set);
+        List sub = uniqueList.subList(1, 3);
+        assertEquals(2, sub.size());
+        assertEquals("B", sub.get(0));
+        assertEquals("C", sub.get(1));
+
+        // Test that modifications to sublist affect the main list and set
+        sub.add("D");
+        assertEquals(4, uniqueList.size());
+        assertEquals("D", uniqueList.get(3));
+        assertTrue(set.contains("D"));
+
+        sub.remove("C");
+        assertEquals(3, uniqueList.size());
+        assertFalse(uniqueList.contains("C"));
+        assertFalse(set.contains("C"));
+    }
+}

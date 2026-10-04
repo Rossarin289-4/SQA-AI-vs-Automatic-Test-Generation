@@ -1,0 +1,431 @@
+```java
+package org.apache.commons.math3.geometry.euclidean.threed;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import org.apache.commons.math3.geometry.euclidean.twod.SubLine;
+import java.util.ArrayList;
+import java.util.List;
+import org.apache.commons.math3.exception.MathIllegalArgumentException;
+import org.apache.commons.math3.geometry.euclidean.oned.Interval;
+import org.apache.commons.math3.geometry.euclidean.oned.IntervalsSet;
+import org.apache.commons.math3.geometry.euclidean.oned.Vector1D;
+import org.apache.commons.math3.geometry.partitioning.Region.Location;
+import org.apache.commons.math3.geometry.euclidean.oned.Euclidean1D;
+import org.apache.commons.math3.geometry.euclidean.oned.OrientedPoint;
+import org.apache.commons.math3.geometry.partitioning.AbstractSubHyperplane;
+import org.apache.commons.math3.geometry.partitioning.BSPTree;
+import org.apache.commons.math3.geometry.partitioning.Hyperplane;
+import org.apache.commons.math3.geometry.partitioning.Region;
+import org.apache.commons.math3.geometry.partitioning.Side;
+import org.apache.commons.math3.geometry.partitioning.SubHyperplane;
+import org.apache.commons.math3.util.FastMath;
+import org.apache.commons.math3.geometry.euclidean.twod.Line;
+import org.apache.commons.math3.geometry.euclidean.twod.Euclidean2D;
+import org.apache.commons.math3.geometry.euclidean.twod.Vector2D;
+
+public class SubLineTest {
+    // test methods (as many as the instructions ask for), each exactly in this form:
+    //     @Test
+    //     public void testWhatItChecks() throws Exception { ... }
+
+    @Test
+    public void testGetSegmentsEmpty() throws Exception {
+        Line line = new Line(new Vector2D(1, 1), new Vector2D(2, 2));
+        IntervalsSet region = new IntervalsSet(); // Empty region
+        SubLine subLine = new SubLine(line, region);
+        assertTrue(subLine.getSegments().isEmpty());
+    }
+
+    @Test
+    public void testGetSegmentsSingleFiniteSegment() throws Exception {
+        Line line = new Line(new Vector2D(1, 1), new Vector2D(2, 2));
+        Vector3D start = new Vector3D(1, 1, 0);
+        Vector3D end = new Vector3D(3, 3, 0);
+        SubLine subLine = new SubLine(start, end);
+        List<Segment> segments = subLine.getSegments();
+        assertEquals(1, segments.size());
+        Segment segment = segments.get(0);
+        assertEquals(start, segment.getStart());
+        assertEquals(end, segment.getEnd());
+    }
+
+    @Test
+    public void testGetSegmentsSingleInfiniteSegmentPositive() throws Exception {
+        Line line = new Line(new Vector2D(0, 0), new Vector2D(1, 0));
+        // Represents a ray starting at (1,0) and going to positive infinity
+        IntervalsSet region = new IntervalsSet(1.0, Double.POSITIVE_INFINITY);
+        SubLine subLine = new SubLine(line, region);
+        List<Segment> segments = subLine.getSegments();
+        assertEquals(1, segments.size());
+        Segment segment = segments.get(0);
+        assertEquals(line.toSpace(new Vector1D(1.0)), segment.getStart());
+        // End point should be infinite
+        assertTrue(segment.getEnd().getX() == Double.POSITIVE_INFINITY ||
+                   segment.getEnd().getY() == Double.POSITIVE_INFINITY);
+    }
+
+    @Test
+    public void testGetSegmentsSingleInfiniteSegmentNegative() throws Exception {
+        Line line = new Line(new Vector2D(0, 0), new Vector2D(1, 0));
+        // Represents a ray starting at negative infinity and ending at (1,0)
+        IntervalsSet region = new IntervalsSet(Double.NEGATIVE_INFINITY, 1.0);
+        SubLine subLine = new SubLine(line, region);
+        List<Segment> segments = subLine.getSegments();
+        assertEquals(1, segments.size());
+        Segment segment = segments.get(0);
+        // Start point should be infinite
+        assertTrue(segment.getStart().getX() == Double.NEGATIVE_INFINITY ||
+                   segment.getStart().getY() == Double.NEGATIVE_INFINITY);
+        assertEquals(line.toSpace(new Vector1D(1.0)), segment.getEnd());
+    }
+
+    @Test
+    public void testGetSegmentsTwoFiniteSegments() throws Exception {
+        Line line = new Line(new Vector2D(0, 0), new Vector2D(1, 0));
+        IntervalsSet region = new IntervalsSet(new Interval(0, 1)).union(new IntervalsSet(new Interval(2, 3)));
+        SubLine subLine = new SubLine(line, region);
+        List<Segment> segments = subLine.getSegments();
+        assertEquals(2, segments.size());
+        Segment seg1 = segments.get(0);
+        assertEquals(line.toSpace(new Vector1D(0.0)), seg1.getStart());
+        assertEquals(line.toSpace(new Vector1D(1.0)), seg1.getEnd());
+        Segment seg2 = segments.get(1);
+        assertEquals(line.toSpace(new Vector1D(2.0)), seg2.getStart());
+        assertEquals(line.toSpace(new Vector1D(3.0)), seg2.getEnd());
+    }
+
+    @Test
+    public void testIntersectionNoIntersectionInfiniteLines() throws Exception {
+        Line line1 = new Line(new Vector2D(0, 0), new Vector2D(1, 0));
+        Line line2 = new Line(new Vector2D(0, 1), new Vector2D(1, 1)); // Parallel
+        SubLine subLine1 = new SubLine(line1, new IntervalsSet());
+        SubLine subLine2 = new SubLine(line2, new IntervalsSet());
+        assertNull(subLine1.intersection(subLine2, true));
+        assertNull(subLine1.intersection(subLine2, false));
+    }
+
+    @Test
+    public void testIntersectionNoIntersectionOnRange() throws Exception {
+        Line line = new Line(new Vector2D(0, 0), new Vector2D(1, 0));
+        SubLine subLine1 = new SubLine(line, new Interval(0, 1));
+        SubLine subLine2 = new SubLine(line, new Interval(2, 3)); // Disjoint ranges
+        assertNull(subLine1.intersection(subLine2, true));
+        assertNull(subLine1.intersection(subLine2, false));
+    }
+
+    @Test
+    public void testIntersectionWithSameLine() throws Exception {
+        Line line = new Line(new Vector2D(0, 0), new Vector2D(1, 0));
+        SubLine subLine1 = new SubLine(line, new Interval(0, 2));
+        SubLine subLine2 = new SubLine(line, new Interval(1, 3));
+        Vector2D intersection = subLine1.intersection(subLine2, true);
+        assertEquals(line.toSpace(new Vector1D(1.0)), intersection);
+        intersection = subLine1.intersection(subLine2, false);
+        assertEquals(line.toSpace(new Vector1D(1.0)), intersection);
+    }
+    
+    @Test
+    public void testIntersectionAtEndpointInclude() throws Exception {
+        Line line = new Line(new Vector2D(0, 0), new Vector2D(1, 0));
+        SubLine subLine1 = new SubLine(line, new Interval(0, 1));
+        SubLine subLine2 = new SubLine(line, new Interval(1, 2));
+        Vector2D intersection = subLine1.intersection(subLine2, true);
+        assertEquals(line.toSpace(new Vector1D(1.0)), intersection);
+    }
+
+    @Test
+    public void testIntersectionAtEndpointExclude() throws Exception {
+        Line line = new Line(new Vector2D(0, 0), new Vector2D(1, 0));
+        SubLine subLine1 = new SubLine(line, new Interval(0, 1));
+        SubLine subLine2 = new SubLine(line, new Interval(1, 2));
+        Vector2D intersection = subLine1.intersection(subLine2, false);
+        assertNull(intersection);
+    }
+
+    @Test
+    public void testIntersectionAtInfiniteEndpointInclude() throws Exception {
+        Line line = new Line(new Vector2D(0, 0), new Vector2D(1, 0));
+        SubLine subLine1 = new SubLine(line, new Interval(0, Double.POSITIVE_INFINITY));
+        SubLine subLine2 = new SubLine(line, new Interval(Double.NEGATIVE_INFINITY, 0));
+        Vector2D intersection = subLine1.intersection(subLine2, true);
+        assertEquals(line.toSpace(new Vector1D(0.0)), intersection);
+    }
+
+    @Test
+    public void testIntersectionAtInfiniteEndpointExclude() throws Exception {
+        Line line = new Line(new Vector2D(0, 0), new Vector2D(1, 0));
+        SubLine subLine1 = new SubLine(line, new Interval(0, Double.POSITIVE_INFINITY));
+        SubLine subLine2 = new SubLine(line, new Interval(Double.NEGATIVE_INFINITY, 0));
+        Vector2D intersection = subLine1.intersection(subLine2, false);
+        assertNull(intersection);
+    }
+
+    @Test
+    public void testIntersectionWithDifferentLines() throws Exception {
+        Line line1 = new Line(new Vector2D(0, 0), new Vector2D(1, 0));
+        Line line2 = new Line(new Vector2D(0, 0), new Vector2D(0, 1));
+        SubLine subLine1 = new SubLine(line1, new Interval(-1, 1));
+        SubLine subLine2 = new SubLine(line2, new Interval(-1, 1));
+        Vector2D intersection = subLine1.intersection(subLine2, true);
+        assertEquals(Vector2D.ZERO, intersection);
+    }
+
+    @Test
+    public void testIntersectionWithDifferentLinesAndNonZeroIntersection() throws Exception {
+        Line line1 = new Line(new Vector2D(0, 0), new Vector2D(1, 1));
+        Line line2 = new Line(new Vector2D(0, 1), new Vector2D(1, 0)); // Intersects at (0.5, 0.5)
+        SubLine subLine1 = new SubLine(line1, new Interval(0, 1));
+        SubLine subLine2 = new SubLine(line2, new Interval(0, 1));
+        Vector2D intersection = subLine1.intersection(subLine2, true);
+        assertEquals(new Vector2D(0.5, 0.5), intersection);
+    }
+
+    @Test
+    public void testIntersectionWithDifferentLinesAndOutsideRange() throws Exception {
+        Line line1 = new Line(new Vector2D(0, 0), new Vector2D(1, 1));
+        Line line2 = new Line(new Vector2D(0, 1), new Vector2D(1, 0)); // Intersects at (0.5, 0.5)
+        SubLine subLine1 = new SubLine(line1, new Interval(0, 0.25)); // Range for line1 does not include intersection
+        SubLine subLine2 = new SubLine(line2, new Interval(0, 1));
+        Vector2D intersection = subLine1.intersection(subLine2, true);
+        assertNull(intersection);
+    }
+
+    @Test
+    public void testSideParallelAndSame() throws Exception {
+        Line line = new Line(new Vector2D(0, 0), new Vector2D(1, 0));
+        SubLine subLine = new SubLine(line, new Interval(-1, 1));
+        assertEquals(Side.HYPER, subLine.side(line));
+    }
+
+    @Test
+    public void testSideParallelAndPlus() throws Exception {
+        Line line = new Line(new Vector2D(0, 0), new Vector2D(1, 0));
+        SubLine subLine = new SubLine(line, new Interval(-1, 1));
+        Line parallelLine = new Line(new Vector2D(0, 1), new Vector2D(1, 1));
+        assertEquals(Side.PLUS, subLine.side(parallelLine));
+    }
+
+    @Test
+    public void testSideParallelAndMinus() throws Exception {
+        Line line = new Line(new Vector2D(0, 0), new Vector2D(1, 0));
+        SubLine subLine = new SubLine(line, new Interval(-1, 1));
+        Line parallelLine = new Line(new Vector2D(0, -1), new Vector2D(1, -1));
+        assertEquals(Side.MINUS, subLine.side(parallelLine));
+    }
+
+    @Test
+    public void testSideIntersectingAndPlus() throws Exception {
+        Line line = new Line(new Vector2D(0, 0), new Vector2D(1, 0));
+        SubLine subLine = new SubLine(line, new Interval(-1, 1));
+        Line intersectingLine = new Line(new Vector2D(0, 0), new Vector2D(0, 1)); // Intersects at (0,0)
+        assertEquals(Side.PLUS, subLine.side(intersectingLine));
+    }
+    
+    @Test
+    public void testSideIntersectingAndMinus() throws Exception {
+        Line line = new Line(new Line(new Vector2D(0, 0), new Vector2D(1, 0)).getReverse()); // Reverse line
+        SubLine subLine = new SubLine(line, new Interval(-1, 1));
+        Line intersectingLine = new Line(new Vector2D(0, 0), new Vector2D(0, 1)); // Intersects at (0,0)
+        assertEquals(Side.MINUS, subLine.side(intersectingLine));
+    }
+
+    @Test
+    public void testSideIntersectingWithFullRange() throws Exception {
+        Line line1 = new Line(new Vector2D(0, 0), new Vector2D(1, 0));
+        SubLine subLine1 = new SubLine(line1, new Interval(Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY));
+        Line line2 = new Line(new Vector2D(0, 0), new Vector2D(0, 1)); // Intersects at (0,0)
+        assertEquals(Side.HYPER, subLine1.side(line2));
+    }
+
+    @Test
+    public void testSplitParallelAndPlus() throws Exception {
+        Line line1 = new Line(new Vector2D(0, 0), new Vector2D(1, 0));
+        SubLine subLine1 = new SubLine(line1, new Interval(-1, 1));
+        Line line2 = new Line(new Vector2D(0, 1), new Vector2D(1, 1)); // Parallel and above
+        SplitSubHyperplane<Euclidean2D> split = subLine1.split(line2);
+        assertNull(split.getPlus());
+        assertNotNull(split.getMinus());
+        assertEquals(subLine1, split.getMinus());
+    }
+
+    @Test
+    public void testSplitParallelAndMinus() throws Exception {
+        Line line1 = new Line(new Line(new Vector2D(0, 0), new Vector2D(1, 0)).getReverse()); // Reversed line
+        SubLine subLine1 = new SubLine(line1, new Interval(-1, 1));
+        Line line2 = new Line(new Vector2D(0, 1), new Vector2D(1, 1)); // Parallel and above the reversed line
+        SplitSubHyperplane<Euclidean2D> split = subLine1.split(line2);
+        assertNull(split.getMinus());
+        assertNotNull(split.getPlus());
+        assertEquals(subLine1, split.getPlus());
+    }
+
+    @Test
+    public void testSplitIntersecting() throws Exception {
+        Line line1 = new Line(new Vector2D(0, 0), new Vector2D(1, 0));
+        SubLine subLine1 = new SubLine(line1, new Interval(-2, 2));
+        Line line2 = new Line(new Vector2D(0, 0), new Vector2D(0, 1)); // Intersects at (0,0)
+        SplitSubHyperplane<Euclidean2D> split = subLine1.split(line2);
+
+        assertNotNull(split.getPlus());
+        assertNotNull(split.getMinus());
+
+        // Check subLine on the plus side of line2
+        Line plusLine = (Line) split.getPlus().getHyperplane();
+        IntervalsSet plusRegion = (IntervalsSet) split.getPlus().getRemainingRegion();
+        assertEquals(1, plusRegion.asList().size());
+        assertEquals(0.0, plusRegion.asList().get(0).getInf(), 1e-9);
+        assertEquals(2.0, plusRegion.asList().get(0).getSup(), 1e-9);
+        assertTrue(plusLine.isParallelTo(line1));
+        assertTrue(plusLine.sameOrientationAs(line1));
+
+        // Check subLine on the minus side of line2
+        Line minusLine = (Line) split.getMinus().getHyperplane();
+        IntervalsSet minusRegion = (IntervalsSet) split.getMinus().getRemainingRegion();
+        assertEquals(1, minusRegion.asList().size());
+        assertEquals(-2.0, minusRegion.asList().get(0).getInf(), 1e-9);
+        assertEquals(0.0, minusRegion.asList().get(0).getSup(), 1e-9);
+        assertTrue(minusLine.isParallelTo(line1));
+        assertTrue(minusLine.sameOrientationAs(line1));
+    }
+
+    @Test
+    public void testSplitIntersectingWithLimitedRange() throws Exception {
+        Line line1 = new Line(new Vector2D(0, 0), new Vector2D(1, 0));
+        SubLine subLine1 = new SubLine(line1, new Interval(0, 1));
+        Line line2 = new Line(new Vector2D(0, 0), new Vector2D(0, 1)); // Intersects at (0,0)
+        SplitSubHyperplane<Euclidean2D> split = subLine1.split(line2);
+
+        assertNotNull(split.getPlus());
+        assertNotNull(split.getMinus());
+
+        // Check subLine on the plus side of line2
+        IntervalsSet plusRegion = (IntervalsSet) split.getPlus().getRemainingRegion();
+        assertEquals(1, plusRegion.asList().size());
+        assertEquals(0.0, plusRegion.asList().get(0).getInf(), 1e-9);
+        assertEquals(1.0, plusRegion.asList().get(0).getSup(), 1e-9);
+
+        // Check subLine on the minus side of line2
+        IntervalsSet minusRegion = (IntervalsSet) split.getMinus().getRemainingRegion();
+        assertEquals(1, minusRegion.asList().size());
+        assertEquals(0.0, minusRegion.asList().get(0).getInf(), 1e-9);
+        assertEquals(0.0, minusRegion.asList().get(0).getSup(), 1e-9);
+    }
+
+    @Test
+    public void testBuildIntervalSetFromSamePoints() throws Exception {
+        Vector3D p = new Vector3D(1, 2, 3);
+        try {
+            SubLine.buildIntervalSet(p, p);
+            fail("Should have thrown MathIllegalArgumentException");
+        } catch (MathIllegalArgumentException e) {
+            // Expected
+        }
+    }
+    
+    @Test
+    public void testBuildIntervalSetFromDifferentPoints() throws Exception {
+        Vector3D p1 = new Vector3D(1, 1, 0);
+        Vector3D p2 = new Vector3D(2, 2, 0);
+        IntervalsSet intervalSet = SubLine.buildIntervalSet(p1, p2);
+        assertNotNull(intervalSet);
+        assertEquals(0.0, intervalSet.getInf(), 1e-9);
+        assertEquals(1.0, intervalSet.getSup(), 1e-9);
+    }
+
+     @Test
+    public void testConstructorWithSegment() throws Exception {
+        Vector3D start = new Vector3D(1, 1, 0);
+        Vector3D end = new Vector3D(2, 2, 0);
+        Segment segment = new Segment(start, end, new Line(start, end));
+        SubLine subLine = new SubLine(segment);
+        List<Segment> segments = subLine.getSegments();
+        assertEquals(1, segments.size());
+        Segment returnedSegment = segments.get(0);
+        assertEquals(start, returnedSegment.getStart());
+        assertEquals(end, returnedSegment.getEnd());
+    }
+
+    @Test
+    public void testConstructorWithSegmentSamePoints() throws Exception {
+        Vector3D p = new Vector3D(1, 1, 0);
+        Segment segment = new Segment(p, p, new Line(p, p)); // Line constructor with same points will throw
+        try {
+            new SubLine(segment);
+            fail("Should have thrown MathIllegalArgumentException");
+        } catch (MathIllegalArgumentException e) {
+            // Expected
+        }
+    }
+
+    @Test
+    public void testIntersectionWithLineThatDoesNotIntersect() throws Exception {
+        Line line1 = new Line(new Vector2D(0, 0), new Vector2D(1, 0));
+        SubLine subLine1 = new SubLine(line1, new Interval(-1, 1));
+
+        Line line2 = new Line(new Vector2D(0, 2), new Vector2D(1, 2)); // Parallel and above
+        SubLine subLine2 = new SubLine(line2, new Interval(-1, 1));
+
+        assertNull(subLine1.intersection(subLine2, true));
+    }
+
+    @Test
+    public void testIntersectionWithLineThatDoesNotIntersectFalse() throws Exception {
+        Line line1 = new Line(new Vector2D(0, 0), new Vector2D(1, 0));
+        SubLine subLine1 = new SubLine(line1, new Interval(-1, 1));
+
+        Line line2 = new Line(new Vector2D(0, 2), new Vector2D(1, 2)); // Parallel and above
+        SubLine subLine2 = new SubLine(line2, new Interval(-1, 1));
+
+        assertNull(subLine1.intersection(subLine2, false));
+    }
+
+    @Test
+    public void testSideWithNonIntersectingLine() throws Exception {
+        Line line1 = new Line(new Vector2D(0, 0), new Vector2D(1, 0));
+        SubLine subLine1 = new SubLine(line1, new Interval(-1, 1));
+        Line line2 = new Line(new Vector2D(0, 2), new Vector2D(1, 2)); // Parallel and above
+        assertEquals(Side.PLUS, subLine1.side(line2));
+    }
+}
+```
+
+1. SOURCE CODE ANALYSIS - The tests cover `getSegments`, `intersection`, `side`, and `split` methods of the `SubLine` class. They explore scenarios with empty, single-segment, multi-segment, and infinite sub-lines, as well as various intersection and splitting conditions with parallel and intersecting lines.
+2. TEST CASE DESIGN -
+    - testGetSegmentsEmpty: Empty region, expected empty list of segments.
+    - testGetSegmentsSingleFiniteSegment: Finite segment endpoints, expected one segment with correct start/end.
+    - testGetSegmentsSingleInfiniteSegmentPositive: Infinite ray (positive), expected one segment with finite start and infinite end.
+    - testGetSegmentsSingleInfiniteSegmentNegative: Infinite ray (negative), expected one segment with infinite start and finite end.
+    - testGetSegmentsTwoFiniteSegments: Two disjoint finite segments, expected two segments with correct endpoints.
+    - testIntersectionNoIntersectionInfiniteLines: Parallel lines, expected null intersection.
+    - testIntersectionNoIntersectionOnRange: Disjoint ranges on the same line, expected null intersection.
+    - testIntersectionWithSameLine: Overlapping ranges on the same line, expected intersection point.
+    - testIntersectionAtEndpointInclude: Intersection at endpoint, include=true, expected endpoint.
+    - testIntersectionAtEndpointExclude: Intersection at endpoint, include=false, expected null.
+    - testIntersectionAtInfiniteEndpointInclude: Intersection at infinite endpoint, include=true, expected infinite endpoint.
+    - testIntersectionAtInfiniteEndpointExclude: Intersection at infinite endpoint, include=false, expected null.
+    - testIntersectionWithDifferentLines: Intersecting lines, ranges overlap at origin, expected origin.
+    - testIntersectionWithDifferentLinesAndNonZeroIntersection: Intersecting lines, ranges overlap at (0.5, 0.5), expected (0.5, 0.5).
+    - testIntersectionWithDifferentLinesAndOutsideRange: Intersecting lines, range of one does not include intersection, expected null.
+    - testSideParallelAndSame: Parallel lines, same orientation, expected HYPER.
+    - testSideParallelAndPlus: Parallel lines, different orientation, expected PLUS.
+    - testSideParallelAndMinus: Parallel lines, different orientation, expected MINUS.
+    - testSideIntersectingAndPlus: Intersecting lines, intersection on plus side, expected PLUS.
+    - testSideIntersectingAndMinus: Intersecting lines (reversed), intersection on minus side, expected MINUS.
+    - testSideIntersectingWithFullRange: Intersecting lines, one with full range, expected HYPER.
+    - testSplitParallelAndPlus: Split by parallel line above, expected null plus, same minus.
+    - testSplitParallelAndMinus: Split by parallel line below (reversed line), expected same plus, null minus.
+    - testSplitIntersecting: Split by intersecting line, expected two sub-lines with correct ranges.
+    - testSplitIntersectingWithLimitedRange: Split by intersecting line with limited range, expected sub-lines with clipped ranges.
+    - testBuildIntervalSetFromSamePoints: Building interval set with same start/end points, expected exception.
+    - testBuildIntervalSetFromDifferentPoints: Building interval set with different points, expected correct interval.
+    - testConstructorWithSegment: Constructing SubLine with a Segment, expected correct sub-line.
+    - testConstructorWithSegmentSamePoints: Constructing SubLine with segment of same points, expected exception.
+    - testIntersectionWithLineThatDoesNotIntersect: Non-intersecting parallel lines, expected null.
+    - testIntersectionWithLineThatDoesNotIntersectFalse: Non-intersecting parallel lines (false include), expected null.
+    - testSideWithNonIntersectingLine: Side check with non-intersecting parallel line, expected PLUS.
+4. DEFECT DETECTION STRATEGY - Tests focus on the precise calculation of intersections and segment boundaries, and the correct classification of sides and splits based on the relative positions and ranges of sub-lines.
+5. SUMMARY - 30 tests.
+6. LIMITATIONS - The tests assume correct implementation of underlying geometry primitives like `Line`, `Vector2D`, and `IntervalsSet`.
+Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.
+```

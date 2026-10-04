@@ -1,0 +1,214 @@
+ 
+
+Winvalid
+
+```java
+package org.jsoup.helper;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import org.jsoup.nodes.Attribute;
+import org.jsoup.nodes.Attributes;
+import org.jsoup.select.NodeTraversor;
+import org.jsoup.select.NodeVisitor;
+import org.w3c.dom.Comment;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.Text;
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.parsers.ParserConfigurationException;
+import javax.xml.transform.Transformer;
+import javax.xml.transform.TransformerException;
+import javax.xml.transform.TransformerFactory;
+import javax.xml.transform.dom.DOMSource;
+import javax.xml.transform.stream.StreamResult;
+import java.io.StringWriter;
+import java.util.HashMap;
+import java.util.Stack;
+
+public class W3CDomTest {
+    @Test
+    public void testConvertCreatesDocumentElement() throws Exception {
+        org.jsoup.nodes.Document input = org.jsoup.Jsoup.parse("<html><body><p>Hi</p></body></html>");
+        Document output = DocumentBuilderFactory.newInstance().newDocumentBuilder().newDocument();
+        new W3CDom().convert(input, output);
+        assertEquals("html", output.getDocumentElement().getTagName());
+    }
+
+    @Test
+    public void testFromJsoupBuildsDocument() throws Exception {
+        org.jsoup.nodes.Document input = org.jsoup.Jsoup.parse("<html><body><p>Hi</p></body></html>");
+        Document output = new W3CDom().fromJsoup(input);
+        assertEquals("html", output.getDocumentElement().getTagName());
+        assertEquals("Hi", output.getElementsByTagName("p").item(0).getTextContent());
+    }
+
+    @Test
+    public void testFromJsoupNullInputThrows() throws Exception {
+        try {
+            new W3CDom().fromJsoup(null);
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) { }
+    }
+
+    @Test
+    public void testConvertPreservesDocumentLocation() throws Exception {
+        org.jsoup.nodes.Document input = org.jsoup.Jsoup.parse("<html><body></body></html>", "https://example.org/page");
+        Document output = DocumentBuilderFactory.newInstance().newDocumentBuilder().newDocument();
+        new W3CDom().convert(input, output);
+        assertEquals("https://example.org/page", output.getDocumentURI());
+    }
+
+    @Test
+    public void testConvertBlankLocationLeavesUriUnset() throws Exception {
+        org.jsoup.nodes.Document input = org.jsoup.Jsoup.parse("<html><body></body></html>");
+        Document output = DocumentBuilderFactory.newInstance().newDocumentBuilder().newDocument();
+        new W3CDom().convert(input, output);
+        assertNull(output.getDocumentURI());
+    }
+
+    @Test
+    public void testConvertCopiesAttributes() throws Exception {
+        org.jsoup.nodes.Document input = org.jsoup.Jsoup.parse("<html><body><p id='x' title='t'>Hi</p></body></html>");
+        Document output = DocumentBuilderFactory.newInstance().newDocumentBuilder().newDocument();
+        new W3CDom().convert(input, output);
+        Element paragraph = (Element) output.getElementsByTagName("p").item(0);
+        assertEquals("x", paragraph.getAttribute("id"));
+        assertEquals("t", paragraph.getAttribute("title"));
+    }
+
+    @Test
+    public void testConvertDropsInvalidCharactersFromAttributeName() throws Exception {
+        org.jsoup.nodes.Document input = org.jsoup.Jsoup.parse("<html><body></body></html>");
+        input.select("body").first().attr("bad name", "value");
+        Document output = DocumentBuilderFactory.newInstance().newDocumentBuilder().newDocument();
+        new W3CDom().convert(input, output);
+        assertFalse(output.getElementsByTagName("body").item(0).hasAttributes());
+    }
+
+    @Test
+    public void testConvertCopiesTextAndComment() throws Exception {
+        org.jsoup.nodes.Document input = org.jsoup.Jsoup.parse("<html><body><!--note-->text</body></html>");
+        Document output = DocumentBuilderFactory.newInstance().newDocumentBuilder().newDocument();
+        new W3CDom().convert(input, output);
+        Element body = (Element) output.getElementsByTagName("body").item(0);
+        assertEquals("note", body.getChildNodes().item(0).getNodeValue());
+        assertEquals("text", body.getChildNodes().item(1).getNodeValue());
+    }
+
+    @Test
+    public void testConvertCopiesDataNode() throws Exception {
+        org.jsoup.nodes.Document input = org.jsoup.Jsoup.parse("<html><body><script>if (a < b) x();</script></body></html>");
+        Document output = DocumentBuilderFactory.newInstance().newDocumentBuilder().newDocument();
+        new W3CDom().convert(input, output);
+        assertEquals("if (a < b) x();", output.getElementsByTagName("script").item(0).getTextContent());
+    }
+
+    @Test
+    public void testConvertAppliesDefaultNamespace() throws Exception {
+        org.jsoup.nodes.Document input = org.jsoup.Jsoup.parse("<root xmlns='urn:sample'><child/></root>");
+        Document output = DocumentBuilderFactory.newInstance().newDocumentBuilder().newDocument();
+        new W3CDom().convert(input, output);
+        assertEquals("urn:sample", output.getDocumentElement().getNamespaceURI());
+        assertEquals("urn:sample", output.getElementsByTagName("child").item(0).getNamespaceURI());
+    }
+
+    @Test
+    public void testConvertAppliesPrefixedNamespace() throws Exception {
+        org.jsoup.nodes.Document input = org.jsoup.Jsoup.parse("<p:root xmlns:p='urn:sample'><p:child/></p:root>");
+        Document output = DocumentBuilderFactory.newInstance().newDocumentBuilder().newDocument();
+        new W3CDom().convert(input, output);
+        assertEquals("urn:sample", output.getDocumentElement().getNamespaceURI());
+        assertEquals("p:child", output.getElementsByTagName("p:child").item(0).getNodeName());
+    }
+
+    @Test
+    public void testConvertUsesNestedNamespaceDeclaration() throws Exception {
+        org.jsoup.nodes.Document input = org.jsoup.Jsoup.parse("<root><p:child xmlns:p='urn:nested'/></root>");
+        Document output = DocumentBuilderFactory.newInstance().newDocumentBuilder().newDocument();
+        new W3CDom().convert(input, output);
+        assertEquals("urn:nested", output.getElementsByTagName("p:child").item(0).getNamespaceURI());
+    }
+
+    @Test
+    public void testConvertDoesNotLeakNestedNamespace() throws Exception {
+        org.jsoup.nodes.Document input = org.jsoup.Jsoup.parse("<root><branch xmlns:p='urn:nested'><p:inside/></branch><p:outside/></root>");
+        Document output = DocumentBuilderFactory.newInstance().newDocumentBuilder().newDocument();
+        new W3CDom().convert(input, output);
+        assertNull(output.getElementsByTagName("p:outside").item(0).getNamespaceURI());
+    }
+
+    @Test
+    public void testAsStringIncludesDocumentElementAndText() throws Exception {
+        org.jsoup.nodes.Document input = org.jsoup.Jsoup.parse("<html><body><p>Hi</p></body></html>");
+        String serialized = new W3CDom().asString(new W3CDom().fromJsoup(input));
+        assertTrue(serialized.contains("<p>Hi</p>"));
+    }
+
+    @Test
+    public void testAsStringSerializesEmptyElement() throws Exception {
+        org.jsoup.nodes.Document input = org.jsoup.Jsoup.parse("<html><body><br></body></html>");
+        String serialized = new W3CDom().asString(new W3CDom().fromJsoup(input));
+        assertTrue(serialized.contains("br"));
+    }
+
+    @Test
+    public void testConvertedChildIsNestedUnderParent() throws Exception {
+        org.jsoup.nodes.Document input = org.jsoup.Jsoup.parse("<html><body><div><span>x</span></div></body></html>");
+        Document output = new W3CDom().fromJsoup(input);
+        Element span = (Element) output.getElementsByTagName("span").item(0);
+        assertEquals("div", span.getParentNode().getNodeName());
+    }
+
+    @Test
+    public void testConversionPreservesSiblingOrder() throws Exception {
+        org.jsoup.nodes.Document input = org.jsoup.Jsoup.parse("<html><body><i>first</i><b>last</b></body></html>");
+        Document output = new W3CDom().fromJsoup(input);
+        Element body = (Element) output.getElementsByTagName("body").item(0);
+        assertEquals("i", body.getChildNodes().item(0).getNodeName());
+        assertEquals("b", body.getChildNodes().item(1).getNodeName());
+    }
+
+    @Test
+    public void testConvertCreatesNoAdditionalDocumentRoots() throws Exception {
+        org.jsoup.nodes.Document input = org.jsoup.Jsoup.parse("<html><body></body></html>");
+        Document output = DocumentBuilderFactory.newInstance().newDocumentBuilder().newDocument();
+        new W3CDom().convert(input, output);
+        assertEquals(1, output.getChildNodes().getLength());
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+Method selection is exploratory because no target method was specified. Tests exercise conversion, namespace inheritance, attribute filtering, node copying and serialization.
+
+### 2. TEST CASE DESIGN
+- `testConvertCreatesDocumentElement`: ordinary HTML input; conversion appends the source root element.
+- `testFromJsoupBuildsDocument`: HTML and text input; verifies the resulting root and copied text.
+- `testFromJsoupNullInputThrows`: null input; `fromJsoup` validates non-null.
+- `testConvertPreservesDocumentLocation`: nonblank location; conversion assigns it as the document URI.
+- `testConvertBlankLocationLeavesUriUnset`: blank location; conversion skips assigning the URI.
+- `testConvertCopiesAttributes`: valid attribute keys and values are copied.
+- `testConvertDropsInvalidCharactersFromAttributeName`: the whitespace in the key is stripped, leaving an invalid name that is omitted.
+- `testConvertCopiesTextAndComment`: comment and text nodes are converted as corresponding DOM child nodes.
+- `testConvertCopiesDataNode`: script data is emitted as text containing the original data.
+- `testConvertAppliesDefaultNamespace`: default namespace applies to root and descendant elements.
+- `testConvertAppliesPrefixedNamespace`: declared prefix resolves to the configured namespace URI.
+- `testConvertUsesNestedNamespaceDeclaration`: nested declaration is available when creating its element.
+- `testConvertDoesNotLeakNestedNamespace`: nested namespace scope is popped before a sibling is visited.
+- `testAsStringIncludesDocumentElementAndText`: serialization contains the converted paragraph and text.
+- `testAsStringSerializesEmptyElement`: serialization contains the converted empty element name.
+- `testConvertedChildIsNestedUnderParent`: traversal attaches the span beneath its source parent.
+- `testConversionPreservesSiblingOrder`: traversal preserves the first and last sibling positions.
+- `testConvertCreatesNoAdditionalDocumentRoots`: conversion appends one root to a fresh document.
+
+### 4. DEFECT DETECTION STRATEGY
+The tests pin observable conversion behavior across namespace scope, DOM hierarchy, copied node content, attributes, location and serialization.
+
+### 5. SUMMARY
+18 tests.
+
+### 6. LIMITATIONS
+No faulty source was provided, so potential failure behavior cannot be predicted.  
+Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

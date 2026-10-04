@@ -1,0 +1,662 @@
+package org.apache.commons.math.util;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.math.BigDecimal;
+import java.util.Arrays;
+
+public class MathUtilsTest {
+
+    @Test
+    public void testAddAndCheckIntPositiveOverflow() {
+        try {
+            MathUtils.addAndCheck(Integer.MAX_VALUE, 1);
+            fail("overflow");
+        } catch (ArithmeticException e) {
+            // expected
+        }
+    }
+
+    @Test
+    public void testAddAndCheckIntNegativeOverflow() {
+        try {
+            MathUtils.addAndCheck(Integer.MIN_VALUE, -1);
+            fail("overflow");
+        } catch (ArithmeticException e) {
+            // expected
+        }
+    }
+
+    @Test
+    public void testAddAndCheckIntNoOverflow() {
+        assertEquals(0, MathUtils.addAndCheck(0, 0));
+        assertEquals(Integer.MAX_VALUE, MathUtils.addAndCheck(Integer.MAX_VALUE - 1, 1));
+        assertEquals(Integer.MIN_VALUE, MathUtils.addAndCheck(Integer.MIN_VALUE + 1, -1));
+    }
+
+    @Test
+    public void testAddAndCheckLongPositiveOverflow() {
+        try {
+            MathUtils.addAndCheck(Long.MAX_VALUE, 1);
+            fail("overflow");
+        } catch (ArithmeticException e) {
+            // expected
+        }
+    }
+
+    @Test
+    public void testAddAndCheckLongNegativeOverflow() {
+        try {
+            MathUtils.addAndCheck(Long.MIN_VALUE, -1);
+            fail("overflow");
+        } catch (ArithmeticException e) {
+            // expected
+        }
+    }
+
+    @Test
+    public void testAddAndCheckLongNoOverflow() {
+        assertEquals(0L, MathUtils.addAndCheck(0L, 0L));
+        assertEquals(Long.MAX_VALUE, MathUtils.addAndCheck(Long.MAX_VALUE - 1L, 1L));
+        assertEquals(Long.MIN_VALUE, MathUtils.addAndCheck(Long.MIN_VALUE + 1L, -1L));
+    }
+
+    @Test
+    public void testBinomialCoefficientBasic() {
+        assertEquals(1L, MathUtils.binomialCoefficient(0, 0));
+        assertEquals(1L, MathUtils.binomialCoefficient(1, 0));
+        assertEquals(1L, MathUtils.binomialCoefficient(1, 1));
+        assertEquals(2L, MathUtils.binomialCoefficient(2, 1));
+        assertEquals(6L, MathUtils.binomialCoefficient(4, 2));
+    }
+
+    @Test
+    public void testBinomialCoefficientSymmetry() {
+        assertEquals(MathUtils.binomialCoefficient(10, 3), MathUtils.binomialCoefficient(10, 7));
+        assertEquals(MathUtils.binomialCoefficient(50, 5), MathUtils.binomialCoefficient(50, 45));
+    }
+
+    @Test
+    public void testBinomialCoefficientLargeN() {
+        // Largest n for which all coefficients fit in a long is 66
+        assertEquals(66L, MathUtils.binomialCoefficient(66, 1));
+        assertEquals(1L, MathUtils.binomialCoefficient(66, 66));
+        // This one is known to fit
+        assertEquals(7272201038819128600L, MathUtils.binomialCoefficient(66, 33));
+    }
+    
+    @Test(expected = IllegalArgumentException.class)
+    public void testBinomialCoefficientNegativeN() {
+        MathUtils.binomialCoefficient(-1, 0);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testBinomialCoefficientKTooLarge() {
+        MathUtils.binomialCoefficient(5, 6);
+    }
+
+    @Test
+    public void testBinomialCoefficientDoubleBasic() {
+        assertEquals(1.0, MathUtils.binomialCoefficientDouble(0, 0), 1e-15);
+        assertEquals(1.0, MathUtils.binomialCoefficientDouble(1, 0), 1e-15);
+        assertEquals(1.0, MathUtils.binomialCoefficientDouble(1, 1), 1e-15);
+        assertEquals(2.0, MathUtils.binomialCoefficientDouble(2, 1), 1e-15);
+        assertEquals(6.0, MathUtils.binomialCoefficientDouble(4, 2), 1e-15);
+    }
+
+    @Test
+    public void testBinomialCoefficientDoubleSymmetry() {
+        assertEquals(MathUtils.binomialCoefficientDouble(10, 3), MathUtils.binomialCoefficientDouble(10, 7), 1e-15);
+        assertEquals(MathUtils.binomialCoefficientDouble(50, 5), MathUtils.binomialCoefficientDouble(50, 45), 1e-15);
+    }
+
+    @Test
+    public void testBinomialCoefficientDoubleLargeN() {
+        // For n = 1029, result fits in double
+        assertEquals(1.3579615647990807E301, MathUtils.binomialCoefficientDouble(1029, 514), 1e15);
+        // For n = 1030, it might overflow
+        assertEquals(Double.POSITIVE_INFINITY, MathUtils.binomialCoefficientDouble(1030, 515), 1e15);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testBinomialCoefficientDoubleNegativeN() {
+        MathUtils.binomialCoefficientDouble(-1, 0);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testBinomialCoefficientDoubleKTooLarge() {
+        MathUtils.binomialCoefficientDouble(5, 6);
+    }
+
+    @Test
+    public void testBinomialCoefficientLogBasic() {
+        assertEquals(0.0, MathUtils.binomialCoefficientLog(0, 0), 1e-15);
+        assertEquals(Math.log(1.0), MathUtils.binomialCoefficientLog(1, 0), 1e-15);
+        assertEquals(Math.log(1.0), MathUtils.binomialCoefficientLog(1, 1), 1e-15);
+        assertEquals(Math.log(2.0), MathUtils.binomialCoefficientLog(2, 1), 1e-15);
+        assertEquals(Math.log(6.0), MathUtils.binomialCoefficientLog(4, 2), 1e-15);
+    }
+
+    @Test
+    public void testBinomialCoefficientLogSymmetry() {
+        assertEquals(MathUtils.binomialCoefficientLog(10, 3), MathUtils.binomialCoefficientLog(10, 7), 1e-15);
+        assertEquals(MathUtils.binomialCoefficientLog(50, 5), MathUtils.binomialCoefficientLog(50, 45), 1e-15);
+    }
+    
+    @Test
+    public void testBinomialCoefficientLogLargeN() {
+        // For n=1030, sum logs
+        assertEquals(Math.log(2.7159231295981614E301), MathUtils.binomialCoefficientLog(1030, 515), 1e15);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testBinomialCoefficientLogNegativeN() {
+        MathUtils.binomialCoefficientLog(-1, 0);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testBinomialCoefficientLogKTooLarge() {
+        MathUtils.binomialCoefficientLog(5, 6);
+    }
+
+    @Test
+    public void testCosh() {
+        assertEquals(Math.cosh(0.0), MathUtils.cosh(0.0), 1e-15);
+        assertEquals(Math.cosh(1.0), MathUtils.cosh(1.0), 1e-15);
+        assertEquals(Math.cosh(-1.0), MathUtils.cosh(-1.0), 1e-15);
+    }
+
+    @Test
+    public void testEqualsDoubleNaN() {
+        assertTrue(MathUtils.equals(Double.NaN, Double.NaN));
+        assertFalse(MathUtils.equals(Double.NaN, 1.0));
+        assertFalse(MathUtils.equals(1.0, Double.NaN));
+    }
+
+    @Test
+    public void testEqualsDouble() {
+        assertTrue(MathUtils.equals(1.0, 1.0));
+        assertTrue(MathUtils.equals(-1.0, -1.0));
+        assertFalse(MathUtils.equals(1.0, -1.0));
+        assertFalse(MathUtils.equals(1.0, 2.0));
+    }
+
+    @Test
+    public void testEqualsDoubleArrayBasic() {
+        assertTrue(MathUtils.equals(null, null));
+        assertFalse(MathUtils.equals(new double[]{1.0}, null));
+        assertFalse(MathUtils.equals(null, new double[]{1.0}));
+        assertTrue(MathUtils.equals(new double[]{}, new double[]{}));
+        assertTrue(MathUtils.equals(new double[]{1.0, 2.0}, new double[]{1.0, 2.0}));
+    }
+    
+    @Test
+    public void testEqualsDoubleArrayDifferentLength() {
+        assertFalse(MathUtils.equals(new double[]{1.0}, new double[]{1.0, 2.0}));
+        assertFalse(MathUtils.equals(new double[]{1.0, 2.0}, new double[]{1.0}));
+    }
+
+    @Test
+    public void testEqualsDoubleArrayDifferentElements() {
+        assertFalse(MathUtils.equals(new double[]{1.0, 3.0}, new double[]{1.0, 2.0}));
+        assertFalse(MathUtils.equals(new double[]{1.0, 2.0}, new double[]{1.0, 3.0}));
+    }
+
+    @Test
+    public void testFactorialBasic() {
+        assertEquals(1L, MathUtils.factorial(0));
+        assertEquals(1L, MathUtils.factorial(1));
+        assertEquals(2L, MathUtils.factorial(2));
+        assertEquals(6L, MathUtils.factorial(3));
+        assertEquals(24L, MathUtils.factorial(4));
+    }
+
+    @Test
+    public void testFactorialMaxLong() {
+        assertEquals(20, MathUtils.factorials.length - 1); // Max value that fits in long
+        assertEquals(2432902008176640000L, MathUtils.factorial(20));
+    }
+
+    @Test(expected = ArithmeticException.class)
+    public void testFactorialOverflow() {
+        MathUtils.factorial(21);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testFactorialNegative() {
+        MathUtils.factorial(-1);
+    }
+
+    @Test
+    public void testFactorialDoubleBasic() {
+        assertEquals(1.0, MathUtils.factorialDouble(0), 1e-15);
+        assertEquals(1.0, MathUtils.factorialDouble(1), 1e-15);
+        assertEquals(2.0, MathUtils.factorialDouble(2), 1e-15);
+        assertEquals(6.0, MathUtils.factorialDouble(3), 1e-15);
+        assertEquals(24.0, MathUtils.factorialDouble(4), 1e-15);
+    }
+    
+    @Test
+    public void testFactorialDoubleMaxDouble() {
+        // Max n for which n! fits in double is 170
+        assertEquals(Math.exp(MathUtils.factorialLog(170)), MathUtils.factorialDouble(170), 1e15);
+        assertEquals(Double.POSITIVE_INFINITY, MathUtils.factorialDouble(171), 1e15);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testFactorialDoubleNegative() {
+        MathUtils.factorialDouble(-1);
+    }
+
+    @Test
+    public void testFactorialLogBasic() {
+        assertEquals(Math.log(1.0), MathUtils.factorialLog(0), 1e-15);
+        assertEquals(Math.log(1.0), MathUtils.factorialLog(1), 1e-15);
+        assertEquals(Math.log(2.0), MathUtils.factorialLog(2), 1e-15);
+        assertEquals(Math.log(6.0), MathUtils.factorialLog(3), 1e-15);
+    }
+
+    @Test
+    public void testFactorialLogLargeN() {
+        // For n=170, check against its double representation
+        assertEquals(MathUtils.factorialLog(170), Math.log(MathUtils.factorialDouble(170)), 1e-15);
+        // For n=171, check against log sum
+        double logSum = 0;
+        for (int i = 2; i <= 171; i++) {
+            logSum += Math.log((double)i);
+        }
+        assertEquals(logSum, MathUtils.factorialLog(171), 1e-15);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testFactorialLogNegative() {
+        MathUtils.factorialLog(-1);
+    }
+
+    @Test
+    public void testGcdBasic() {
+        assertEquals(0, MathUtils.gcd(0, 0)); // Special case handling
+        assertEquals(5, MathUtils.gcd(5, 0));
+        assertEquals(5, MathUtils.gcd(0, 5));
+        assertEquals(1, MathUtils.gcd(5, 7));
+        assertEquals(2, MathUtils.gcd(6, 9));
+        assertEquals(3, MathUtils.gcd(-6, 9));
+        assertEquals(3, MathUtils.gcd(6, -9));
+        assertEquals(3, MathUtils.gcd(-6, -9));
+    }
+
+    @Test
+    public void testGcdLarge() {
+        assertEquals(1073741824, MathUtils.gcd(Integer.MAX_VALUE - 1, Integer.MAX_VALUE / 2));
+    }
+
+    @Test
+    public void testGcdMaxInt() {
+        assertEquals(Integer.MAX_VALUE, MathUtils.gcd(Integer.MAX_VALUE, Integer.MAX_VALUE));
+        assertEquals(1, MathUtils.gcd(Integer.MAX_VALUE, Integer.MAX_VALUE - 1));
+    }
+
+    @Test
+    public void testHashDouble() {
+        assertEquals(Double.valueOf(1.0).hashCode(), MathUtils.hash(1.0));
+        assertEquals(Double.valueOf(0.0).hashCode(), MathUtils.hash(0.0));
+        assertEquals(Double.valueOf(-1.0).hashCode(), MathUtils.hash(-1.0));
+        assertEquals(Double.valueOf(Double.NaN).hashCode(), MathUtils.hash(Double.NaN));
+    }
+
+    @Test
+    public void testHashDoubleArrayBasic() {
+        assertEquals(Arrays.hashCode(null), MathUtils.hash(null));
+        assertEquals(Arrays.hashCode(new double[]{}), MathUtils.hash(new double[]{}));
+        assertEquals(Arrays.hashCode(new double[]{1.0, 2.0}), MathUtils.hash(new double[]{1.0, 2.0}));
+    }
+
+    @Test
+    public void testIndicatorByte() {
+        assertEquals((byte)1, MathUtils.indicator((byte)1));
+        assertEquals((byte)-1, MathUtils.indicator((byte)-1));
+        assertEquals((byte)0, MathUtils.indicator((byte)0));
+    }
+
+    @Test
+    public void testIndicatorDouble() {
+        assertEquals(1.0, MathUtils.indicator(1.0), 1e-15);
+        assertEquals(-1.0, MathUtils.indicator(-1.0), 1e-15);
+        assertEquals(0.0, MathUtils.indicator(0.0), 1e-15);
+        assertTrue(Double.isNaN(MathUtils.indicator(Double.NaN)));
+    }
+
+    @Test
+    public void testIndicatorFloat() {
+        assertEquals(1.0F, MathUtils.indicator(1.0F), 1e-15);
+        assertEquals(-1.0F, MathUtils.indicator(-1.0F), 1e-15);
+        assertEquals(0.0F, MathUtils.indicator(0.0F), 1e-15);
+        assertTrue(Float.isNaN(MathUtils.indicator(Float.NaN)));
+    }
+
+    @Test
+    public void testIndicatorInt() {
+        assertEquals(1, MathUtils.indicator(1));
+        assertEquals(-1, MathUtils.indicator(-1));
+        assertEquals(0, MathUtils.indicator(0));
+    }
+
+    @Test
+    public void testIndicatorLong() {
+        assertEquals(1L, MathUtils.indicator(1L));
+        assertEquals(-1L, MathUtils.indicator(-1L));
+        assertEquals(0L, MathUtils.indicator(0L));
+    }
+
+    @Test
+    public void testIndicatorShort() {
+        assertEquals((short)1, MathUtils.indicator((short)1));
+        assertEquals((short)-1, MathUtils.indicator((short)-1));
+        assertEquals((short)0, MathUtils.indicator((short)0));
+    }
+    
+    @Test
+    public void testLcmBasic() {
+        assertEquals(0, MathUtils.lcm(0, 0));
+        assertEquals(5, MathUtils.lcm(5, 0));
+        assertEquals(5, MathUtils.lcm(0, 5));
+        assertEquals(35, MathUtils.lcm(5, 7));
+        assertEquals(18, MathUtils.lcm(6, 9));
+        assertEquals(18, MathUtils.lcm(-6, 9));
+        assertEquals(18, MathUtils.lcm(6, -9));
+        assertEquals(18, MathUtils.lcm(-6, -9));
+    }
+
+    @Test
+    public void testLcmMaxInt() {
+        assertEquals(Integer.MAX_VALUE, MathUtils.lcm(Integer.MAX_VALUE, 1));
+    }
+    
+    @Test(expected = ArithmeticException.class)
+    public void testLcmOverflow() {
+        MathUtils.lcm(Integer.MAX_VALUE, 2);
+    }
+
+    @Test
+    public void testLogBasic() {
+        assertEquals(Math.log(10) / Math.log(2), MathUtils.log(2, 10), 1e-15);
+        assertEquals(Math.log(10) / Math.log(10), MathUtils.log(10, 10), 1e-15);
+        assertEquals(1.0, MathUtils.log(2, 2), 1e-15);
+        assertEquals(0.0, MathUtils.log(10, 1), 1e-15);
+    }
+
+    @Test
+    public void testLogSpecialCases() {
+        assertEquals(Double.NaN, MathUtils.log(-2, 10), 1e-15);
+        assertEquals(Double.NaN, MathUtils.log(2, -10), 1e-15);
+        assertEquals(Double.NaN, MathUtils.log(0, 0), 1e-15);
+        assertEquals(0.0, MathUtils.log(0, 10), 1e-15);
+        assertEquals(Double.NEGATIVE_INFINITY, MathUtils.log(10, 0), 1e-15);
+    }
+
+    @Test
+    public void testMulAndCheckIntPositiveOverflow() {
+        try {
+            MathUtils.mulAndCheck(Integer.MAX_VALUE, 2);
+            fail("overflow");
+        } catch (ArithmeticException e) {
+            // expected
+        }
+    }
+
+    @Test
+    public void testMulAndCheckIntNegativeOverflow() {
+        try {
+            MathUtils.mulAndCheck(Integer.MIN_VALUE, -2);
+            fail("overflow");
+        } catch (ArithmeticException e) {
+            // expected
+        }
+    }
+
+    @Test
+    public void testMulAndCheckIntNoOverflow() {
+        assertEquals(0, MathUtils.mulAndCheck(0, 5));
+        assertEquals(0, MathUtils.mulAndCheck(5, 0));
+        assertEquals(Integer.MAX_VALUE, MathUtils.mulAndCheck(Integer.MAX_VALUE, 1));
+        assertEquals(Integer.MIN_VALUE, MathUtils.mulAndCheck(Integer.MIN_VALUE, 1));
+    }
+
+    @Test
+    public void testMulAndCheckLongPositiveOverflow() {
+        try {
+            MathUtils.mulAndCheck(Long.MAX_VALUE, 2);
+            fail("overflow");
+        } catch (ArithmeticException e) {
+            // expected
+        }
+    }
+
+    @Test
+    public void testMulAndCheckLongNegativeOverflow() {
+        try {
+            MathUtils.mulAndCheck(Long.MIN_VALUE, -2);
+            fail("overflow");
+        } catch (ArithmeticException e) {
+            // expected
+        }
+    }
+
+    @Test
+    public void testMulAndCheckLongNoOverflow() {
+        assertEquals(0L, MathUtils.mulAndCheck(0L, 5L));
+        assertEquals(0L, MathUtils.mulAndCheck(5L, 0L));
+        assertEquals(Long.MAX_VALUE, MathUtils.mulAndCheck(Long.MAX_VALUE, 1L));
+        assertEquals(Long.MIN_VALUE, MathUtils.mulAndCheck(Long.MIN_VALUE, 1L));
+    }
+
+    @Test
+    public void testNextAfterBasic() {
+        assertEquals(1.0000000000000002, MathUtils.nextAfter(1.0, Double.POSITIVE_INFINITY), 1e-15);
+        assertEquals(0.9999999999999999, MathUtils.nextAfter(1.0, Double.NEGATIVE_INFINITY), 1e-15);
+        assertEquals(Double.MIN_VALUE, MathUtils.nextAfter(0.0, 1.0), 1e-15);
+        assertEquals(-Double.MIN_VALUE, MathUtils.nextAfter(0.0, -1.0), 1e-15);
+    }
+
+    @Test
+    public void testNextAfterSpecialCases() {
+        assertEquals(Double.NaN, MathUtils.nextAfter(Double.NaN, 1.0));
+        assertEquals(Double.POSITIVE_INFINITY, MathUtils.nextAfter(Double.POSITIVE_INFINITY, 1.0));
+        assertEquals(Double.NEGATIVE_INFINITY, MathUtils.nextAfter(Double.NEGATIVE_INFINITY, -1.0));
+        assertEquals(Double.POSITIVE_INFINITY, MathUtils.nextAfter(Double.MAX_VALUE, Double.POSITIVE_INFINITY));
+        assertEquals(Double.MAX_VALUE, MathUtils.nextAfter(Double.POSITIVE_INFINITY, Double.MAX_VALUE));
+        assertEquals(Double.MIN_VALUE, MathUtils.nextAfter(0.0, Double.MAX_VALUE));
+        assertEquals(-Double.MIN_VALUE, MathUtils.nextAfter(0.0, Double.MIN_VALUE));
+    }
+
+    @Test
+    public void testScalbBasic() {
+        assertEquals(2.0, MathUtils.scalb(1.0, 1), 1e-15);
+        assertEquals(0.5, MathUtils.scalb(1.0, -1), 1e-15);
+        assertEquals(100.0, MathUtils.scalb(1.0, 2), 1e-15);
+    }
+
+    @Test
+    public void testScalbSpecialCases() {
+        assertEquals(0.0, MathUtils.scalb(0.0, 100), 1e-15);
+        assertEquals(Double.NaN, MathUtils.scalb(Double.NaN, 100));
+        assertEquals(Double.POSITIVE_INFINITY, MathUtils.scalb(Double.POSITIVE_INFINITY, 100));
+        assertEquals(Double.NEGATIVE_INFINITY, MathUtils.scalb(Double.NEGATIVE_INFINITY, 100));
+    }
+
+    @Test
+    public void testNormalizeAngleBasic() {
+        assertEquals(Math.PI, MathUtils.normalizeAngle(Math.PI, Math.PI), 1e-15);
+        assertEquals(0.0, MathUtils.normalizeAngle(0.0, 0.0), 1e-15);
+        assertEquals(Math.PI, MathUtils.normalizeAngle(3 * Math.PI, Math.PI), 1e-15);
+        assertEquals(Math.PI, MathUtils.normalizeAngle(-Math.PI, Math.PI), 1e-15);
+    }
+
+    @Test
+    public void testNormalizeAngleAroundZero() {
+        assertEquals(0.0, MathUtils.normalizeAngle(Math.PI, 0.0), 1e-15);
+        assertEquals(Math.PI, MathUtils.normalizeAngle(2 * Math.PI, 0.0), 1e-15);
+        assertEquals(-Math.PI, MathUtils.normalizeAngle(-2 * Math.PI, 0.0), 1e-15);
+        assertEquals(1.0, MathUtils.normalizeAngle(1.0 + 2 * Math.PI, 0.0), 1e-15);
+        assertEquals(-1.0, MathUtils.normalizeAngle(-1.0 - 2 * Math.PI, 0.0), 1e-15);
+    }
+
+    @Test
+    public void testRoundDoubleBasic() {
+        assertEquals(1.23, MathUtils.round(1.2345, 2), 1e-15);
+        assertEquals(1.24, MathUtils.round(1.2355, 2), 1e-15);
+        assertEquals(1.23, MathUtils.round(1.23, 2), 1e-15);
+        assertEquals(0.0, MathUtils.round(0.0, 2), 1e-15);
+        assertEquals(-1.23, MathUtils.round(-1.2345, 2), 1e-15);
+        assertEquals(-1.24, MathUtils.round(-1.2355, 2), 1e-15);
+    }
+    
+    @Test
+    public void testRoundDoubleLargeScale() {
+        assertEquals(12345.0, MathUtils.round(12345.6789, 0), 1e-15);
+        assertEquals(12300.0, MathUtils.round(12345.6789, -2), 1e-15);
+    }
+
+    @Test
+    public void testRoundDoubleSpecialCases() {
+        assertEquals(Double.NaN, MathUtils.round(Double.NaN, 2), 1e-15);
+        assertEquals(Double.POSITIVE_INFINITY, MathUtils.round(Double.POSITIVE_INFINITY, 2), 1e-15);
+        assertEquals(Double.NEGATIVE_INFINITY, MathUtils.round(Double.NEGATIVE_INFINITY, 2), 1e-15);
+    }
+
+    @Test
+    public void testRoundDoubleRoundingMethods() {
+        // ROUND_HALF_UP
+        assertEquals(1.24, MathUtils.round(1.235, 2, BigDecimal.ROUND_HALF_UP), 1e-15);
+        assertEquals(1.23, MathUtils.round(1.225, 2, BigDecimal.ROUND_HALF_UP), 1e-15);
+        // ROUND_HALF_DOWN
+        assertEquals(1.23, MathUtils.round(1.235, 2, BigDecimal.ROUND_HALF_DOWN), 1e-15);
+        assertEquals(1.22, MathUtils.round(1.225, 2, BigDecimal.ROUND_HALF_DOWN), 1e-15);
+        // ROUND_HALF_EVEN
+        assertEquals(1.24, MathUtils.round(1.235, 2, BigDecimal.ROUND_HALF_EVEN), 1e-15);
+        assertEquals(1.22, MathUtils.round(1.225, 2, BigDecimal.ROUND_HALF_EVEN), 1e-15);
+        assertEquals(1.22, MathUtils.round(1.215, 2, BigDecimal.ROUND_HALF_EVEN), 1e-15);
+        assertEquals(1.22, MathUtils.round(1.225, 2, BigDecimal.ROUND_HALF_EVEN), 1e-15);
+        // ROUND_CEILING
+        assertEquals(1.24, MathUtils.round(1.231, 2, BigDecimal.ROUND_CEILING), 1e-15);
+        assertEquals(1.24, MathUtils.round(-1.231, 2, BigDecimal.ROUND_CEILING), 1e-15);
+        // ROUND_FLOOR
+        assertEquals(1.23, MathUtils.round(1.231, 2, BigDecimal.ROUND_FLOOR), 1e-15);
+        assertEquals(-1.24, MathUtils.round(-1.231, 2, BigDecimal.ROUND_FLOOR), 1e-15);
+        // ROUND_UP
+        assertEquals(1.24, MathUtils.round(1.231, 2, BigDecimal.ROUND_UP), 1e-15);
+        assertEquals(-1.23, MathUtils.round(-1.231, 2, BigDecimal.ROUND_UP), 1e-15);
+        // ROUND_DOWN
+        assertEquals(1.23, MathUtils.round(1.231, 2, BigDecimal.ROUND_DOWN), 1e-15);
+        assertEquals(-1.23, MathUtils.round(-1.231, 2, BigDecimal.ROUND_DOWN), 1e-15);
+    }
+
+    @Test
+    public void testSignByte() {
+        assertEquals((byte)1, MathUtils.sign((byte)1));
+        assertEquals((byte)-1, MathUtils.sign((byte)-1));
+        assertEquals((byte)0, MathUtils.sign((byte)0));
+    }
+
+    @Test
+    public void testSignDouble() {
+        assertEquals(1.0, MathUtils.sign(1.0), 1e-15);
+        assertEquals(-1.0, MathUtils.sign(-1.0), 1e-15);
+        assertEquals(0.0, MathUtils.sign(0.0), 1e-15);
+        assertTrue(Double.isNaN(MathUtils.sign(Double.NaN)));
+    }
+
+    @Test
+    public void testSignFloat() {
+        assertEquals(1.0F, MathUtils.sign(1.0F), 1e-15);
+        assertEquals(-1.0F, MathUtils.sign(-1.0F), 1e-15);
+        assertEquals(0.0F, MathUtils.sign(0.0F), 1e-15);
+        assertTrue(Float.isNaN(MathUtils.sign(Float.NaN)));
+    }
+
+    @Test
+    public void testSignInt() {
+        assertEquals(1, MathUtils.sign(1));
+        assertEquals(-1, MathUtils.sign(-1));
+        assertEquals(0, MathUtils.sign(0));
+    }
+
+    @Test
+    public void testSignLong() {
+        assertEquals(1L, MathUtils.sign(1L));
+        assertEquals(-1L, MathUtils.sign(-1L));
+        assertEquals(0L, MathUtils.sign(0L));
+    }
+
+    @Test
+    public void testSignShort() {
+        assertEquals((short)1, MathUtils.sign((short)1));
+        assertEquals((short)-1, MathUtils.sign((short)-1));
+        assertEquals((short)0, MathUtils.sign((short)0));
+    }
+
+    @Test
+    public void testSinh() {
+        assertEquals(Math.sinh(0.0), MathUtils.sinh(0.0), 1e-15);
+        assertEquals(Math.sinh(1.0), MathUtils.sinh(1.0), 1e-15);
+        assertEquals(Math.sinh(-1.0), MathUtils.sinh(-1.0), 1e-15);
+    }
+
+    @Test
+    public void testSubAndCheckIntPositiveOverflow() {
+        try {
+            MathUtils.subAndCheck(Integer.MIN_VALUE, 1);
+            fail("overflow");
+        } catch (ArithmeticException e) {
+            // expected
+        }
+    }
+
+    @Test
+    public void testSubAndCheckIntNegativeOverflow() {
+        try {
+            MathUtils.subAndCheck(Integer.MAX_VALUE, -1);
+            fail("overflow");
+        } catch (ArithmeticException e) {
+            // expected
+        }
+    }
+
+    @Test
+    public void testSubAndCheckIntNoOverflow() {
+        assertEquals(0, MathUtils.subAndCheck(0, 0));
+        assertEquals(Integer.MAX_VALUE, MathUtils.subAndCheck(Integer.MAX_VALUE, 0));
+        assertEquals(Integer.MIN_VALUE, MathUtils.subAndCheck(Integer.MIN_VALUE, 0));
+        assertEquals(-Integer.MAX_VALUE, MathUtils.subAndCheck(0, Integer.MAX_VALUE));
+        assertEquals(Integer.MIN_VALUE + 1, MathUtils.subAndCheck(0, Integer.MAX_VALUE - 1));
+    }
+
+    @Test
+    public void testSubAndCheckLongPositiveOverflow() {
+        try {
+            MathUtils.subAndCheck(Long.MIN_VALUE, 1);
+            fail("overflow");
+        } catch (ArithmeticException e) {
+            // expected
+        }
+    }
+
+    @Test
+    public void testSubAndCheckLongNegativeOverflow() {
+        try {
+            MathUtils.subAndCheck(Long.MAX_VALUE, -1);
+            fail("overflow");
+        } catch (ArithmeticException e) {
+            // expected
+        }
+    }
+
+    @Test
+    public void testSubAndCheckLongNoOverflow() {
+        assertEquals(0L, MathUtils.subAndCheck(0L, 0L));
+        assertEquals(Long.MAX_VALUE, MathUtils.subAndCheck(Long.MAX_VALUE, 0L));
+        assertEquals(Long.MIN_VALUE, MathUtils.subAndCheck(Long.MIN_VALUE, 0L));
+        assertEquals(-Long.MAX_VALUE, MathUtils.subAndCheck(0L, Long.MAX_VALUE));
+        assertEquals(Long.MIN_VALUE + 1L, MathUtils.subAndCheck(0L, Long.MAX_VALUE - 1L));
+    }
+}

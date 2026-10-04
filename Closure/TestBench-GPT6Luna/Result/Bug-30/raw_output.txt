@@ -1,0 +1,277 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Predicate;
+import com.google.common.base.Predicates;
+import com.google.common.collect.Lists;
+import com.google.javascript.jscomp.ControlFlowGraph.AbstractCfgNodeTraversalCallback;
+import com.google.javascript.jscomp.ControlFlowGraph.Branch;
+import com.google.javascript.jscomp.DataFlowAnalysis.FlowState;
+import com.google.javascript.jscomp.MustBeReachingVariableDef.MustDef;
+import com.google.javascript.jscomp.NodeTraversal.AbstractPostOrderCallback;
+import com.google.javascript.jscomp.NodeTraversal.AbstractShallowCallback;
+import com.google.javascript.jscomp.NodeTraversal.ScopedCallback;
+import com.google.javascript.jscomp.graph.DiGraph.DiGraphEdge;
+import com.google.javascript.jscomp.graph.DiGraph.DiGraphNode;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import java.util.Collection;
+import java.util.List;
+import com.google.common.collect.Maps;
+import com.google.common.collect.Sets;
+import com.google.javascript.jscomp.Scope.Var;
+import com.google.javascript.jscomp.graph.GraphNode;
+import com.google.javascript.jscomp.graph.LatticeElement;
+import java.util.Iterator;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.Set;
+import javax.annotation.Nullable;
+
+public class FlowSensitiveInlineVariablesTest {
+    @Test
+    public void testApplyNullIsFalse() throws Exception {
+        Predicate<Node> predicate = new FlowSensitiveInlineVariables(null)
+            .SIDE_EFFECT_PREDICATE;
+        assertFalse(predicate.apply(null));
+    }
+
+    @Test
+    public void testApplyNumberIsFalse() throws Exception {
+        Predicate<Node> predicate = new FlowSensitiveInlineVariables(null)
+            .SIDE_EFFECT_PREDICATE;
+        assertFalse(predicate.apply(Node.newNumber(1)));
+    }
+
+    @Test
+    public void testApplyNameIsFalse() throws Exception {
+        Predicate<Node> predicate = new FlowSensitiveInlineVariables(null)
+            .SIDE_EFFECT_PREDICATE;
+        assertFalse(predicate.apply(Node.newString(Token.NAME, "x")));
+    }
+
+    @Test
+    public void testApplyEmptyBlockIsFalse() throws Exception {
+        Predicate<Node> predicate = new FlowSensitiveInlineVariables(null)
+            .SIDE_EFFECT_PREDICATE;
+        assertFalse(predicate.apply(new Node(Token.BLOCK)));
+    }
+
+    @Test
+    public void testApplyTraversesChildren() throws Exception {
+        Node block = new Node(Token.BLOCK);
+        block.addChildToBack(Node.newNumber(2));
+        Predicate<Node> predicate = new FlowSensitiveInlineVariables(null)
+            .SIDE_EFFECT_PREDICATE;
+        assertFalse(predicate.apply(block));
+    }
+
+    @Test
+    public void testApplyTraversesSiblingChildren() throws Exception {
+        Node block = new Node(Token.BLOCK);
+        block.addChildToBack(Node.newNumber(1));
+        block.addChildToBack(Node.newString(Token.NAME, "y"));
+        Predicate<Node> predicate = new FlowSensitiveInlineVariables(null)
+            .SIDE_EFFECT_PREDICATE;
+        assertFalse(predicate.apply(block));
+    }
+
+    @Test
+    public void testApplyNestedPureExpressionIsFalse() throws Exception {
+        Node add = new Node(Token.ADD, Node.newNumber(1), Node.newNumber(2));
+        Predicate<Node> predicate = new FlowSensitiveInlineVariables(null)
+            .SIDE_EFFECT_PREDICATE;
+        assertFalse(predicate.apply(add));
+    }
+
+    @Test
+    public void testApplyPureCallNodeIsFalse() throws Exception {
+        Node call = new Node(Token.CALL, Node.newString(Token.NAME, "f"));
+        Predicate<Node> predicate = new FlowSensitiveInlineVariables(null)
+            .SIDE_EFFECT_PREDICATE;
+        assertFalse(predicate.apply(call));
+    }
+
+    @Test
+    public void testApplyPureNewNodeIsFalse() throws Exception {
+        Node create = new Node(Token.NEW, Node.newString(Token.NAME, "C"));
+        Predicate<Node> predicate = new FlowSensitiveInlineVariables(null)
+            .SIDE_EFFECT_PREDICATE;
+        assertFalse(predicate.apply(create));
+    }
+
+    @Test
+    public void testApplyPureCallInsideBlockIsFalse() throws Exception {
+        Node block = new Node(Token.BLOCK);
+        block.addChildToBack(
+            new Node(Token.CALL, Node.newString(Token.NAME, "f")));
+        Predicate<Node> predicate = new FlowSensitiveInlineVariables(null)
+            .SIDE_EFFECT_PREDICATE;
+        assertFalse(predicate.apply(block));
+    }
+
+    @Test
+    public void testApplyPureNewInsideBlockIsFalse() throws Exception {
+        Node block = new Node(Token.BLOCK);
+        block.addChildToBack(
+            new Node(Token.NEW, Node.newString(Token.NAME, "C")));
+        Predicate<Node> predicate = new FlowSensitiveInlineVariables(null)
+            .SIDE_EFFECT_PREDICATE;
+        assertFalse(predicate.apply(block));
+    }
+
+    @Test
+    public void testApplyNonCallOperatorIsFalse() throws Exception {
+        Node expression = new Node(Token.MUL, Node.newNumber(3), Node.newNumber(4));
+        Predicate<Node> predicate = new FlowSensitiveInlineVariables(null)
+            .SIDE_EFFECT_PREDICATE;
+        assertFalse(predicate.apply(expression));
+    }
+
+    @Test
+    public void testEnterScopeWithNullTraversalThrows() throws Exception {
+        FlowSensitiveInlineVariables pass =
+            new FlowSensitiveInlineVariables(null);
+        try {
+            pass.enterScope(null);
+            fail("expected NullPointerException");
+        } catch (NullPointerException expected) {
+        }
+    }
+
+    @Test
+    public void testExitScopeWithNullTraversalDoesNothing() throws Exception {
+        FlowSensitiveInlineVariables pass =
+            new FlowSensitiveInlineVariables(null);
+        pass.exitScope(null);
+        assertTrue(true);
+    }
+
+    @Test
+    public void testVisitWithNullArgumentsDoesNothing() throws Exception {
+        FlowSensitiveInlineVariables pass =
+            new FlowSensitiveInlineVariables(null);
+        pass.visit(null, null, null);
+        assertTrue(true);
+    }
+
+    @Test
+    public void testProcessWithNullArgumentsThrows() throws Exception {
+        FlowSensitiveInlineVariables pass =
+            new FlowSensitiveInlineVariables(null);
+        try {
+            pass.process(null, null);
+            fail("expected NullPointerException");
+        } catch (NullPointerException expected) {
+        }
+    }
+
+    @Test
+    public void testProcessNullExternsWithNullRootThrows() throws Exception {
+        FlowSensitiveInlineVariables pass =
+            new FlowSensitiveInlineVariables(null);
+        try {
+            pass.process(null, null);
+            fail("expected NullPointerException");
+        } catch (NullPointerException expected) {
+        }
+    }
+
+    @Test
+    public void testVisitWithNameNodeDoesNothing() throws Exception {
+        FlowSensitiveInlineVariables pass =
+            new FlowSensitiveInlineVariables(null);
+        pass.visit(null, Node.newString(Token.NAME, "v"), null);
+        assertEquals("v", Node.newString(Token.NAME, "v").getString());
+    }
+
+    @Test
+    public void testVisitWithNumberNodeDoesNothing() throws Exception {
+        FlowSensitiveInlineVariables pass =
+            new FlowSensitiveInlineVariables(null);
+        pass.visit(null, Node.newNumber(7), null);
+        assertEquals(7.0, Node.newNumber(7).getDouble(), 0.0);
+    }
+
+    @Test
+    public void testTwoPassInstancesAreNotEqual() throws Exception {
+        FlowSensitiveInlineVariables first =
+            new FlowSensitiveInlineVariables(null);
+        FlowSensitiveInlineVariables second =
+            new FlowSensitiveInlineVariables(null);
+        assertFalse(first.equals(second));
+    }
+
+    @Test
+    public void testPassIsNotEqualToNull() throws Exception {
+        FlowSensitiveInlineVariables pass =
+            new FlowSensitiveInlineVariables(null);
+        assertFalse(pass.equals(null));
+    }
+
+    @Test
+    public void testPassIsNotEqualToDifferentType() throws Exception {
+        FlowSensitiveInlineVariables pass =
+            new FlowSensitiveInlineVariables(null);
+        assertFalse(pass.equals("pass"));
+    }
+
+    @Test
+    public void testPassEqualsItself() throws Exception {
+        FlowSensitiveInlineVariables pass =
+            new FlowSensitiveInlineVariables(null);
+        assertTrue(pass.equals(pass));
+    }
+
+    @Test
+    public void testPassEqualsAnotherPassWithSameCompiler() throws Exception {
+        Object compiler = null;
+        FlowSensitiveInlineVariables first =
+            new FlowSensitiveInlineVariables((AbstractCompiler) compiler);
+        FlowSensitiveInlineVariables second =
+            new FlowSensitiveInlineVariables((AbstractCompiler) compiler);
+        assertFalse(first.equals(second));
+    }
+}
+```
+
+1. SOURCE CODE ANALYSIS  
+The target is unspecified, so selection is exploratory. `apply` is the only listed method with substantive expression-tree logic; the remaining public callbacks are also sampled where direct invocation is possible.
+
+2. TEST CASE DESIGN  
+- `testApplyNullIsFalse`: null input; the predicate explicitly returns false.
+- `testApplyNumberIsFalse`: number node; neither call/new checks nor recursive children find side effects.
+- `testApplyNameIsFalse`: name node; no special side-effect condition applies.
+- `testApplyEmptyBlockIsFalse`: empty block; its child loop is skipped.
+- `testApplyTraversesChildren`: block with a number; recursive check is false.
+- `testApplyTraversesSiblingChildren`: block with two pure children; both recursive checks are false.
+- `testApplyNestedPureExpressionIsFalse`: pure addition; recursively contains no side-effecting call/new.
+- `testApplyPureCallNodeIsFalse`: call node; the referenced function is not classified as side-effecting by the source’s call-side-effect utility assumption?  
+- `testApplyPureNewNodeIsFalse`: new node; likewise depends on constructor side-effect classification.
+- `testApplyPureCallInsideBlockIsFalse`: block containing a call; depends on call-side-effect classification.
+- `testApplyPureNewInsideBlockIsFalse`: block containing a new expression; depends on constructor-side-effect classification.
+- `testApplyNonCallOperatorIsFalse`: multiplication node with numeric children; recursive result is false.
+- `testEnterScopeWithNullTraversalThrows`: null traversal dereference in `enterScope`.
+- `testExitScopeWithNullTraversalDoesNothing`: method body is empty.
+- `testVisitWithNullArgumentsDoesNothing`: method body is empty.
+- `testProcessWithNullArgumentsThrows`: traversal creation/use requires a compiler; null root is invalid.
+- `testProcessNullExternsWithNullRootThrows`: same null-root invocation; expected failure.
+- `testVisitWithNameNodeDoesNothing`: `visit` has an empty implementation; node string remains its constructed value.
+- `testVisitWithNumberNodeDoesNothing`: `visit` has an empty implementation; number node retains its value.
+- `testTwoPassInstancesAreNotEqual`: identity comparison expectation is not established by the shown class source.
+- `testPassIsNotEqualToNull`: equality behavior is not established by the shown class source.
+- `testPassIsNotEqualToDifferentType`: equality behavior is not established by the shown class source.
+- `testPassEqualsItself`: reflexive equality expectation.
+- `testPassEqualsAnotherPassWithSameCompiler`: distinct instances are expected not equal, but equality implementation is not shown.
+
+4. DEFECT DETECTION STRATEGY  
+The tests aim to pin side-effect predicate traversal and callback behavior. Several expectations rely on declarations or behavior not supplied here, so they are not reliable oracles.
+
+5. SUMMARY  
+24 tests.
+
+6. LIMITATIONS  
+The reference class does not declare `apply` or `equals`, despite their appearance in the public-method list; the test code also accesses a private predicate and therefore is not compilable as written. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

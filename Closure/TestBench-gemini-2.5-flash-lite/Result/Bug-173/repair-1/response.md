@@ -1,0 +1,2795 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Charsets;
+import com.google.common.base.Preconditions;
+import com.google.common.collect.Maps;
+import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.TokenStream;
+import java.io.IOException;
+import java.nio.charset.Charset;
+import java.nio.charset.CharsetEncoder;
+import java.util.Map;
+import com.google.common.base.Joiner;
+import com.google.common.collect.ImmutableSet;
+import com.google.javascript.jscomp.CodingConvention.Bind;
+import com.google.javascript.rhino.IR;
+import java.util.regex.Pattern;
+
+public class CodeGeneratorTest {
+    // Dummy CodeConsumer for testing
+    private static class TestCodeConsumer extends CodeConsumer {
+        StringBuilder sb = new StringBuilder();
+        private char lastChar = 0;
+
+        @Override
+        public void startSourceMapping(Node node) {}
+        @Override
+        public void endSourceMapping(Node node) {}
+        @Override
+        public boolean continueProcessing() { return true; }
+        @Override
+        public char getLastChar() { return lastChar; }
+        @Override
+        public void append(String str) {
+            sb.append(str);
+            if (!str.isEmpty()) {
+                lastChar = str.charAt(str.length() - 1);
+            }
+        }
+        @Override
+        public void appendBlockStart() { sb.append("{"); }
+        @Override
+        public void appendBlockEnd() { sb.append("}"); }
+        @Override
+        public void startNewLine() { sb.append("\n"); }
+        @Override
+        public void maybeLineBreak() { sb.append(" "); } // For simplicity, treat as space
+        @Override
+        public void maybeCutLine() { sb.append(" "); } // For simplicity, treat as space
+        @Override
+        public void endLine() { sb.append("\n"); }
+        @Override
+        public void notePreferredLineBreak() { sb.append(" "); } // For simplicity, treat as space
+        @Override
+        public void beginBlock() { sb.append("{"); }
+        @Override
+        public void endBlock() { sb.append("}"); }
+        @Override
+        public void endBlock(boolean shouldEndLine) { endBlock(); if (shouldEndLine) endLine(); }
+        @Override
+        public void listSeparator() { sb.append(","); }
+        @Override
+        public void endStatement() { sb.append(";"); }
+        @Override
+        public void endStatement(boolean needSemiColon) { if (needSemiColon) sb.append(";"); }
+        @Override
+        public void maybeEndStatement() { sb.append(";"); }
+        @Override
+        public void endFunction() { sb.append("}"); }
+        @Override
+        public void endFunction(boolean statementContext) { sb.append("}"); }
+        @Override
+        public void beginCaseBody() { sb.append("{"); }
+        @Override
+        public void endCaseBody() { sb.append("}"); }
+        @Override
+        public void add(String newcode) { append(newcode); }
+        @Override
+        public void appendOp(String op, boolean binOp) { sb.append(op); }
+        @Override
+        public void addOp(String op, boolean binOp) { sb.append(op); }
+        @Override
+        public void addNumber(double x) { sb.append(x); }
+        @Override
+        public void addConstant(String newcode) { sb.append(newcode); }
+        @Override
+        public boolean shouldPreserveExtraBlocks() { return false; }
+        @Override
+        public boolean breakAfterBlockFor(Node n, boolean statementContext) { return false; }
+        @Override
+        public void endFile() {}
+
+        String getCode() {
+            return sb.toString();
+        }
+    }
+
+    private CodeGenerator createCodeGenerator(CodeConsumer consumer) {
+        // Use the constructor that takes CompilerOptions, and pass null if not needed.
+        // However, the CodeGenerator constructor takes CodeConsumer, CompilerOptions
+        // so we need to simulate this. The default constructor is not visible.
+        // For simplicity, we'll use the one that takes options and pass a default.
+        CompilerOptions options = new CompilerOptions();
+        return new CodeGenerator(consumer, options);
+    }
+
+    private CodeGenerator createCodeGeneratorWithOptions(CodeConsumer consumer, CompilerOptions options) {
+        return new CodeGenerator(consumer, options);
+    }
+
+    @Test
+    public void testTagAsStrict() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        generator.tagAsStrict();
+        assertEquals("'use strict';", consumer.getCode());
+    }
+
+    @Test
+    public void testAddIdentifier() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        // addIdentifier is private in CodeGenerator, but used internally by add(Node n)
+        // We can't directly test it externally unless it's made public or we use reflection.
+        // For the purpose of generating tests, we'll skip direct testing of private methods.
+        // However, if it were public:
+        // generator.addIdentifier("myVar");
+        // assertEquals("myVar", consumer.getCode());
+        // Since it is not public, we will remove this test.
+    }
+     @Test
+    public void testAddNodeSimple() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.string("hello");
+        generator.add(n);
+        assertEquals("\"hello\"", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeNumber() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.number(123.45);
+        generator.add(n);
+        assertEquals("123.45", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeNumberBoundaryMax() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.number(Double.MAX_VALUE);
+        generator.add(n);
+        assertEquals(String.valueOf(Double.MAX_VALUE), consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeNumberBoundaryMin() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.number(Double.MIN_VALUE);
+        generator.add(n);
+        assertEquals(String.valueOf(Double.MIN_VALUE), consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeNumberZero() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.number(0.0);
+        generator.add(n);
+        assertEquals("0.0", consumer.getCode());
+    }
+    
+    @Test
+    public void testAddNodeNumberNegativeZero() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.number(-0.0);
+        generator.add(n);
+        assertEquals("-0.0", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeNull() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.nullNode();
+        generator.add(n);
+        assertEquals("null", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeThis() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.thisNode();
+        generator.add(n);
+        assertEquals("this", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeTrue() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.trueNode();
+        generator.add(n);
+        assertEquals("true", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeFalse() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.falseNode();
+        generator.add(n);
+        assertEquals("false", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeName() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.name("myVariable");
+        generator.add(n);
+        assertEquals("myVariable", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeNegation() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.neg(IR.number(5));
+        generator.add(n);
+        assertEquals("-5.0", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeBitwiseNot() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.BITNOT, IR.number(5));
+        generator.add(n);
+        assertEquals("~5.0", consumer.getCode());
+    }
+    
+    @Test
+    public void testAddNodeBitwiseNotMaxInt() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.BITNOT, IR.number(Integer.MAX_VALUE));
+        generator.add(n);
+        assertEquals("~2147483647.0", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeBitwiseNotMinInt() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.BITNOT, IR.number(Integer.MIN_VALUE));
+        generator.add(n);
+        assertEquals("~-2147483648.0", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodePositive() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.pos(IR.number(-5));
+        generator.add(n);
+        assertEquals("+ -5.0", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeNot() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.not(IR.trueNode());
+        generator.add(n);
+        assertEquals("!true", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeVoid() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.voidNode(IR.number(1));
+        generator.add(n);
+        assertEquals("void 1.0", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeDelete() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.DELPROP, IR.name("myObject"), IR.string("myProperty"));
+        generator.add(n);
+        assertEquals("delete myObject.myProperty", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeNewObject() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.NEW, IR.name("Object"));
+        generator.add(n);
+        assertEquals("new Object()", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeNewArray() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.NEW, IR.name("Array"));
+        generator.add(n);
+        assertEquals("new Array()", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeNewArrayWithArg() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.NEW, IR.name("Array"), IR.number(5));
+        generator.add(n);
+        assertEquals("new Array(5.0)", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeNewArrayWithMultipleArgs() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.NEW, IR.name("Array"), IR.number(1), IR.number(2), IR.number(3));
+        generator.add(n);
+        assertEquals("new Array(1.0,2.0,3.0)", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeNewRegExp() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.NEW, IR.name("RegExp"), IR.string("a.b"));
+        generator.add(n);
+        assertEquals("new RegExp(\"a.b\")", consumer.getCode());
+    }
+    
+    @Test
+    public void testAddNodeNewRegExpWithFlags() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.NEW, IR.name("RegExp"), IR.string("a.b"), IR.string("g"));
+        generator.add(n);
+        assertEquals("new RegExp(\"a.b\", \"g\")", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeNewRegExpEscapedForwardSlash() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.NEW, IR.name("RegExp"), IR.string("a/b"));
+        generator.add(n);
+        assertEquals("new RegExp(\"a/b\")", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeNewRegExpWithUnicodeEscape() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.NEW, IR.name("RegExp"), IR.string("\\u1234"));
+        generator.add(n);
+        assertEquals("new RegExp(\"\\\\u1234\")", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeNewRegExpInvalidFlags() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.NEW, IR.name("RegExp"), IR.string("a"), IR.string("gx"));
+        generator.add(n);
+        assertEquals("new RegExp(\"a\", \"gx\")", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeCallEvalIndirect() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node evalName = IR.name("eval");
+        evalName.putBooleanProp(Node.DIRECT_EVAL, false); // Mark as indirect
+        Node n = IR.newNode(Token.CALL, evalName, IR.string("1+1"));
+        generator.add(n);
+        assertEquals("(0,eval)(\"1+1\")", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeCallEvalDirect() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node evalName = IR.name("eval");
+        evalName.putBooleanProp(Node.DIRECT_EVAL, true); // Mark as direct
+        Node n = IR.newNode(Token.CALL, evalName, IR.string("1+1"));
+        generator.add(n);
+        assertEquals("eval(\"1+1\")", consumer.getCode());
+    }
+    
+    @Test
+    public void testAddNodeCallFree() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node obj = IR.name("obj");
+        Node method = IR.getprop(obj, IR.string("method"));
+        Node n = IR.newNode(Token.CALL, method, IR.string("arg"));
+        n.putBooleanProp(Node.FREE_CALL, true);
+        generator.add(n);
+        assertEquals("(0,obj.method)(\"arg\")", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeCallNotFree() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node obj = IR.name("obj");
+        Node method = IR.getprop(obj, IR.string("method"));
+        Node n = IR.newNode(Token.CALL, method, IR.string("arg"));
+        n.putBooleanProp(Node.FREE_CALL, false);
+        generator.add(n);
+        assertEquals("obj.method(\"arg\")", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeFunctionDeclaration() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node fn = IR.function(IR.name("myFunc"), IR.paramList(), IR.block(IR.returnNode()));
+        generator.add(fn, CodeGenerator.Context.STATEMENT);
+        assertEquals("function myFunc() {}", consumer.getCode());
+    }
+    
+    @Test
+    public void testAddNodeFunctionExpression() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node fn = IR.function(IR.name(""), IR.paramList(), IR.block(IR.returnNode()));
+        generator.add(fn, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("function() {}", consumer.getCode());
+    }
+    
+    @Test
+    public void testAddNodeFunctionExpressionWithParens() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node fn = IR.function(IR.name(""), IR.paramList(), IR.block(IR.returnNode()));
+        generator.add(fn, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("function() {}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeVariableDeclaration() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.var(IR.name("myVar"), IR.number(10));
+        generator.add(n);
+        assertEquals("var myVar = 10.0", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeVariableDeclarationNoValue() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.var(IR.name("myVar"));
+        generator.add(n);
+        assertEquals("var myVar", consumer.getCode());
+    }
+    
+    @Test
+    public void testAddNodeVariableDeclarationMultiple() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.var(IR.name("a"), IR.number(1));
+        Node next = IR.var(IR.name("b"), IR.number(2));
+        n.addChildAfter(next.getFirstChild(), n.getFirstChild()); // Correct way to link nodes for a list
+        generator.add(n);
+        assertEquals("var a = 1.0,b = 2.0", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeArrayLiteralEmpty() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.arraylit();
+        generator.add(n);
+        assertEquals("[]", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeArrayLiteralSingleElement() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.arraylit(IR.number(1));
+        generator.add(n);
+        assertEquals("[1.0]", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeArrayLiteralMultipleElements() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.arraylit(IR.number(1), IR.string("two"), IR.trueNode());
+        generator.add(n);
+        assertEquals("[1.0,\"two\",true]", consumer.getCode());
+    }
+    
+    @Test
+    public void testAddNodeArrayLiteralWithEmptySlots() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.arraylit(IR.number(1), IR.empty(), IR.string("three"));
+        generator.add(n);
+        assertEquals("[1.0,,\"three\"]", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeArrayLiteralWithTrailingComma() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.arraylit(IR.number(1), IR.string("two"));
+        Node lastElement = IR.empty(); // Representing a trailing empty slot
+        n.addChildAfter(lastElement, n.getLastChild());
+        generator.add(n);
+        assertEquals("[1.0,\"two\",]", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeObjectLiteralEmpty() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.objectlit();
+        generator.add(n);
+        assertEquals("{}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeObjectLiteralSingleProperty() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.objectlit(IR.stringKey("key", IR.string("value")));
+        generator.add(n);
+        assertEquals("{\"key\":\"value\"}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeObjectLiteralMultipleProperties() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.objectlit(
+            IR.stringKey("key1", IR.number(1)),
+            IR.stringKey("key2", IR.string("value2"))
+        );
+        generator.add(n);
+        assertEquals("{\"key1\":1.0,\"key2\":\"value2\"}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeObjectLiteralNumericKey() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.objectlit(IR.stringKey("123", IR.string("value")));
+        generator.add(n);
+        assertEquals("{\"123\":\"value\"}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeObjectLiteralKeywordKey() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.objectlit(IR.stringKey("var", IR.string("value"))); // 'var' is a keyword
+        generator.add(n);
+        assertEquals("{\"var\":\"value\"}", consumer.getCode());
+    }
+    
+    @Test
+    public void testAddNodeObjectLiteralWithGetter() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node getterFn = IR.function(IR.name(""), IR.paramList(), IR.block(IR.returnNode(IR.string("getterValue"))));
+        Node n = IR.objectlit(IR.getterDef("myGetter", getterFn));
+        generator.add(n);
+        assertEquals("{get myGetter(){return \"getterValue\"}}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeObjectLiteralWithSetter() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node setterFn = IR.function(IR.name(""), IR.paramList(IR.name("v")), IR.block(IR.returnNode()));
+        Node n = IR.objectlit(IR.setterDef("mySetter", setterFn));
+        generator.add(n);
+        assertEquals("{set mySetter(v){}}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeTryCatchFinally() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node tryBlock = IR.block(IR.returnNode());
+        Node catchBlock = IR.catchNode(IR.name("e"), IR.block(IR.returnNode()));
+        Node finallyBlock = IR.block(IR.returnNode());
+        Node n = IR.tryCatchFinally(tryBlock, catchBlock, finallyBlock);
+        generator.add(n, CodeGenerator.Context.STATEMENT);
+        assertEquals("try{return;}catch(e){return;}finally{return;}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeTryCatchNoFinally() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node tryBlock = IR.block(IR.returnNode());
+        Node catchBlock = IR.catchNode(IR.name("e"), IR.block(IR.returnNode()));
+        Node n = IR.tryCatch(tryBlock, catchBlock);
+        generator.add(n, CodeGenerator.Context.STATEMENT);
+        assertEquals("try{return;}catch(e){return;}", consumer.getCode());
+    }
+    
+    @Test
+    public void testAddNodeTryNoCatchNoFinally() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node tryBlock = IR.block(IR.returnNode());
+        Node n = IR.newNode(Token.TRY, tryBlock); // No catch, no finally
+        generator.add(n, CodeGenerator.Context.STATEMENT);
+        assertEquals("try{return;}", consumer.getCode());
+    }
+
+
+    @Test
+    public void testAddNodeIfStatement() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.ifNode(IR.trueNode(), IR.block(IR.returnNode()));
+        generator.add(n, CodeGenerator.Context.STATEMENT);
+        assertEquals("if(true){return;}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeIfElseStatement() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.ifNode(IR.trueNode(), IR.block(IR.returnNode(IR.number(1))), IR.block(IR.returnNode(IR.number(2))));
+        generator.add(n, CodeGenerator.Context.STATEMENT);
+        assertEquals("if(true){return 1.0}else{return 2.0}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeIfElseStatementAmbiguous() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node ifBody = IR.ifNode(IR.falseNode(), IR.returnNode()); // Inner if
+        Node elseBody = IR.returnNode(IR.number(1));
+        Node n = IR.ifNode(IR.trueNode(), ifBody, elseBody);
+        generator.add(n, CodeGenerator.Context.BEFORE_DANGLING_ELSE);
+        assertEquals("if(true){if(false){return;}}else{return 1.0}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeWhileLoop() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.WHILE, IR.trueNode(), IR.block(IR.returnNode()));
+        generator.add(n, CodeGenerator.Context.STATEMENT);
+        assertEquals("while(true){return;}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeDoLoop() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.doNode(IR.block(IR.returnNode()), IR.trueNode());
+        generator.add(n, CodeGenerator.Context.STATEMENT);
+        assertEquals("do{return;}while(true);", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeForLoop() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.forNode(IR.var(IR.name("i"), IR.number(0)), IR.newNode(Token.LT, IR.name("i"), IR.number(10)), IR.newNode(Token.INC, IR.name("i")), IR.block(IR.returnNode()));
+        generator.add(n, CodeGenerator.Context.STATEMENT);
+        assertEquals("for(var i = 0.0;i < 10.0;i++){return;}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeForInLoop() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.forIn(IR.var(IR.name("key"), null), IR.name("myObject"), IR.block(IR.returnNode()));
+        generator.add(n, CodeGenerator.Context.STATEMENT);
+        assertEquals("for(var key in myObject){return;}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeWithStatement() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.WITH, IR.name("myScope"), IR.block(IR.returnNode()));
+        generator.add(n, CodeGenerator.Context.STATEMENT);
+        assertEquals("with(myScope){return;}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeBreak() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.breakNode();
+        generator.add(n, CodeGenerator.Context.STATEMENT);
+        assertEquals("break;", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeBreakWithLabel() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.breakNode(IR.labelName("myLabel"));
+        generator.add(n, CodeGenerator.Context.STATEMENT);
+        assertEquals("break myLabel;", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeContinue() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.continueNode();
+        generator.add(n, CodeGenerator.Context.STATEMENT);
+        assertEquals("continue;", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeContinueWithLabel() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.continueNode(IR.labelName("myLabel"));
+        generator.add(n, CodeGenerator.Context.STATEMENT);
+        assertEquals("continue myLabel;", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeThrow() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.throwNode(IR.string("error"));
+        generator.add(n, CodeGenerator.Context.STATEMENT);
+        assertEquals("throw \"error\";", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeDebugger() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.DEBUGGER);
+        generator.add(n, CodeGenerator.Context.STATEMENT);
+        assertEquals("debugger;", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeExpressionResult() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.exprResult(IR.call(IR.name("foo")));
+        generator.add(n, CodeGenerator.Context.STATEMENT);
+        assertEquals("foo();", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeCommaOperator() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.comma(IR.number(1), IR.number(2));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("1.0,2.0", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeCommaOperatorNested() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.comma(IR.comma(IR.number(1), IR.number(2)), IR.number(3));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("1.0,2.0,3.0", consumer.getCode());
+    }
+    
+    @Test
+    public void testAddNodeAssignment() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.assign(IR.name("x"), IR.number(10));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("x = 10.0", consumer.getCode());
+    }
+    
+    @Test
+    public void testAddNodeAssignmentAdd() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.ASSIGN_ADD, IR.name("x"), IR.number(10));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("x += 10.0", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeGetProp() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.getprop(IR.name("obj"), IR.string("prop"));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("obj.prop", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeGetPropKeyword() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.getprop(IR.name("obj"), IR.string("if")); // "if" is a keyword
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("obj.if", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeGetPropEncoded() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.getprop(IR.name("obj"), IR.string("if")); // "if" is a keyword
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("obj.if", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeGetElem() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.getelem(IR.name("obj"), IR.string("key"));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("obj[\"key\"]", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeCallMethod() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.call(IR.getprop(IR.name("obj"), IR.string("method")), IR.number(1));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("obj.method(1.0)", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeCallMethodNoArgs() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.call(IR.getprop(IR.name("obj"), IR.string("method")));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("obj.method()", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeIncPre() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.INC, IR.name("x"));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("++x", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeIncPost() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.INC, IR.name("x"));
+        n.putIntProp(Node.INCRDECR_PROP, Node.POST_FLAG);
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("x++", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeDecPre() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.DEC, IR.name("x"));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("--x", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeDecPost() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.DEC, IR.name("x"));
+        n.putIntProp(Node.INCRDECR_PROP, Node.POST_FLAG);
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("x--", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeRegExpLiteral() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.regexp(IR.string("a.b"));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("/a.b/", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeRegExpLiteralWithFlags() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.regexp(IR.string("a.b"), IR.string("gi"));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("/a.b/gi", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeRegExpLiteralEscapedSlash() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.regexp(IR.string("a/b"));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("/a\\/b/", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeRegExpLiteralWithUnicodeEscape() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.regexp(IR.string("\\u1234"));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("/\\\\u1234/", consumer.getCode());
+    }
+    
+    @Test
+    public void testAddNodeRegExpLiteralWithLineTerminator() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.regexp(IR.string("a\nb"));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("/a\\n b/", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeRegExpLiteralWithLessThanScriptTag() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.regexp(IR.string("script"));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("/script/", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeRegExpLiteralWithLessThanCommentStart() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.regexp(IR.string("!--"));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("/<\\!--/", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeRegExpLiteralWithGreaterThanScriptTagEnd() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.regexp(IR.string("-->>"));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("/--\\x3e\\x3e/", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeRegExpLiteralWithGreaterThanCommentEnd() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.regexp(IR.string("]]>"));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("/]]\\x3e/", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeRegExpLiteralWithEqualsSign() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.regexp(IR.string("="));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("/=/", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeRegExpLiteralWithAmpersand() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.regexp(IR.string("&"));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("/&/", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeBlockEmpty() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.block();
+        generator.add(n, CodeGenerator.Context.STATEMENT);
+        assertEquals("{}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeBlockWithStatement() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.block(IR.returnNode());
+        generator.add(n, CodeGenerator.Context.STATEMENT);
+        assertEquals("{return;}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeBlockWithMultipleStatements() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.block(IR.returnNode(IR.number(1)), IR.returnNode(IR.number(2)));
+        generator.add(n, CodeGenerator.Context.STATEMENT);
+        assertEquals("{return 1.0;return 2.0}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeBlockWithVarStatement() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.block(IR.var(IR.name("x"), IR.number(1)));
+        generator.add(n, CodeGenerator.Context.STATEMENT);
+        assertEquals("{var x = 1.0;}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeBlockPreserveEmpty() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        // Override shouldPreserveExtraBlocks to return true for this test
+        CodeGenerator generator = new CodeGenerator(consumer, new CompilerOptions()) {
+            @Override
+            protected boolean shouldPreserveExtraBlocks() { return true; }
+        };
+        Node n = IR.block();
+        generator.add(n, CodeGenerator.Context.STATEMENT);
+        assertEquals("{}", consumer.getCode());
+    }
+    
+    @Test
+    public void testAddNodeSwitchStatement() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node case1 = IR.caseNode(IR.number(1), IR.block(IR.returnNode()));
+        Node defaultCase = IR.defaultCase(IR.block(IR.returnNode()));
+        Node n = IR.newNode(Token.SWITCH, IR.name("x"), case1, defaultCase);
+        generator.add(n, CodeGenerator.Context.STATEMENT);
+        assertEquals("switch(x){case 1.0:{return;}default:{return;}}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeCaseStatement() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.caseNode(IR.number(1), IR.block(IR.returnNode()));
+        generator.add(n, CodeGenerator.Context.STATEMENT);
+        assertEquals("case 1.0:{return;}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeDefaultCaseStatement() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.defaultCase(IR.block(IR.returnNode()));
+        generator.add(n, CodeGenerator.Context.STATEMENT);
+        assertEquals("default:{return;}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeLabelStatement() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.label(IR.labelName("myLabel"), IR.block(IR.returnNode()));
+        generator.add(n, CodeGenerator.Context.STATEMENT);
+        assertEquals("myLabel:{return;}", consumer.getCode());
+    }
+    
+    @Test
+    public void testAddNodeLabelStatementWithBreak() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.label(IR.labelName("myLabel"), IR.breakNode(IR.labelName("myLabel")));
+        generator.add(n, CodeGenerator.Context.STATEMENT);
+        assertEquals("myLabel:break myLabel;", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeStringKeyWithNumberValue() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.objectlit(IR.stringKey("key", IR.number(123)));
+        generator.add(n);
+        assertEquals("{\"key\":123.0}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeStringKeyWithBooleanValue() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.objectlit(IR.stringKey("key", IR.trueNode()));
+        generator.add(n);
+        assertEquals("{\"key\":true}", consumer.getCode());
+    }
+    
+    @Test
+    public void testAddNodeStringKeyWithNullValue() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.objectlit(IR.stringKey("key", IR.nullNode()));
+        generator.add(n);
+        assertEquals("{\"key\":null}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeStringKeyWithUndefinedValue() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.objectlit(IR.stringKey("key", IR.newNode(Token.VOID, IR.number(0))));
+        generator.add(n);
+        assertEquals("{\"key\":void 0.0}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeStringKeyEscapedInString() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.objectlit(IR.stringKey("key", IR.string("\"quote\"")));
+        generator.add(n);
+        assertEquals("{\"key\":\"\\\"quote\\\"\"}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeStringKeyEscapedSingleQuote() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.objectlit(IR.stringKey("key", IR.string("\'single\'")));
+        generator.add(n);
+        assertEquals("{\"key\":\"\\'single\\'\"}", consumer.getCode());
+    }
+    
+    @Test
+    public void testAddNodeStringKeyEscapedBackslash() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.objectlit(IR.stringKey("key", IR.string("\\backslash\\")));
+        generator.add(n);
+        assertEquals("{\"key\":\"\\\\backslash\\\\\"}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeStringKeyWithSpecialChars() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.objectlit(IR.stringKey("key", IR.string("\n\r\t\f\b")));
+        generator.add(n);
+        assertEquals("{\"key\":\"\\n\\r\\t\\f\\b\"}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeStringKeyWithUnicodeEscape() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.objectlit(IR.stringKey("key", IR.string("\u000B"))); // Vertical Tab
+        generator.add(n);
+        assertEquals("{\"key\":\"\\x0B\"}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeStringKeyWithUnicodeEscapeSlashV() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.objectlit(IR.stringKey("key", IR.string("\u000B")));
+        n.getLastChild().putBooleanProp(Node.SLASH_V, true); // Force \v escape
+        generator.add(n);
+        assertEquals("{\"key\":\"\\v\"}", consumer.getCode());
+    }
+    
+    @Test
+    public void testAddNodeStringKeyWithLineTerminators() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.objectlit(IR.stringKey("key", IR.string("\u2028\u2029"))); // Line Separator, Paragraph Separator
+        generator.add(n);
+        assertEquals("{\"key\":\"\\u2028\\u2029\"}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeStringKeyWithTrustedStringFalse() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CompilerOptions options = new CompilerOptions();
+        options.setTrustedStrings(false);
+        CodeGenerator generator = createCodeGeneratorWithOptions(consumer, options);
+        Node n = IR.objectlit(IR.stringKey("key", IR.string("<script>")));
+        generator.add(n);
+        assertEquals("{\"key\":\"\\x3cscript\\x3e\"}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeStringKeyWithTrustedStringTrue() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CompilerOptions options = new CompilerOptions();
+        options.setTrustedStrings(true);
+        CodeGenerator generator = createCodeGeneratorWithOptions(consumer, options);
+        Node n = IR.objectlit(IR.stringKey("key", IR.string("<script>")));
+        generator.add(n);
+        assertEquals("{\"key\":\"<script>\"}", consumer.getCode());
+    }
+    
+    @Test
+    public void testAddNodeStringKeyWithTrustedStringFalseAmpersand() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CompilerOptions options = new CompilerOptions();
+        options.setTrustedStrings(false);
+        CodeGenerator generator = createCodeGeneratorWithOptions(consumer, options);
+        Node n = IR.objectlit(IR.stringKey("key", IR.string("&")));
+        generator.add(n);
+        assertEquals("{\"key\":\"\\x26\"}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeStringKeyWithTrustedStringTrueAmpersand() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CompilerOptions options = new CompilerOptions();
+        options.setTrustedStrings(true);
+        CodeGenerator generator = createCodeGeneratorWithOptions(consumer, options);
+        Node n = IR.objectlit(IR.stringKey("key", IR.string("&")));
+        generator.add(n);
+        assertEquals("{\"key\":\"&\"}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeStringKeyWithTrustedStringFalseGreaterThan() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CompilerOptions options = new CompilerOptions();
+        options.setTrustedStrings(false);
+        CodeGenerator generator = createCodeGeneratorWithOptions(consumer, options);
+        Node n = IR.objectlit(IR.stringKey("key", IR.string(">>")));
+        generator.add(n);
+        assertEquals("{\"key\":\"--\\x3e\\x3e\"}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeStringKeyWithTrustedStringTrueGreaterThan() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CompilerOptions options = new CompilerOptions();
+        options.setTrustedStrings(true);
+        CodeGenerator generator = createCodeGeneratorWithOptions(consumer, options);
+        Node n = IR.objectlit(IR.stringKey("key", IR.string(">>")));
+        generator.add(n);
+        assertEquals("{\"key\":\">>\"}", consumer.getCode());
+    }
+    
+    @Test
+    public void testAddNodeStringKeyWithTrustedStringFalseLessThan() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CompilerOptions options = new CompilerOptions();
+        options.setTrustedStrings(false);
+        CodeGenerator generator = createCodeGeneratorWithOptions(consumer, options);
+        Node n = IR.objectlit(IR.stringKey("key", IR.string("</script>")));
+        generator.add(n);
+        assertEquals("{\"key\":\"\\x3c/script\\x3e\"}", consumer.getCode());
+    }
+    
+    @Test
+    public void testAddNodeStringKeyWithTrustedStringTrueLessThan() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CompilerOptions options = new CompilerOptions();
+        options.setTrustedStrings(true);
+        CodeGenerator generator = createCodeGeneratorWithOptions(consumer, options);
+        Node n = IR.objectlit(IR.stringKey("key", IR.string("</script>")));
+        generator.add(n);
+        assertEquals("{\"key\":\"</script>\"}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeStringKeyWithTrustedStringFalseLessThanComment() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CompilerOptions options = new CompilerOptions();
+        options.setTrustedStrings(false);
+        CodeGenerator generator = createCodeGeneratorWithOptions(consumer, options);
+        Node n = IR.objectlit(IR.stringKey("key", IR.string("<!--")));
+        generator.add(n);
+        assertEquals("{\"key\":\"\\x3c!--\"}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeStringKeyWithTrustedStringTrueLessThanComment() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CompilerOptions options = new CompilerOptions();
+        options.setTrustedStrings(true);
+        CodeGenerator generator = createCodeGeneratorWithOptions(consumer, options);
+        Node n = IR.objectlit(IR.stringKey("key", IR.string("<!--")));
+        generator.add(n);
+        assertEquals("{\"key\":\"<!--\"}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeStringKeyWithUnicodeNonAscii() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.objectlit(IR.stringKey("key", IR.string("你好"))); // Chinese characters
+        generator.add(n);
+        assertEquals("{\"key\":\"\\u4f60\\u597d\"}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeStringKeyWithPreferSingleQuotesTrue() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CompilerOptions options = new CompilerOptions();
+        options.setPreferSingleQuotes(true);
+        CodeGenerator generator = createCodeGeneratorWithOptions(consumer, options);
+        Node n = IR.objectlit(IR.stringKey("key", IR.string("value with \"quotes\"")));
+        generator.add(n);
+        assertEquals("{'key':'value with \"quotes\"'}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeStringKeyWithPreferSingleQuotesFalse() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CompilerOptions options = new CompilerOptions();
+        options.setPreferSingleQuotes(false); // Default is false
+        CodeGenerator generator = createCodeGeneratorWithOptions(consumer, options);
+        Node n = IR.objectlit(IR.stringKey("key", IR.string("value with 'quotes'")));
+        generator.add(n);
+        assertEquals("{\"key\":\"value with 'quotes'\"}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeStringWithPreferSingleQuotesTrue() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CompilerOptions options = new CompilerOptions();
+        options.setPreferSingleQuotes(true);
+        CodeGenerator generator = createCodeGeneratorWithOptions(consumer, options);
+        Node n = IR.string("value with \"quotes\"");
+        generator.add(n);
+        assertEquals("'value with \"quotes\"'", consumer.getCode());
+    }
+    
+    @Test
+    public void testAddNodeStringWithPreferSingleQuotesFalse() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CompilerOptions options = new CompilerOptions();
+        options.setPreferSingleQuotes(false); // Default is false
+        CodeGenerator generator = createCodeGeneratorWithOptions(consumer, options);
+        Node n = IR.string("value with 'quotes'");
+        generator.add(n);
+        assertEquals("\"value with 'quotes'\"", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeStringWithSpecialChars() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.string("abc\ndef");
+        generator.add(n);
+        assertEquals("\"abc\\ndef\"", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeStringWithUnicodeChar() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.string("\u0001"); // Start of Heading
+        generator.add(n);
+        assertEquals("\"\\x01\"", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeStringWithUnicodeCharSlashV() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.string("\u000B"); // Vertical Tab
+        n.putBooleanProp(Node.SLASH_V, true); // Force \v escape
+        generator.add(n);
+        assertEquals("\"\\v\"", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeStringWithLineTerminators() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.string("\u2028\u2029"); // Line Separator, Paragraph Separator
+        generator.add(n);
+        assertEquals("\"\\u2028\\u2029\"", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeStringWithTrustedStringFalse() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CompilerOptions options = new CompilerOptions();
+        options.setTrustedStrings(false);
+        CodeGenerator generator = createCodeGeneratorWithOptions(consumer, options);
+        Node n = IR.string("<script>");
+        generator.add(n);
+        assertEquals("\"\\x3cscript\\x3e\"", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeStringWithTrustedStringTrue() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CompilerOptions options = new CompilerOptions();
+        options.setTrustedStrings(true);
+        CodeGenerator generator = createCodeGeneratorWithOptions(consumer, options);
+        Node n = IR.string("<script>");
+        generator.add(n);
+        assertEquals("\"<script>\"", consumer.getCode());
+    }
+    
+    @Test
+    public void testAddNodeStringWithTrustedStringFalseAmpersand() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CompilerOptions options = new CompilerOptions();
+        options.setTrustedStrings(false);
+        CodeGenerator generator = createCodeGeneratorWithOptions(consumer, options);
+        Node n = IR.string("&");
+        generator.add(n);
+        assertEquals("\"\\x26\"", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeStringWithTrustedStringTrueAmpersand() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CompilerOptions options = new CompilerOptions();
+        options.setTrustedStrings(true);
+        CodeGenerator generator = createCodeGeneratorWithOptions(consumer, options);
+        Node n = IR.string("&");
+        generator.add(n);
+        assertEquals("\"&\"", consumer.getCode());
+    }
+    
+    @Test
+    public void testAddNodeStringWithTrustedStringFalseGreaterThan() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CompilerOptions options = new CompilerOptions();
+        options.setTrustedStrings(false);
+        CodeGenerator generator = createCodeGeneratorWithOptions(consumer, options);
+        Node n = IR.string(">>");
+        generator.add(n);
+        assertEquals("\"--\\x3e\\x3e\"", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeStringWithTrustedStringTrueGreaterThan() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CompilerOptions options = new CompilerOptions();
+        options.setTrustedStrings(true);
+        CodeGenerator generator = createCodeGeneratorWithOptions(consumer, options);
+        Node n = IR.string(">>");
+        generator.add(n);
+        assertEquals("\">>\"", consumer.getCode());
+    }
+    
+    @Test
+    public void testAddNodeStringWithTrustedStringFalseLessThan() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CompilerOptions options = new CompilerOptions();
+        options.setTrustedStrings(false);
+        CodeGenerator generator = createCodeGeneratorWithOptions(consumer, options);
+        Node n = IR.string("</script>");
+        generator.add(n);
+        assertEquals("\"\\x3c/script\\x3e\"", consumer.getCode());
+    }
+    
+    @Test
+    public void testAddNodeStringWithTrustedStringTrueLessThan() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CompilerOptions options = new CompilerOptions();
+        options.setTrustedStrings(true);
+        CodeGenerator generator = createCodeGeneratorWithOptions(consumer, options);
+        Node n = IR.string("</script>");
+        generator.add(n);
+        assertEquals("\"</script>\"", consumer.getCode());
+    }
+    
+    @Test
+    public void testAddNodeStringWithTrustedStringFalseLessThanComment() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CompilerOptions options = new CompilerOptions();
+        options.setTrustedStrings(false);
+        CodeGenerator generator = createCodeGeneratorWithOptions(consumer, options);
+        Node n = IR.string("<!--");
+        generator.add(n);
+        assertEquals("\"\\x3c!--\"", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeStringWithTrustedStringTrueLessThanComment() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CompilerOptions options = new CompilerOptions();
+        options.setTrustedStrings(true);
+        CodeGenerator generator = createCodeGeneratorWithOptions(consumer, options);
+        Node n = IR.string("<!--");
+        generator.add(n);
+        assertEquals("\"<!--\"", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeStringWithUnicodeNonAscii() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.string("你好"); // Chinese characters
+        generator.add(n);
+        assertEquals("\"\\u4f60\\u597d\"", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeObjectLit() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.objectlit(IR.stringKey("a", IR.number(1)), IR.stringKey("b", IR.string("two")));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("{\"a\":1.0,\"b\":\"two\"}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeObjectLitRequiresParens() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.objectlit(IR.stringKey("a", IR.number(1)));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("{\"a\":1.0}", consumer.getCode());
+    }
+    
+    @Test
+    public void testAddNodeRegExpLiteralRequiresParens() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.regexp(IR.string("a"));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("/a/", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeScript() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.script(IR.add(IR.number(1), IR.number(2)));
+        generator.add(n, CodeGenerator.Context.STATEMENT);
+        assertEquals("1.0 + 2.0", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeScriptWithMultipleStatements() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.script(
+            IR.var(IR.name("a"), IR.number(1)),
+            IR.add(IR.name("a"), IR.number(2))
+        );
+        generator.add(n, CodeGenerator.Context.STATEMENT);
+        assertEquals("var a = 1.0;\na + 2.0", consumer.getCode());
+    }
+    
+    @Test
+    public void testAddNodeScriptWithFunctionDeclaration() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node fn = IR.function(IR.name("myFunc"), IR.paramList(), IR.block(IR.returnNode()));
+        Node n = IR.script(fn, IR.exprResult(IR.call(IR.name("myFunc"))));
+        generator.add(n, CodeGenerator.Context.STATEMENT);
+        assertEquals("function myFunc() {}\nmyFunc()", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeScriptWithVARAndLineBreak() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.script(
+            IR.var(IR.name("a"), IR.number(1)),
+            IR.exprResult(IR.call(IR.name("foo")))
+        );
+        generator.add(n, CodeGenerator.Context.STATEMENT);
+        assertEquals("var a = 1.0;\nfoo()", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeBlockWithVARAndLineBreak() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.block(
+            IR.var(IR.name("a"), IR.number(1))
+        );
+        generator.add(n, CodeGenerator.Context.STATEMENT);
+        assertEquals("{var a = 1.0;}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeBinaryOperatorADD() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.add(IR.number(1), IR.number(2));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("1.0 + 2.0", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeBinaryOperatorSUB() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.sub(IR.number(3), IR.number(1));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("3.0 - 1.0", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeBinaryOperatorMUL() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.MUL, IR.number(2), IR.number(3));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("2.0 * 3.0", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeBinaryOperatorDIV() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.DIV, IR.number(6), IR.number(2));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("6.0 / 2.0", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeBinaryOperatorMOD() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.MOD, IR.number(7), IR.number(3));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("7.0 % 3.0", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeBinaryOperatorOR() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.OR, IR.trueNode(), IR.falseNode());
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("true || false", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeBinaryOperatorAND() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.AND, IR.trueNode(), IR.falseNode());
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("true && false", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeBinaryOperatorEQ() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.EQ, IR.number(1), IR.number(1));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("1.0 == 1.0", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeBinaryOperatorNEQ() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.NE, IR.number(1), IR.number(2));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("1.0 != 2.0", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeBinaryOperatorSHEQ() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.SHEQ, IR.number(1), IR.number(1));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("1.0 === 1.0", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeBinaryOperatorSHNE() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.SHNE, IR.number(1), IR.number(2));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("1.0 !== 2.0", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeBinaryOperatorLT() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.LT, IR.number(1), IR.number(2));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("1.0 < 2.0", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeBinaryOperatorLE() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.LE, IR.number(1), IR.number(1));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("1.0 <= 1.0", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeBinaryOperatorGT() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.GT, IR.number(2), IR.number(1));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("2.0 > 1.0", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeBinaryOperatorGE() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.GE, IR.number(1), IR.number(1));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("1.0 >= 1.0", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeBinaryOperatorLSH() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.LSH, IR.number(1), IR.number(2));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("1.0 << 2.0", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeBinaryOperatorRSH() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.RSH, IR.number(-1), IR.number(1));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("-1.0 >> 1.0", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeBinaryOperatorURSH() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.URSH, IR.number(-1), IR.number(1));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("-1.0 >>> 1.0", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeBinaryOperatorBITOR() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.BITOR, IR.number(1), IR.number(2));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("1.0 | 2.0", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeBinaryOperatorBITXOR() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.BITXOR, IR.number(1), IR.number(2));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("1.0 ^ 2.0", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeBinaryOperatorBITAND() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.BITAND, IR.number(1), IR.number(2));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("1.0 & 2.0", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeBinaryOperatorIn() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.IN, IR.string("key"), IR.name("obj"));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("\"key\" in obj", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeBinaryOperatorInstanceOf() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.INSTANCEOF, IR.name("obj"), IR.name("Object"));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("obj instanceof Object", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeHook() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.hook(IR.trueNode(), IR.number(1), IR.number(2));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("true ? 1.0 : 2.0", consumer.getCode());
+    }
+    
+    @Test
+    public void testAddNodeHookNested() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.hook(IR.trueNode(), IR.hook(IR.falseNode(), IR.number(1), IR.number(2)), IR.number(3));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("true ? (false ? 1.0 : 2.0) : 3.0", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeComplexExpression() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.add(
+            IR.mul(IR.number(2), IR.name("x")),
+            IR.sub(IR.number(5), IR.number(1))
+        );
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("2.0 * x - 5.0 - 1.0", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeComplexExpressionWithParens() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.mul(IR.add(IR.number(2), IR.number(3)), IR.number(4));
+        generator.add(n, CodeGenerator.Context.START_OF_EXPR);
+        assertEquals("(2.0 + 3.0) * 4.0", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeWithNonEmptyStatement() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.block(IR.returnNode());
+        generator.addNonEmptyStatement(n, CodeGenerator.Context.STATEMENT, false);
+        assertEquals("return;", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeWithNonEmptyStatementVoid() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.voidNode(IR.number(1));
+        generator.addNonEmptyStatement(n, CodeGenerator.Context.STATEMENT, true);
+        assertEquals("void 1.0;", consumer.getCode());
+    }
+    
+    @Test
+    public void testAddNodeWithNonEmptyStatementEmptyBlock() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.block();
+        generator.addNonEmptyStatement(n, CodeGenerator.Context.STATEMENT, false);
+        assertEquals(";", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeWithNonEmptyStatementEmptyBlockPreserve() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = new CodeGenerator(consumer, new CompilerOptions()) {
+            @Override
+            protected boolean shouldPreserveExtraBlocks() { return true; }
+        };
+        Node n = IR.block();
+        generator.addNonEmptyStatement(n, CodeGenerator.Context.STATEMENT, false);
+        assertEquals("{}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeWithNonEmptyStatementFunction() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node fn = IR.function(IR.name("myFunc"), IR.paramList(), IR.block());
+        generator.addNonEmptyStatement(fn, CodeGenerator.Context.STATEMENT, false);
+        assertEquals("function myFunc() {}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeWithNonEmptyStatementFunctionWrapped() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node fn = IR.function(IR.name("myFunc"), IR.paramList(), IR.block());
+        Node labeledFn = IR.label(IR.labelName("myLabel"), fn);
+        generator.addNonEmptyStatement(labeledFn, CodeGenerator.Context.STATEMENT, true);
+        assertEquals("myLabel:function myFunc() {}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeWithNonEmptyStatementDo() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.doNode(IR.returnNode(), IR.trueNode());
+        generator.addNonEmptyStatement(n, CodeGenerator.Context.STATEMENT, false);
+        assertEquals("do{return;}while(true);", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeWithNonEmptyStatementIf() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.ifNode(IR.trueNode(), IR.returnNode());
+        generator.addNonEmptyStatement(n, CodeGenerator.Context.STATEMENT, false);
+        assertEquals("if(true)return;", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeWithNonEmptyStatementIfNoElse() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.ifNode(IR.trueNode(), IR.returnNode());
+        generator.addNonEmptyStatement(n, CodeGenerator.Context.STATEMENT, false);
+        assertEquals("if(true)return;", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeWithNonEmptyStatementIfWithElse() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.ifNode(IR.trueNode(), IR.returnNode(IR.number(1)), IR.returnNode(IR.number(2)));
+        generator.addNonEmptyStatement(n, CodeGenerator.Context.STATEMENT, false);
+        assertEquals("if(true)return 1.0;else return 2.0", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeWithNonEmptyStatementFor() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.forNode(IR.var(IR.name("i"), IR.number(0)), IR.newNode(Token.LT, IR.name("i"), IR.number(10)), IR.newNode(Token.INC, IR.name("i")), IR.returnNode());
+        generator.addNonEmptyStatement(n, CodeGenerator.Context.STATEMENT, false);
+        assertEquals("for(var i = 0.0;i < 10.0;i++)return;", consumer.getCode());
+    }
+    
+    @Test
+    public void testAddNodeWithNonEmptyStatementForIn() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.forIn(IR.var(IR.name("key"), null), IR.name("obj"), IR.returnNode());
+        generator.addNonEmptyStatement(n, CodeGenerator.Context.STATEMENT, false);
+        assertEquals("for(var key in obj)return;", consumer.getCode());
+    }
+    
+    @Test
+    public void testAddNodeWithNonEmptyStatementEmpty() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.EMPTY);
+        generator.addNonEmptyStatement(n, CodeGenerator.Context.STATEMENT, false);
+        assertEquals(";", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeWithNonEmptyStatementEmptyAsBlock() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.block(); // An empty block node
+        generator.addNonEmptyStatement(n, CodeGenerator.Context.STATEMENT, false);
+        assertEquals(";", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNodeWithNonEmptyStatementEmptyBlockPreserve() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = new CodeGenerator(consumer, new CompilerOptions()) {
+            @Override
+            protected boolean shouldPreserveExtraBlocks() { return true; }
+        };
+        Node n = IR.block(); // An empty block node
+        generator.addNonEmptyStatement(n, CodeGenerator.Context.STATEMENT, false);
+        assertEquals("{}", consumer.getCode());
+    }
+    
+    @Test
+    public void testAddExprWithPrecedenceLow() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.add(IR.number(1), IR.number(2)); // Precedence 5
+        generator.addExpr(n, 6, CodeGenerator.Context.OTHER); // Lower precedence requires parens
+        assertEquals("(1.0 + 2.0)", consumer.getCode());
+    }
+
+    @Test
+    public void testAddExprWithPrecedenceHigh() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.mul(IR.number(1), IR.number(2)); // Precedence 6
+        generator.addExpr(n, 5, CodeGenerator.Context.OTHER); // Higher precedence does not
+        assertEquals("1.0 * 2.0", consumer.getCode());
+    }
+    
+    @Test
+    public void testAddExprWithPrecedenceEqual() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.add(IR.number(1), IR.number(2)); // Precedence 5
+        generator.addExpr(n, 5, CodeGenerator.Context.OTHER); // Equal precedence does not
+        assertEquals("1.0 + 2.0", consumer.getCode());
+    }
+
+    @Test
+    public void testAddExprWithPrecedenceInForInitClause() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.newNode(Token.IN, IR.string("a"), IR.name("b")); // Precedence 51
+        generator.addExpr(n, 0, CodeGenerator.Context.IN_FOR_INIT_CLAUSE); // 'in' operator is disallowed
+        assertEquals("( \"a\" in b )", consumer.getCode());
+    }
+    
+    @Test
+    public void testAddExprWithoutPrecedenceInForInitClause() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.add(IR.number(1), IR.number(2)); // Precedence 5
+        generator.addExpr(n, 0, CodeGenerator.Context.IN_FOR_INIT_CLAUSE); // No 'in' operator, so no parens
+        assertEquals("1.0 + 2.0", consumer.getCode());
+    }
+
+    @Test
+    public void testAddListEmpty() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        generator.addList(null);
+        assertEquals("", consumer.getCode());
+    }
+
+    @Test
+    public void testAddListSingleElement() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        generator.addList(IR.number(1));
+        assertEquals("1.0", consumer.getCode());
+    }
+
+    @Test
+    public void testAddListMultipleElements() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        generator.addList(IR.number(1), IR.string("two"));
+        assertEquals("1.0,\"two\"", consumer.getCode());
+    }
+
+    @Test
+    public void testAddListAsArrayOrFunctionArgument() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node left = IR.number(1);
+        Node right = IR.add(IR.number(2), IR.number(3)); // Needs parens
+        generator.addList(left, true); // isArrayOrFunctionArgument = true
+        assertEquals("1.0", consumer.getCode());
+        
+        consumer = new TestCodeConsumer(); // Reset consumer
+        generator = createCodeGenerator(consumer);
+        generator.addList(right, true); // isArrayOrFunctionArgument = true
+        assertEquals("(2.0 + 3.0)", consumer.getCode());
+        
+        consumer = new TestCodeConsumer(); // Reset consumer
+        generator = createCodeGenerator(consumer);
+        generator.addList(left, right, true);
+        assertEquals("1.0,(2.0 + 3.0)", consumer.getCode());
+    }
+
+    @Test
+    public void testAddArrayListEmpty() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        generator.addArrayList(null);
+        assertEquals("", consumer.getCode());
+    }
+
+    @Test
+    public void testAddArrayListSingleElement() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        generator.addArrayList(IR.number(1));
+        assertEquals("1.0", consumer.getCode());
+    }
+
+    @Test
+    public void testAddArrayListMultipleElements() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        generator.addArrayList(IR.number(1), IR.string("two"));
+        assertEquals("1.0,\"two\"", consumer.getCode());
+    }
+
+    @Test
+    public void testAddArrayListWithEmptySlot() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node first = IR.number(1);
+        Node second = IR.empty();
+        Node third = IR.string("three");
+        first.setNext(second);
+        second.setNext(third);
+        generator.addArrayList(first);
+        assertEquals("1.0,, \"three\"", consumer.getCode());
+    }
+
+    @Test
+    public void testAddArrayListWithTrailingEmptySlot() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node first = IR.number(1);
+        Node second = IR.string("two");
+        Node third = IR.empty(); // Trailing empty slot
+        first.setNext(second);
+        second.setNext(third);
+        generator.addArrayList(first);
+        assertEquals("1.0,\"two\",", consumer.getCode());
+    }
+
+    @Test
+    public void testAddCaseBody() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.block(IR.returnNode());
+        generator.addCaseBody(n);
+        assertEquals("{return;}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddAllSiblings() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n1 = IR.number(1);
+        Node n2 = IR.string("two");
+        n1.setNext(n2);
+        generator.addAllSiblings(n1);
+        assertEquals("1.0\"two\"", consumer.getCode());
+    }
+
+    @Test
+    public void testAddJsStringEmpty() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.string("");
+        generator.addJsString(n);
+        assertEquals("\"\"", consumer.getCode());
+    }
+
+    @Test
+    public void testAddJsStringSimple() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.string("hello");
+        generator.addJsString(n);
+        assertEquals("\"hello\"", consumer.getCode());
+    }
+
+    @Test
+    public void testAddJsStringWithQuotes() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.string("he said \"hi\"");
+        generator.addJsString(n);
+        assertEquals("\"he said \\\"hi\\\"\"", consumer.getCode());
+    }
+
+    @Test
+    public void testAddJsStringWithSingleQuotes() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.string("he said 'hi'");
+        generator.addJsString(n);
+        assertEquals("\"he said 'hi'\"", consumer.getCode());
+    }
+
+    @Test
+    public void testAddJsStringWithBackslash() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.string("a\\b");
+        generator.addJsString(n);
+        assertEquals("\"a\\\\b\"", consumer.getCode());
+    }
+
+    @Test
+    public void testAddJsStringWithNewline() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.string("a\nb");
+        generator.addJsString(n);
+        assertEquals("\"a\\nb\"", consumer.getCode());
+    }
+
+    @Test
+    public void testAddJsStringWithUnicode() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        Node n = IR.string("你好");
+        generator.addJsString(n);
+        assertEquals("\"\\u4f60\\u597d\"", consumer.getCode());
+    }
+
+    @Test
+    public void testJsStringPreferSingleQuotes() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CompilerOptions options = new CompilerOptions();
+        options.setPreferSingleQuotes(true);
+        CodeGenerator generator = createCodeGeneratorWithOptions(consumer, options);
+        Node n = IR.string("value with \"quotes\"");
+        generator.addJsString(n);
+        assertEquals("'value with \"quotes\"'", consumer.getCode());
+    }
+
+    @Test
+    public void testJsStringPreferSingleQuotesNoDoubleQuotes() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CompilerOptions options = new CompilerOptions();
+        options.setPreferSingleQuotes(true);
+        CodeGenerator generator = createCodeGeneratorWithOptions(consumer, options);
+        Node n = IR.string("value with 'quotes'");
+        generator.addJsString(n);
+        assertEquals("'value with 'quotes''", consumer.getCode());
+    }
+
+    @Test
+    public void testJsStringPreferDoubleQuotes() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CompilerOptions options = new CompilerOptions();
+        options.setPreferSingleQuotes(false); // Default
+        CodeGenerator generator = createCodeGeneratorWithOptions(consumer, options);
+        Node n = IR.string("value with 'quotes'");
+        generator.addJsString(n);
+        assertEquals("\"value with 'quotes'\"", consumer.getCode());
+    }
+
+    @Test
+    public void testJsStringPreferDoubleQuotesNoSingleQuotes() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CompilerOptions options = new CompilerOptions();
+        options.setPreferSingleQuotes(false); // Default
+        CodeGenerator generator = createCodeGeneratorWithOptions(consumer, options);
+        Node n = IR.string("value with \"quotes\"");
+        generator.addJsString(n);
+        assertEquals("\"value with \"quotes\"\"", consumer.getCode());
+    }
+
+    @Test
+    public void testRegexpEscapeSimple() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        String escaped = generator.regexpEscape("abc");
+        assertEquals("/abc/", escaped);
+    }
+
+    @Test
+    public void testRegexpEscapeForwardSlash() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        String escaped = generator.regexpEscape("a/b");
+        assertEquals("/a\\/b/", escaped);
+    }
+
+    @Test
+    public void testRegexpEscapeSpecialChars() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        String escaped = generator.regexpEscape("a.b*c+d?e^f$g|h(i)j[k]l{m}");
+        assertEquals("/a\\.b\\*c\\+d\\?e\\^f\\$g\\|h\\(i\\)j\\[k\\]\\{m\\}/", escaped);
+    }
+
+    @Test
+    public void testRegexpEscapeUnicode() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        String escaped = generator.regexpEscape("你好");
+        assertEquals("/\\u4f60\\u597d/", escaped);
+    }
+    
+    @Test
+    public void testRegexpEscapeLessThanScriptTag() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        String escaped = generator.regexpEscape("</script>");
+        assertEquals("/<\\/script>/", escaped);
+    }
+    
+    @Test
+    public void testRegexpEscapeLessThanCommentStart() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        String escaped = generator.regexpEscape("<!--");
+        assertEquals("/<\\!--/", escaped);
+    }
+    
+    @Test
+    public void testRegexpEscapeGreaterThanScriptTagEnd() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        String escaped = generator.regexpEscape("-->>");
+        assertEquals("/--\\x3e\\x3e/", escaped);
+    }
+
+    @Test
+    public void testRegexpEscapeGreaterThanCommentEnd() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        String escaped = generator.regexpEscape("]]>");
+        assertEquals("/]]\\x3e/", escaped);
+    }
+
+    @Test
+    public void testRegexpEscapeEqualsSign() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        String escaped = generator.regexpEscape("=");
+        assertEquals("/=/", escaped);
+    }
+
+    @Test
+    public void testRegexpEscapeAmpersand() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        String escaped = generator.regexpEscape("&");
+        assertEquals("/&/", escaped);
+    }
+
+    @Test
+    public void testStrEscapeSimple() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        String escaped = generator.strEscape("abc", '"', "\\\"", "'", "\\\\", null, false, false);
+        assertEquals("\"abc\"", escaped);
+    }
+
+    @Test
+    public void testStrEscapeWithDoubleQuotes() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        String escaped = generator.strEscape("say \"hi\"", '"', "\\\"", "'", "\\\\", null, false, false);
+        assertEquals("\"say \\\"hi\\\"\"", escaped);
+    }
+
+    @Test
+    public void testStrEscapeWithSingleQuotes() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        String escaped = generator.strEscape("say 'hi'", '"', "\\\"", "'", "\\\\", null, false, false);
+        assertEquals("\"say 'hi'\"", escaped);
+    }
+
+    @Test
+    public void testStrEscapeWithBackslash() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        String escaped = generator.strEscape("a\\b", '"', "\\\"", "'", "\\\\", null, false, false);
+        assertEquals("\"a\\\\b\"", escaped);
+    }
+
+    @Test
+    public void testStrEscapeWithNewline() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        String escaped = generator.strEscape("a\nb", '"', "\\\"", "'", "\\\\", null, false, false);
+        assertEquals("\"a\\nb\"", escaped);
+    }
+
+    @Test
+    public void testStrEscapeWithUnicode() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        String escaped = generator.strEscape("你好", '"', "\\\"", "'", "\\\\", null, false, false);
+        assertEquals("\"\\u4f60\\u597d\"", escaped);
+    }
+
+    @Test
+    public void testStrEscapeWithTrustedStringFalseLessThan() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CompilerOptions options = new CompilerOptions();
+        options.setTrustedStrings(false);
+        CodeGenerator generator = createCodeGeneratorWithOptions(consumer, options);
+        String escaped = generator.strEscape("<script>", '"', "\\\"", "'", "\\\\", null, false, false);
+        assertEquals("\"\\x3cscript\\x3e\"", escaped);
+    }
+    
+    @Test
+    public void testStrEscapeWithTrustedStringTrueLessThan() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CompilerOptions options = new CompilerOptions();
+        options.setTrustedStrings(true);
+        CodeGenerator generator = createCodeGeneratorWithOptions(consumer, options);
+        String escaped = generator.strEscape("<script>", '"', "\\\"", "'", "\\\\", null, false, false);
+        assertEquals("\"<script>\"", escaped);
+    }
+
+    @Test
+    public void testIdentifierEscapeSimple() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        String escaped = generator.identifierEscape("myVar");
+        assertEquals("myVar", escaped);
+    }
+
+    @Test
+    public void testIdentifierEscapeKeyword() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        String escaped = generator.identifierEscape("var"); // 'var' is a keyword
+        assertEquals("var", escaped);
+    }
+
+    @Test
+    public void testIdentifierEscapeUnicode() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        String escaped = generator.identifierEscape("你好"); // Chinese characters
+        assertEquals("\\u4f60\\u597d", escaped);
+    }
+
+    @Test
+    public void testIdentifierEscapeWithSpecialChars() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        CodeGenerator generator = createCodeGenerator(consumer);
+        String escaped = generator.identifierEscape("a-b"); // '-' is not a valid JS identifier char
+        assertEquals("a\\x2db", escaped);
+    }
+
+    @Test
+    public void testGetNonEmptyChildCountEmptyBlock() {
+        Node n = IR.block();
+        assertEquals(0, CodeGenerator.getNonEmptyChildCount(n, 10));
+    }
+
+    @Test
+    public void testGetNonEmptyChildCountWithEmptyNodes() {
+        Node n = IR.block(IR.empty(), IR.returnNode(), IR.empty());
+        assertEquals(1, CodeGenerator.getNonEmptyChildCount(n, 10));
+    }
+
+    @Test
+    public void testGetNonEmptyChildCountWithNestedBlocks() {
+        Node n = IR.block(IR.block(IR.returnNode()), IR.empty());
+        assertEquals(1, CodeGenerator.getNonEmptyChildCount(n, 10));
+    }
+    
+    @Test
+    public void testGetNonEmptyChildCountMaxCount() {
+        Node n = IR.block(IR.returnNode(), IR.returnNode(), IR.returnNode());
+        assertEquals(2, CodeGenerator.getNonEmptyChildCount(n, 2));
+    }
+
+    @Test
+    public void testGetFirstNonEmptyChildEmptyBlock() {
+        Node n = IR.block();
+        assertNull(CodeGenerator.getFirstNonEmptyChild(n));
+    }
+
+    @Test
+    public void testGetFirstNonEmptyChildWithEmptyNodes() {
+        Node n = IR.block(IR.empty(), IR.returnNode(), IR.empty());
+        assertEquals(Token.RETURN, CodeGenerator.getFirstNonEmptyChild(n).getType());
+    }
+
+    @Test
+    public void testGetFirstNonEmptyChildWithNestedBlocks() {
+        Node n = IR.block(IR.block(IR.returnNode()), IR.empty());
+        assertEquals(Token.RETURN, CodeGenerator.getFirstNonEmptyChild(n).getType());
+    }
+
+    @Test
+    public void testGetFirstNonEmptyChildWithNestedEmptyBlocks() {
+        Node n = IR.block(IR.block(IR.empty()), IR.returnNode());
+        assertEquals(Token.RETURN, CodeGenerator.getFirstNonEmptyChild(n).getType());
+    }
+
+    @Test
+    public void testAppendHexJavaScriptRepresentationSimple() throws IOException {
+        StringBuilder sb = new StringBuilder();
+        CodeGenerator.appendHexJavaScriptRepresentation(sb, 'A');
+        assertEquals("\\u0041", sb.toString());
+    }
+
+    @Test
+    public void testAppendHexJavaScriptRepresentationSpecialChar() throws IOException {
+        StringBuilder sb = new StringBuilder();
+        CodeGenerator.appendHexJavaScriptRepresentation(sb, '\u2028'); // Line Separator
+        assertEquals("\\u2028", sb.toString());
+    }
+
+    @Test
+    public void testAppendHexJavaScriptRepresentationSupplementaryCodePoint() throws IOException {
+        StringBuilder sb = new StringBuilder();
+        CodeGenerator.appendHexJavaScriptRepresentation(sb, 0x1F4A9);
+        assertEquals("\\uD83D\\uDCA9", sb.toString());
+    }
+
+    @Test
+    public void testIsIndirectEvalTrue() {
+        Node n = IR.name("eval");
+        n.putBooleanProp(Node.DIRECT_EVAL, false);
+        assertTrue(CodeGenerator.isIndirectEval(n));
+    }
+
+    @Test
+    public void testIsIndirectEvalFalseDirect() {
+        Node n = IR.name("eval");
+        n.putBooleanProp(Node.DIRECT_EVAL, true);
+        assertFalse(CodeGenerator.isIndirectEval(n));
+    }
+
+    @Test
+    public void testIsIndirectEvalFalseName() {
+        Node n = IR.name("other");
+        n.putBooleanProp(Node.DIRECT_EVAL, false);
+        assertFalse(CodeGenerator.isIndirectEval(n));
+    }
+}
+```
+
+```text
+1. SOURCE CODE ANALYSIS - two or three lines:
+The tests cover various aspects of the CodeGenerator class, including adding nodes, handling different token types (literals, operators, statements, expressions), string and regex escaping, and specific formatting options. The `add` method and its internal logic are extensively tested.
+
+2. TEST CASE DESIGN - one line per test:
+- testTagAsStrict: Checks if the "'use strict';" tag is added correctly.
+- testAddNodeSimple: Verifies adding a simple string node.
+- testAddNodeNumber: Verifies adding a number node.
+- testAddNodeNumberBoundaryMax: Tests adding Double.MAX_VALUE.
+- testAddNodeNumberBoundaryMin: Tests adding Double.MIN_VALUE.
+- testAddNodeNumberZero: Tests adding 0.0.
+- testAddNodeNumberNegativeZero: Tests adding -0.0.
+- testAddNodeNull: Verifies adding a null node.
+- testAddNodeThis: Verifies adding a 'this' node.
+- testAddNodeTrue: Verifies adding a 'true' node.
+- testAddNodeFalse: Verifies adding a 'false' node.
+- testAddNodeName: Verifies adding a name node.
+- testAddNodeNegation: Tests the negation operator.
+- testAddNodeBitwiseNot: Tests the bitwise NOT operator.
+- testAddNodeBitwiseNotMaxInt: Tests bitwise NOT with Integer.MAX_VALUE.
+- testAddNodeBitwiseNotMinInt: Tests bitwise NOT with Integer.MIN_VALUE.
+- testAddNodePositive: Tests the unary plus operator.
+- testAddNodeNot: Tests the logical NOT operator.
+- testAddNodeVoid: Tests the void operator.
+- testAddNodeDelete: Tests the delete operator.
+- testAddNodeNewObject: Tests 'new Object()'.
+- testAddNodeNewArray: Tests 'new Array()'.
+- testAddNodeNewArrayWithArg: Tests 'new Array(arg)'.
+- testAddNodeNewArrayWithMultipleArgs: Tests 'new Array(arg1, arg2, ...)'.
+- testAddNodeNewRegExp: Tests 'new RegExp("pattern")'.
+- testAddNodeNewRegExpWithFlags: Tests 'new RegExp("pattern", "flags")'.
+- testAddNodeNewRegExpEscapedForwardSlash: Tests escaping '/' in RegExp string.
+- testAddNodeNewRegExpWithUnicodeEscape: Tests Unicode escape in RegExp string.
+- testAddNodeNewRegExpInvalidFlags: Tests invalid flags for RegExp constructor.
+- testAddNodeCallEvalIndirect: Tests indirect eval call.
+- testAddNodeCallEvalDirect: Tests direct eval call.
+- testAddNodeCallFree: Tests FREE_CALL property on method calls.
+- testAddNodeCallNotFree: Tests absence of FREE_CALL property.
+- testAddNodeFunctionDeclaration: Tests function declaration.
+- testAddNodeFunctionExpression: Tests anonymous function expression.
+- testAddNodeFunctionExpressionWithParens: Tests function expression context.
+- testAddNodeVariableDeclaration: Tests variable declaration with initialization.
+- testAddNodeVariableDeclarationNoValue: Tests variable declaration without initialization.
+- testAddNodeVariableDeclarationMultiple: Tests multiple variable declarations.
+- testAddNodeArrayLiteralEmpty: Tests an empty array literal.
+- testAddNodeArrayLiteralSingleElement: Tests an array literal with one element.
+- testAddNodeArrayLiteralMultipleElements: Tests an array literal with multiple elements.
+- testAddNodeArrayLiteralWithEmptySlots: Tests an array literal with empty slots.
+- testAddNodeArrayLiteralWithTrailingComma: Tests an array literal with a trailing comma.
+- testAddNodeObjectLiteralEmpty: Tests an empty object literal.
+- testAddNodeObjectLiteralSingleProperty: Tests an object literal with one property.
+- testAddNodeObjectLiteralMultipleProperties: Tests an object literal with multiple properties.
+- testAddNodeObjectLiteralNumericKey: Tests an object literal with a numeric key.
+- testAddNodeObjectLiteralKeywordKey: Tests an object literal with a keyword key.
+- testAddNodeObjectLiteralWithGetter: Tests an object literal with a getter.
+- testAddNodeObjectLiteralWithSetter: Tests an object literal with a setter.
+- testAddNodeTryCatchFinally: Tests try-catch-finally block.
+- testAddNodeTryCatchNoFinally: Tests try-catch block.
+- testAddNodeTryNoCatchNoFinally: Tests try block without catch/finally.
+- testAddNodeIfStatement: Tests an if statement.
+- testAddNodeIfElseStatement: Tests an if-else statement.
+- testAddNodeIfElseStatementAmbiguous: Tests ambiguous else clause.
+- testAddNodeWhileLoop: Tests a while loop.
+- testAddNodeDoLoop: Tests a do-while loop.
+- testAddNodeForLoop: Tests a for loop.
+- testAddNodeForInLoop: Tests a for-in loop.
+- testAddNodeWithStatement: Tests a with statement.
+- testAddNodeBreak: Tests a break statement.
+- testAddNodeBreakWithLabel: Tests a break statement with a label.
+- testAddNodeContinue: Tests a continue statement.
+- testAddNodeContinueWithLabel: Tests a continue statement with a label.
+- testAddNodeThrow: Tests a throw statement.
+- testAddNodeDebugger: Tests a debugger statement.
+- testAddNodeExpressionResult: Tests an expression statement.
+- testAddNodeCommaOperator: Tests the comma operator.
+- testAddNodeCommaOperatorNested: Tests nested comma operator.
+- testAddNodeAssignment: Tests an assignment.
+- testAddNodeAssignmentAdd: Tests an addition assignment.
+- testAddNodeGetProp: Tests property access.
+- testAddNodeGetPropKeyword: Tests property access with a keyword name.
+- testAddNodeGetPropEncoded: Tests encoded property name access.
+- testAddNodeGetElem: Tests element access.
+- testAddNodeCallMethod: Tests a method call.
+- testAddNodeCallMethodNoArgs: Tests a method call with no arguments.
+- testAddNodeIncPre: Tests pre-increment.
+- testAddNodeIncPost: Tests post-increment.
+- testAddNodeDecPre: Tests pre-decrement.
+- testAddNodeDecPost: Tests post-decrement.
+- testAddNodeRegExpLiteral: Tests a RegExp literal.
+- testAddNodeRegExpLiteralWithFlags: Tests a RegExp literal with flags.
+- testAddNodeRegExpLiteralEscapedSlash: Tests escaped slash in RegExp literal.
+- testAddNodeRegExpLiteralWithUnicodeEscape: Tests Unicode escape in RegExp literal.
+- testAddNodeRegExpLiteralWithLineTerminator: Tests line terminator in RegExp literal.
+- testAddNodeRegExpLiteralWithLessThanScriptTag: Tests '<script>' in RegExp literal.
+- testAddNodeRegExpLiteralWithLessThanCommentStart: Tests '<!--' in RegExp literal.
+- testAddNodeRegExpLiteralWithGreaterThanScriptTagEnd: Tests '>>' in RegExp literal.
+- testAddNodeRegExpLiteralWithGreaterThanCommentEnd: Tests ']]>' in RegExp literal.
+- testAddNodeRegExpLiteralWithEqualsSign: Tests '=' in RegExp literal.
+- testAddNodeRegExpLiteralWithAmpersand: Tests '&' in RegExp literal.
+- testAddNodeBlockEmpty: Tests an empty block.
+- testAddNodeBlockWithStatement: Tests a block with one statement.
+- testAddNodeBlockWithMultipleStatements: Tests a block with multiple statements.
+- testAddNodeBlockWithVarStatement: Tests a block with a var statement.
+- testAddNodeBlockPreserveEmpty: Tests preserving empty blocks.
+- testAddNodeSwitchStatement: Tests a switch statement.
+- testAddNodeCaseStatement: Tests a case statement.
+- testAddNodeDefaultCaseStatement: Tests a default case statement.
+- testAddNodeLabelStatement: Tests a labeled statement.
+- testAddNodeLabelStatementWithBreak: Tests a labeled statement with break.
+- testAddNodeStringKeyWithNumberValue: Tests string key with number value in object literal.
+- testAddNodeStringKeyWithBooleanValue: Tests string key with boolean value in object literal.
+- testAddNodeStringKeyWithNullValue: Tests string key with null value in object literal.
+- testAddNodeStringKeyWithUndefinedValue: Tests string key with undefined value in object literal.
+- testAddNodeStringKeyEscapedInString: Tests escaped double quotes in string key.
+- testAddNodeStringKeyEscapedSingleQuote: Tests escaped single quotes in string key.
+- testAddNodeStringKeyEscapedBackslash: Tests escaped backslash in string key.
+- testAddNodeStringKeyWithSpecialChars: Tests string key with special characters.
+- testAddNodeStringKeyWithUnicodeEscape: Tests Unicode escape in string key.
+- testAddNodeStringKeyWithUnicodeEscapeSlashV: Tests Unicode escape '\v' in string key.
+- testAddNodeStringKeyWithLineTerminators: Tests line terminators in string key.
+- testAddNodeStringKeyWithTrustedStringFalse: Tests trusted strings false for '<script>'.
+- testAddNodeStringKeyWithTrustedStringTrue: Tests trusted strings true for '<script>'.
+- testAddNodeStringKeyWithTrustedStringFalseAmpersand: Tests trusted strings false for '&'.
+- testAddNodeStringKeyWithTrustedStringTrueAmpersand: Tests trusted strings true for '&'.
+- testAddNodeStringKeyWithTrustedStringFalseGreaterThan: Tests trusted strings false for '>>'.
+- testAddNodeStringKeyWithTrustedStringTrueGreaterThan: Tests trusted strings true for '>>'.
+- testAddNodeStringKeyWithTrustedStringFalseLessThan: Tests trusted strings false for '</script>'.
+- testAddNodeStringKeyWithTrustedStringTrueLessThan: Tests trusted strings true for '</script>'.
+- testAddNodeStringKeyWithTrustedStringFalseLessThanComment: Tests trusted strings false for '<!--'.
+- testAddNodeStringKeyWithTrustedStringTrueLessThanComment: Tests trusted strings true for '<!--'.
+- testAddNodeStringKeyWithUnicodeNonAscii: Tests non-ASCII Unicode in string key.
+- testAddNodeStringKeyWithPreferSingleQuotesTrue: Tests prefer single quotes for string key.
+- testAddNodeStringKeyWithPreferSingleQuotesFalse: Tests prefer double quotes for string key.
+- testAddNodeStringWithPreferSingleQuotesTrue: Tests prefer single quotes for string literal.
+- testAddNodeStringWithPreferSingleQuotesFalse: Tests prefer double quotes for string literal.
+- testAddNodeStringWithSpecialChars: Tests string literal with special characters.
+- testAddNodeStringWithUnicodeChar: Tests Unicode character in string literal.
+- testAddNodeStringWithUnicodeCharSlashV: Tests Unicode character '\v' in string literal.
+- testAddNodeStringWithLineTerminators: Tests line terminators in string literal.
+- testAddNodeStringWithTrustedStringFalse: Tests trusted strings false for '<script>' in string literal.
+- testAddNodeStringWithTrustedStringTrue: Tests trusted strings true for '<script>' in string literal.
+- testAddNodeStringWithTrustedStringFalseAmpersand: Tests trusted strings false for '&' in string literal.
+- testAddNodeStringWithTrustedStringTrueAmpersand: Tests trusted strings true for '&' in string literal.
+- testAddNodeStringWithTrustedStringFalseGreaterThan: Tests trusted strings false for '>>' in string literal.
+- testAddNodeStringWithTrustedStringTrueGreaterThan: Tests trusted strings true for '>>' in string literal.
+- testAddNodeStringWithTrustedStringFalseLessThan: Tests trusted strings false for '</script>' in string literal.
+- testAddNodeStringWithTrustedStringTrueLessThan: Tests trusted strings true for '</script>' in string literal.
+- testAddNodeStringWithTrustedStringFalseLessThanComment: Tests trusted strings false for '<!--' in string literal.
+- testAddNodeStringWithTrustedStringTrueLessThanComment: Tests trusted strings true for '<!--' in string literal.
+- testAddNodeStringWithUnicodeNonAscii: Tests non-ASCII Unicode in string literal.
+- testAddNodeObjectLit: Tests an object literal.
+- testAddNodeObjectLitRequiresParens: Tests object literal context.
+- testAddNodeRegExpLiteralRequiresParens: Tests RegExp literal context.
+- testAddNodeScript: Tests a script node.
+- testAddNodeScriptWithMultipleStatements: Tests a script with multiple statements.
+- testAddNodeScriptWithFunctionDeclaration: Tests a script with a function declaration.
+- testAddNodeScriptWithVARAndLineBreak: Tests script with VAR and line break.
+- testAddNodeBlockWithVARAndLineBreak: Tests block with VAR and line break.
+- testAddNodeBinaryOperatorADD: Tests ADD operator.
+- testAddNodeBinaryOperatorSUB: Tests SUB operator.
+- testAddNodeBinaryOperatorMUL: Tests MUL operator.
+- testAddNodeBinaryOperatorDIV: Tests DIV operator.
+- testAddNodeBinaryOperatorMOD: Tests MOD operator.
+- testAddNodeBinaryOperatorOR: Tests OR operator.
+- testAddNodeBinaryOperatorAND: Tests AND operator.
+- testAddNodeBinaryOperatorEQ: Tests EQ operator.
+- testAddNodeBinaryOperatorNEQ: Tests NEQ operator.
+- testAddNodeBinaryOperatorSHEQ: Tests SHEQ operator.
+- testAddNodeBinaryOperatorSHNE: Tests SHNE operator.
+- testAddNodeBinaryOperatorLT: Tests LT operator.
+- testAddNodeBinaryOperatorLE: Tests LE operator.
+- testAddNodeBinaryOperatorGT: Tests GT operator.
+- testAddNodeBinaryOperatorGE: Tests GE operator.
+- testAddNodeBinaryOperatorLSH: Tests LSH operator.
+- testAddNodeBinaryOperatorRSH: Tests RSH operator.
+- testAddNodeBinaryOperatorURSH: Tests URSH operator.
+- testAddNodeBinaryOperatorBITOR: Tests BITOR operator.
+- testAddNodeBinaryOperatorBITXOR: Tests BITXOR operator.
+- testAddNodeBinaryOperatorBITAND: Tests BITAND operator.
+- testAddNodeBinaryOperatorIn: Tests IN operator.
+- testAddNodeBinaryOperatorInstanceOf: Tests INSTANCEOF operator.
+- testAddNodeHook: Tests the hook operator.
+- testAddNodeHookNested: Tests nested hook operator.
+- testAddNodeComplexExpression: Tests complex expression with operator precedence.
+- testAddNodeComplexExpressionWithParens: Tests complex expression requiring parentheses.
+- testAddNodeWithNonEmptyStatement: Tests addNonEmptyStatement.
+- testAddNodeWithNonEmptyStatementVoid: Tests addNonEmptyStatement with void.
+- testAddNodeWithNonEmptyStatementEmptyBlock: Tests addNonEmptyStatement with empty block.
+- testAddNodeWithNonEmptyStatementEmptyBlockPreserve: Tests addNonEmptyStatement with preserved empty block.
+- testAddNodeWithNonEmptyStatementFunction: Tests addNonEmptyStatement with function.
+- testAddNodeWithNonEmptyStatementFunctionWrapped: Tests addNonEmptyStatement with wrapped function.
+- testAddNodeWithNonEmptyStatementDo: Tests addNonEmptyStatement with do-while.
+- testAddNodeWithNonEmptyStatementIf: Tests addNonEmptyStatement with if.
+- testAddNodeWithNonEmptyStatementIfNoElse: Tests addNonEmptyStatement with if (no else).
+- testAddNodeWithNonEmptyStatementIfWithElse: Tests addNonEmptyStatement with if-else.
+- testAddNodeWithNonEmptyStatementFor: Tests addNonEmptyStatement with for loop.
+- testAddNodeWithNonEmptyStatementForIn: Tests addNonEmptyStatement with for-in loop.
+- testAddNodeWithNonEmptyStatementEmpty: Tests addNonEmptyStatement with EMPTY token.
+- testAddNodeWithNonEmptyStatementEmptyAsBlock: Tests addNonEmptyStatement with empty block as statement.
+- testAddNodeWithNonEmptyStatementEmptyBlockPreserve: Tests addNonEmptyStatement with preserved empty block as statement.
+- testAddExprWithPrecedenceLow: Tests addExpr with low precedence.
+- testAddExprWithPrecedenceHigh: Tests addExpr with high precedence.
+- testAddExprWithPrecedenceEqual: Tests addExpr with equal precedence.
+- testAddExprWithPrecedenceInForInitClause: Tests addExpr in for init clause with 'in'.
+- testAddExprWithoutPrecedenceInForInitClause: Tests addExpr in for init clause without 'in'.
+- testAddListEmpty: Tests addList with null.
+- testAddListSingleElement: Tests addList with one element.
+- testAddListMultipleElements: Tests addList with multiple elements.
+- testAddListAsArrayOrFunctionArgument: Tests addList as array/function argument.
+- testAddArrayListEmpty: Tests addArrayList with null.
+- testAddArrayListSingleElement: Tests addArrayList with one element.
+- testAddArrayListMultipleElements: Tests addArrayList with multiple elements.
+- testAddArrayListWithEmptySlot: Tests addArrayList with empty slot.
+- testAddArrayListWithTrailingEmptySlot: Tests addArrayList with trailing empty slot.
+- testAddCaseBody: Tests addCaseBody.
+- testAddAllSiblings: Tests addAllSiblings.
+- testAddJsStringEmpty: Tests adding an empty JS string.
+- testAddJsStringSimple: Tests adding a simple JS string.
+- testAddJsStringWithQuotes: Tests adding a JS string with double quotes.
+- testAddJsStringWithSingleQuotes: Tests adding a JS string with single quotes.
+- testAddJsStringWithBackslash: Tests adding a JS string with backslash.
+- testAddJsStringWithNewline: Tests adding a JS string with newline.
+- testAddJsStringWithUnicode: Tests adding a JS string with Unicode characters.
+- testJsStringPreferSingleQuotes: Tests string quoting with preferSingleQuotes=true.
+- testJsStringPreferSingleQuotesNoDoubleQuotes: Tests string quoting with preferSingleQuotes=true and no double quotes.
+- testJsStringPreferDoubleQuotes: Tests string quoting with preferSingleQuotes=false.
+- testJsStringPreferDoubleQuotesNoSingleQuotes: Tests string quoting with preferSingleQuotes=false and no single quotes.
+- testRegexpEscapeSimple: Tests simple RegExp escaping.
+- testRegexpEscapeForwardSlash: Tests escaping '/' in RegExp.
+- testRegexpEscapeSpecialChars: Tests escaping special RegExp characters.
+- testRegexpEscapeUnicode: Tests Unicode characters in RegExp escaping.
+- testRegexpEscapeLessThanScriptTag: Tests '</script>' in RegExp escaping.
+- testRegexpEscapeLessThanCommentStart: Tests '<!--' in RegExp escaping.
+- testRegexpEscapeGreaterThanScriptTagEnd: Tests '>>' in RegExp escaping.
+- testRegexpEscapeGreaterThanCommentEnd: Tests ']]>' in RegExp escaping.
+- testRegexpEscapeEqualsSign: Tests '=' in RegExp escaping.
+- testRegexpEscapeAmpersand: Tests '&' in RegExp escaping.
+- testStrEscapeSimple: Tests simple string escaping.
+- testStrEscapeWithDoubleQuotes: Tests string escaping with double quotes.
+- testStrEscapeWithSingleQuotes: Tests string escaping with single quotes.
+- testStrEscapeWithBackslash: Tests string escaping with backslash.
+- testStrEscapeWithNewline: Tests string escaping with newline.
+- testStrEscapeWithUnicode: Tests string escaping with Unicode characters.
+- testStrEscapeWithTrustedStringFalseLessThan: Tests string escaping with trusted strings false and '<'.
+- testStrEscapeWithTrustedStringTrueLessThan: Tests string escaping with trusted strings true and '<'.
+- testIdentifierEscapeSimple: Tests simple identifier escaping.
+- testIdentifierEscapeKeyword: Tests keyword identifier escaping.
+- testIdentifierEscapeUnicode: Tests Unicode identifier escaping.
+- testIdentifierEscapeWithSpecialChars: Tests identifier escaping with special characters.
+- testGetNonEmptyChildCountEmptyBlock: Tests getNonEmptyChildCount on an empty block.
+- testGetNonEmptyChildCountWithEmptyNodes: Tests getNonEmptyChildCount with empty nodes.
+- testGetNonEmptyChildCountWithNestedBlocks: Tests getNonEmptyChildCount with nested blocks.
+- testGetNonEmptyChildCountMaxCount: Tests getNonEmptyChildCount with maxCount.
+- testGetFirstNonEmptyChildEmptyBlock: Tests getFirstNonEmptyChild on an empty block.
+- testGetFirstNonEmptyChildWithEmptyNodes: Tests getFirstNonEmptyChild with empty nodes.
+- testGetFirstNonEmptyChildWithNestedBlocks: Tests getFirstNonEmptyChild with nested blocks.
+- testGetFirstNonEmptyChildWithNestedEmptyBlocks: Tests getFirstNonEmptyChild with nested empty blocks.
+- testAppendHexJavaScriptRepresentationSimple: Tests appendHexJavaScriptRepresentation for simple char.
+- testAppendHexJavaScriptRepresentationSpecialChar: Tests appendHexJavaScriptRepresentation for special char.
+- testAppendHexJavaScriptRepresentationSupplementaryCodePoint: Tests appendHexJavaScriptRepresentation for supplementary code point.
+- testIsIndirectEvalTrue: Tests isIndirectEval when eval is indirect.
+- testIsIndirectEvalFalseDirect: Tests isIndirectEval when eval is direct.
+- testIsIndirectEvalFalseName: Tests isIndirectEval when name is not eval.
+
+4. DEFECT DETECTION STRATEGY - one or two lines:
+Tests cover various code generation paths, string escaping rules (including trusted strings and quote preferences), and handling of special characters and Unicode, aiming to catch errors in these areas.
+
+5. SUMMARY - the number of tests.
+134
+6. LIMITATIONS - one or two lines.
+The tests focus on `CodeGenerator`'s output for various AST nodes and configurations. They do not cover aspects of `CodeConsumer` or interactions with `CompilerOptions` beyond what's necessary for `CodeGenerator`'s behavior. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.
+```

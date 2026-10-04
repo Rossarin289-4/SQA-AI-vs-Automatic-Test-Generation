@@ -1,0 +1,232 @@
+package org.apache.commons.math.stat;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.io.Serializable;
+import java.text.NumberFormat;
+import java.util.Iterator;
+import java.util.Comparator;
+import java.util.TreeMap;
+import org.apache.commons.math.MathRuntimeException;
+
+public class FrequencyTest {
+    @Test
+    public void testEmptyDistribution() throws Exception {
+        Frequency f = new Frequency();
+        assertEquals(0L, f.getSumFreq());
+        assertTrue(Double.isNaN(f.getPct(1)));
+        assertTrue(Double.isNaN(f.getCumPct(1)));
+        assertEquals(0L, f.getCumFreq(1));
+    }
+
+    @Test
+    public void testAddAndCountIntegerForms() throws Exception {
+        Frequency f = new Frequency();
+        f.addValue(2);
+        f.addValue(Long.valueOf(2));
+        f.addValue(Integer.valueOf(2));
+        assertEquals(3L, f.getCount(2));
+        assertEquals(3L, f.getSumFreq());
+    }
+
+    @Test
+    public void testMinimumIntegerValue() throws Exception {
+        Frequency f = new Frequency();
+        f.addValue(Integer.MIN_VALUE);
+        assertEquals(1L, f.getCount(Integer.MIN_VALUE));
+        assertEquals(1L, f.getCount((long) Integer.MIN_VALUE));
+    }
+
+    @Test
+    public void testMaximumIntegerValue() throws Exception {
+        Frequency f = new Frequency();
+        f.addValue(Integer.MAX_VALUE);
+        assertEquals(1L, f.getCount(Integer.MAX_VALUE));
+        assertEquals(1L, f.getCount((long) Integer.MAX_VALUE));
+    }
+
+    @Test
+    public void testLongRangeEdgesRemainDistinct() throws Exception {
+        Frequency f = new Frequency();
+        f.addValue(Long.MIN_VALUE);
+        f.addValue(Long.MAX_VALUE);
+        assertEquals(1L, f.getCount(Long.MIN_VALUE));
+        assertEquals(1L, f.getCount(Long.MAX_VALUE));
+        assertEquals(2L, f.getSumFreq());
+    }
+
+    @Test
+    public void testComparableAddAndLookup() throws Exception {
+        Frequency f = new Frequency();
+        f.addValue((Comparable<?>) Integer.valueOf(7));
+        assertEquals(1L, f.getCount((Comparable<?>) Long.valueOf(7)));
+    }
+
+    @Test
+    public void testRejectsNonComparableObject() throws Exception {
+        Frequency f = new Frequency();
+        try {
+            f.addValue(new Object());
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) {
+            assertEquals(0L, f.getSumFreq());
+        }
+    }
+
+    @Test
+    public void testRejectsIncomparableValue() throws Exception {
+        Frequency f = new Frequency();
+        f.addValue('a');
+        try {
+            f.addValue(1);
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) {
+            assertEquals(1L, f.getSumFreq());
+        }
+    }
+
+    @Test
+    public void testCharacterCountsAndOrdering() throws Exception {
+        Frequency f = new Frequency();
+        f.addValue('b');
+        f.addValue('a');
+        f.addValue('b');
+        assertEquals(2L, f.getCount('b'));
+        assertEquals(1L, f.getCount('a'));
+        Iterator<Comparable<?>> it = f.valuesIterator();
+        assertEquals(Character.valueOf('a'), it.next());
+        assertEquals(Character.valueOf('b'), it.next());
+        assertFalse(it.hasNext());
+    }
+
+    @Test
+    public void testPercentages() throws Exception {
+        Frequency f = new Frequency();
+        f.addValue(1);
+        f.addValue(1);
+        f.addValue(2);
+        assertEquals(2.0 / 3.0, f.getPct(1), 1e-12);
+        assertEquals(1.0 / 3.0, f.getPct(2), 1e-12);
+        assertEquals(0.0, f.getPct(3), 1e-12);
+    }
+
+    @Test
+    public void testCumulativeFrequencyBelowAtBetweenAndAboveRange() throws Exception {
+        Frequency f = new Frequency();
+        f.addValue(2);
+        f.addValue(2);
+        f.addValue(5);
+        f.addValue(8);
+        assertEquals(0L, f.getCumFreq(1));
+        assertEquals(2L, f.getCumFreq(2));
+        assertEquals(2L, f.getCumFreq(4));
+        assertEquals(4L, f.getCumFreq(8));
+        assertEquals(4L, f.getCumFreq(9));
+    }
+
+    @Test
+    public void testCumulativeFrequencyForExistingAndMissingComparable() throws Exception {
+        Frequency f = new Frequency();
+        f.addValue(3);
+        f.addValue(6);
+        f.addValue(6);
+        assertEquals(1L, f.getCumFreq((Comparable<?>) Long.valueOf(3)));
+        assertEquals(1L, f.getCumFreq((Comparable<?>) Long.valueOf(4)));
+        assertEquals(3L, f.getCumFreq((Comparable<?>) Long.valueOf(6)));
+    }
+
+    @Test
+    public void testIncomparableLookupReturnsZero() throws Exception {
+        Frequency f = new Frequency();
+        f.addValue(4);
+        assertEquals(0L, f.getCount((Comparable<?>) Character.valueOf('a')));
+        assertEquals(0L, f.getCumFreq((Comparable<?>) Character.valueOf('a')));
+        assertEquals(0.0, f.getCumPct((Comparable<?>) Character.valueOf('a')), 0.0);
+    }
+
+    @Test
+    public void testCumulativePercentages() throws Exception {
+        Frequency f = new Frequency();
+        f.addValue(1);
+        f.addValue(3);
+        f.addValue(3);
+        assertEquals(1.0 / 3.0, f.getCumPct(1), 1e-12);
+        assertEquals(1.0, f.getCumPct(3), 1e-12);
+        assertEquals(1.0, f.getCumPct(4), 1e-12);
+    }
+
+    @Test
+    public void testClearEmptiesDistribution() throws Exception {
+        Frequency f = new Frequency();
+        f.addValue(9);
+        f.clear();
+        assertEquals(0L, f.getSumFreq());
+        assertEquals(0L, f.getCount(9));
+    }
+
+    @Test
+    public void testSumAndIteratorAfterRepeatedAdds() throws Exception {
+        Frequency f = new Frequency();
+        f.addValue(2);
+        f.addValue(1);
+        f.addValue(2);
+        assertEquals(3L, f.getSumFreq());
+        Iterator<Comparable<?>> it = f.valuesIterator();
+        assertEquals(Long.valueOf(1), it.next());
+        assertEquals(Long.valueOf(2), it.next());
+        assertFalse(it.hasNext());
+    }
+
+    @Test
+    public void testEqualDistributionsAndHashCode() throws Exception {
+        Frequency first = new Frequency();
+        Frequency second = new Frequency();
+        first.addValue(2);
+        first.addValue(5);
+        second.addValue(5);
+        second.addValue(2);
+        assertEquals(first, second);
+        assertEquals(first.hashCode(), second.hashCode());
+    }
+
+    @Test
+    public void testUnequalAndNonFrequencyEquality() throws Exception {
+        Frequency f = new Frequency();
+        f.addValue(2);
+        assertFalse(f.equals(null));
+        assertFalse(f.equals("not a frequency"));
+        Frequency other = new Frequency();
+        other.addValue(3);
+        assertFalse(f.equals(other));
+    }
+
+    @Test
+    public void testToStringContainsOrderedCountsAndPercentages() throws Exception {
+        Frequency f = new Frequency();
+        f.addValue(2);
+        f.addValue(2);
+        f.addValue(4);
+        String text = f.toString();
+        assertTrue(text.startsWith("Value \t Freq. \t Pct. \t Cum Pct. \n"));
+        assertTrue(text.indexOf("2\t2\t67%\t67%") >= 0);
+        assertTrue(text.indexOf("4\t1\t33%\t100%") >= 0);
+    }
+
+    @Test
+    public void testCustomComparatorControlsOrderingAndCumulativeCounts() throws Exception {
+        Comparator<Comparable<?>> reverse = new Comparator<Comparable<?>>() {
+            public int compare(Comparable<?> a, Comparable<?> b) {
+                return ((Long) b).compareTo((Long) a);
+            }
+        };
+        Frequency f = new Frequency(reverse);
+        f.addValue(1);
+        f.addValue(3);
+        f.addValue(3);
+        assertEquals(2L, f.getCumFreq(3));
+        assertEquals(2L, f.getCumFreq(2));
+        Iterator<Comparable<?>> it = f.valuesIterator();
+        assertEquals(Long.valueOf(3), it.next());
+        assertEquals(Long.valueOf(1), it.next());
+    }
+}

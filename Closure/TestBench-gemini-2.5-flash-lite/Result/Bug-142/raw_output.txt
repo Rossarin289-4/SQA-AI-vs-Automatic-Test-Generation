@@ -1,0 +1,853 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.javascript.jscomp.parsing.JsDocInfoParser;
+import com.google.common.base.Joiner;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Sets;
+import com.google.javascript.jscomp.ControlFlowGraph.AbstractCfgNodeTraversalCallback;
+import com.google.javascript.jscomp.ControlFlowGraph.Branch;
+import com.google.javascript.jscomp.DataFlowAnalysis.FlowState;
+import com.google.javascript.jscomp.LiveVariablesAnalysis.LiveVariableLattice;
+import com.google.javascript.jscomp.NodeTraversal.AbstractPostOrderCallback;
+import com.google.javascript.jscomp.NodeTraversal.ScopedCallback;
+import com.google.javascript.jscomp.Scope.Var;
+import com.google.javascript.jscomp.graph.DiGraph.DiGraphNode;
+import com.google.javascript.jscomp.graph.GraphColoring;
+import com.google.javascript.jscomp.graph.GraphColoring.GreedyGraphColoring;
+import com.google.javascript.jscomp.graph.GraphNode;
+import com.google.javascript.jscomp.graph.LinkedUndirectedGraph;
+import com.google.javascript.jscomp.graph.UndiGraph;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.Deque;
+import java.util.Iterator;
+import java.util.Set;
+import com.google.common.base.Preconditions;
+import com.google.javascript.jscomp.mozilla.rhino.ErrorReporter;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.JSDocInfoBuilder;
+import com.google.javascript.rhino.JSTypeExpression;
+import com.google.javascript.rhino.ScriptRuntime;
+import com.google.javascript.rhino.JSDocInfo.Visibility;
+import com.google.javascript.rhino.jstype.JSType;
+import com.google.javascript.rhino.jstype.JSTypeNative;
+import com.google.javascript.rhino.jstype.JSTypeRegistry;
+import java.util.HashSet;
+import java.util.Map;
+import com.google.javascript.jscomp.parsing.JsDocToken;
+
+public class CoalesceVariableNamesTest {
+
+    // Mock AbstractCompiler for testing
+    private static class MockAbstractCompiler implements AbstractCompiler {
+        private String sourceText = "";
+        private boolean codeChanged = false;
+
+        @Override
+        public void reportChangeToEnclosingAssign(Node n) {
+            codeChanged = true;
+        }
+
+        @Override
+        public void reportCodeChange() {
+            codeChanged = true;
+        }
+
+        @Override
+        public SourceAst getSourceAst() {
+            return null;
+        }
+
+        @Override
+        public String getSourceFileName() {
+            return "test.js";
+        }
+
+        @Override
+        public void setSourceFile(SourceFile file) {}
+
+        @Override
+        public boolean isTypeCheckingEnabled() {
+            return false;
+        }
+
+        @Override
+        public PassFactory getPassFactory(String name) {
+            return null;
+        }
+
+        @Override
+        public void process(PassFactory[] passes, Node externs, Node root) {}
+
+        @Override
+        public void process(PassFactory[] passes, JSModule[] modules) {}
+
+        @Override
+        public JSTypeRegistry getTypeRegistry() {
+            return new JSTypeRegistry(new org.junit.Ignore("Mocked ErrorReporter"));
+        }
+
+        @Override
+        public void throwInternalError(String message, Node... nodes) {
+            throw new RuntimeException(message);
+        }
+        
+        @Override
+        public void ensureLibraryInjected(String libName) {}
+
+        @Override
+        public boolean isIdeMode() { return false;}
+
+        @Override
+        public void setIdeMode(boolean ideMode) {}
+        
+        @Override
+        public void finalizeAst(Node root) {}
+
+        @Override
+        public void updateCodeChangeFlag() {
+            codeChanged = true;
+        }
+        
+        @Override
+        public boolean getCodeChangeFlag() {
+            return codeChanged;
+        }
+
+        @Override
+        public String getAstRootString() {
+            return "";
+        }
+
+        @Override
+        public void setAstRootString(String astRootString) {}
+
+        @Override
+        public Var getVar(String name) { return null;}
+
+        @Override
+        public ErrorReporter getErrorReporter() {
+            return new org.junit.Ignore("Mocked ErrorReporter");
+        }
+
+        @Override
+        public Node parse(String source) {
+            this.sourceText = source;
+            return new Node(Token.SCRIPT);
+        }
+
+        @Override
+        public void setExternProperties(Set<String> externProperties) {}
+    }
+
+    // Mock Scope.Var for testing
+    private static class MockVar extends Scope.Var {
+        String name;
+        Node parentNode;
+        int index;
+
+        MockVar(String name, Node parentNode, int index) {
+            super(name, null, null, null, null);
+            this.name = name;
+            this.parentNode = parentNode;
+            this.index = index;
+        }
+
+        @Override
+        public String getName() {
+            return name;
+        }
+
+        @Override
+        public Node getParentNode() {
+            return parentNode;
+        }
+        
+        @Override
+        public int getIndex() {
+            return index;
+        }
+    }
+
+    // Mock Scope for testing
+    private static class MockScope extends Scope {
+        private Map<String, Var> vars = new java.util.HashMap<>();
+        private boolean isGlobal = false;
+        private Node rootNode;
+
+        MockScope(boolean isGlobal, Node rootNode) {
+            super(null, null, null, null, null);
+            this.isGlobal = isGlobal;
+            this.rootNode = rootNode;
+        }
+
+        @Override
+        public boolean isGlobal() {
+            return isGlobal;
+        }
+
+        @Override
+        public Var getVar(String name) {
+            return vars.get(name);
+        }
+
+        @Override
+        public Iterator<Var> getVars() {
+            return vars.values().iterator();
+        }
+
+        @Override
+        public int getVarCount() {
+            return vars.size();
+        }
+
+        @Override
+        public Node getRootNode() {
+            return rootNode;
+        }
+
+        void addVar(MockVar var) {
+            vars.put(var.getName(), var);
+        }
+    }
+
+    // Mock NodeTraversal for testing
+    private static class MockNodeTraversal extends NodeTraversal {
+        MockScope currentScope;
+
+        MockNodeTraversal(AbstractCompiler compiler, MockScope scope) {
+            super(compiler, null);
+            this.currentScope = scope;
+        }
+
+        @Override
+        public Scope getScope() {
+            return currentScope;
+        }
+        
+        @Override
+        public ControlFlowGraph<Node> getControlFlowGraph() {
+            // Return a minimal CFG for basic checks
+            return new ControlFlowGraph<Node>(new MockDiGraph<Node, Branch>(), null, false);
+        }
+        
+        @Override
+        public boolean inGlobalScope() {
+            return currentScope.isGlobal();
+        }
+    }
+    
+    // Mock DiGraph for testing
+    private static class MockDiGraph<N, E> implements com.google.javascript.jscomp.graph.DiGraph<N, E> {
+        @Override
+        public GraphNode<N, E> createNode(N value) { return null; }
+        @Override
+        public boolean hasNode(N value) { return false;}
+        @Override
+        public GraphNode<N, E> getNode(N value) { return null;}
+        @Override
+        public Set<GraphNode<N, E>> getNodes() { return java.util.Collections.emptySet();}
+        @Override
+        public void connect(GraphNode<N, E> from, GraphNode<N, E> to, E edge) {}
+        @Override
+        public boolean connectIfNotFound(N from, E edge, N to) {return false;}
+        @Override
+        public void remove(GraphNode<N, E> node) {}
+        @Override
+        public Set<GraphNode<N, E>> getDirectedGraphNodes() { return java.util.Collections.emptySet();}
+        @Override
+        public java.util.Collection<E> getEdges() { return java.util.Collections.emptyList();}
+        @Override
+        public GraphNode<N, E> getFirstNode() { return null;}
+        @Override
+        public int getWeight(GraphNode<N, E> node) { return 0;}
+        @Override
+        public void setWeight(GraphNode<N, E> node, int weight) {}
+        @Override
+        public void addEdgeTraversalListener(EdgeTraversalListener<N, E> listener) {}
+        @Override
+        public void removeEdgeTraversalListener(EdgeTraversalListener<N, E> listener) {}
+    }
+
+
+    @Test
+    public void testColoringTieBreaker() {
+        MockVar v1 = new MockVar("a", null, 5);
+        MockVar v2 = new MockVar("b", null, 10);
+        CoalesceVariableNames cvn = new CoalesceVariableNames(new MockAbstractCompiler(), false);
+        Comparator<Var> tieBreaker = cvn.coloringTieBreaker;
+        assertEquals(0, tieBreaker.compare(v1, v1));
+        assertTrue(tieBreaker.compare(v1, v2) < 0);
+        assertTrue(tieBreaker.compare(v2, v1) > 0);
+    }
+
+    @Test
+    public void testConstructorWithPseudoNames() {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        CoalesceVariableNames cvn = new CoalesceVariableNames(compiler, true);
+        assertNotNull(cvn);
+    }
+    
+    @Test
+    public void testConstructorWithoutPseudoNames() {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        CoalesceVariableNames cvn = new CoalesceVariableNames(compiler, false);
+        assertNotNull(cvn);
+    }
+    
+    @Test
+    public void testProcessWithEmptyNodes() {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        CoalesceVariableNames cvn = new CoalesceVariableNames(compiler, false);
+        cvn.process(new Node(Token.EMPTY), new Node(Token.EMPTY));
+        assertFalse(compiler.codeChanged);
+    }
+
+    @Test
+    public void testEnterScopeGlobalScope() {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        MockScope globalScope = new MockScope(true, new Node(Token.SCRIPT));
+        MockNodeTraversal traversal = new MockNodeTraversal(compiler, globalScope);
+        CoalesceVariableNames cvn = new CoalesceVariableNames(compiler, false);
+        cvn.enterScope(traversal); // Should do nothing for global scope
+        assertTrue(cvn.colorings.isEmpty());
+    }
+
+    @Test
+    public void testExitScopeGlobalScope() {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        MockScope globalScope = new MockScope(true, new Node(Token.SCRIPT));
+        MockNodeTraversal traversal = new MockNodeTraversal(compiler, globalScope);
+        CoalesceVariableNames cvn = new CoalesceVariableNames(compiler, false);
+        cvn.exitScope(traversal); // Should do nothing for global scope
+        assertTrue(cvn.colorings.isEmpty());
+    }
+
+    @Test
+    public void testVisitNonNameNode() {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        MockScope scope = new MockScope(false, new Node(Token.FUNCTION));
+        MockNodeTraversal traversal = new MockNodeTraversal(compiler, scope);
+        CoalesceVariableNames cvn = new CoalesceVariableNames(compiler, false);
+        
+        // Add a dummy coloring to the stack to simulate an in-scope traversal
+        cvn.colorings.push(new GreedyGraphColoring<Var, Void>(new LinkedUndirectedGraph<Var, Void>(), coloringTieBreaker));
+        
+        Node nonNameNode = new Node(Token.NUMBER, 10, 0);
+        cvn.visit(traversal, nonNameNode, null);
+        assertFalse(compiler.codeChanged);
+        cvn.colorings.pop();
+    }
+
+    @Test
+    public void testVisitFunctionParent() {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        MockScope scope = new MockScope(false, new Node(Token.FUNCTION));
+        MockNodeTraversal traversal = new MockNodeTraversal(compiler, scope);
+        CoalesceVariableNames cvn = new CoalesceVariableNames(compiler, false);
+        
+        cvn.colorings.push(new GreedyGraphColoring<Var, Void>(new LinkedUndirectedGraph<Var, Void>(), coloringTieBreaker));
+        
+        Node nameNode = Node.newString("varName");
+        Node functionNode = Node.newFunction("funcName", new Node(Token.BLOCK), nameNode);
+        cvn.visit(traversal, nameNode, functionNode);
+        assertFalse(compiler.codeChanged);
+        cvn.colorings.pop();
+    }
+
+    @Test
+    public void testVisitUnknownVar() {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        MockScope scope = new MockScope(false, new Node(Token.FUNCTION));
+        MockNodeTraversal traversal = new MockNodeTraversal(compiler, scope);
+        CoalesceVariableNames cvn = new CoalesceVariableNames(compiler, false);
+
+        cvn.colorings.push(new GreedyGraphColoring<Var, Void>(new LinkedUndirectedGraph<Var, Void>(), coloringTieBreaker));
+        
+        Node nameNode = Node.newString("unknownVar");
+        cvn.visit(traversal, nameNode, new Node(Token.ASSIGN));
+        assertFalse(compiler.codeChanged);
+        cvn.colorings.pop();
+    }
+
+    @Test
+    public void testVisitCoalescedVarNoPseudoNames() {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        MockScope scope = new MockScope(false, new Node(Token.FUNCTION));
+        MockNodeTraversal traversal = new MockNodeTraversal(compiler, scope);
+        CoalesceVariableNames cvn = new CoalesceVariableNames(compiler, false);
+
+        MockVar originalVar = new MockVar("original", null, 0);
+        MockVar coalescedVar = new MockVar("coalesced", null, 1);
+        scope.addVar(originalVar);
+        
+        LinkedUndirectedGraph<Var, Void> graph = new LinkedUndirectedGraph<>();
+        graph.createNode(originalVar);
+        graph.createNode(coalescedVar); // Add coalescedVar to graph to be partition supernode
+        graph.connectIfNotFound(originalVar, null, coalescedVar); // Simulate coalescing
+
+        GraphColoring<Var, Void> coloring = new GreedyGraphColoring<>(graph, coloringTieBreaker);
+        coloring.color(); // This should partition originalVar under coalescedVar
+        cvn.colorings.push(coloring);
+
+        Node nameNode = Node.newString("original");
+        Node varDecl = new Node(Token.VAR, nameNode);
+        cvn.visit(traversal, nameNode, varDecl);
+
+        assertEquals("coalesced", nameNode.getString());
+        assertTrue(compiler.codeChanged);
+        cvn.colorings.pop();
+    }
+    
+    @Test
+    public void testVisitCoalescedVarWithPseudoNames() {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        MockScope scope = new MockScope(false, new Node(Token.FUNCTION));
+        MockNodeTraversal traversal = new MockNodeTraversal(compiler, scope);
+        CoalesceVariableNames cvn = new CoalesceVariableNames(compiler, true);
+
+        MockVar originalVar1 = new MockVar("a", null, 0);
+        MockVar originalVar2 = new MockVar("b", null, 1);
+        scope.addVar(originalVar1);
+        scope.addVar(originalVar2);
+
+        LinkedUndirectedGraph<Var, Void> graph = new LinkedUndirectedGraph<>();
+        graph.createNode(originalVar1);
+        graph.createNode(originalVar2);
+        graph.connectIfNotFound(originalVar1, null, originalVar2);
+
+        GraphColoring<Var, Void> coloring = new GreedyGraphColoring<>(graph, coloringTieBreaker);
+        coloring.color(); // This should partition originalVar1 and originalVar2 under a supernode
+        cvn.colorings.push(coloring);
+
+        Node nameNode = Node.newString("a");
+        Node varDecl = new Node(Token.VAR, nameNode);
+        cvn.visit(traversal, nameNode, varDecl);
+
+        assertEquals("a_b", nameNode.getString());
+        assertTrue(compiler.codeChanged);
+        cvn.colorings.pop();
+    }
+
+    @Test
+    public void testVisitSelfCoalescedVarNoPseudoNames() {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        MockScope scope = new MockScope(false, new Node(Token.FUNCTION));
+        MockNodeTraversal traversal = new MockNodeTraversal(compiler, scope);
+        CoalesceVariableNames cvn = new CoalesceVariableNames(compiler, false);
+
+        MockVar originalVar = new MockVar("original", null, 0);
+        scope.addVar(originalVar);
+
+        LinkedUndirectedGraph<Var, Void> graph = new LinkedUndirectedGraph<>();
+        graph.createNode(originalVar);
+
+        GraphColoring<Var, Void> coloring = new GreedyGraphColoring<>(graph, coloringTieBreaker);
+        coloring.color();
+        cvn.colorings.push(coloring);
+
+        Node nameNode = Node.newString("original");
+        cvn.visit(traversal, nameNode, new Node(Token.ASSIGN));
+
+        assertEquals("original", nameNode.getString()); // Name should not change
+        assertFalse(compiler.codeChanged);
+        cvn.colorings.pop();
+    }
+
+    @Test
+    public void testRemoveVarDeclarationSimple() {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        CoalesceVariableNames cvn = new CoalesceVariableNames(compiler, false);
+
+        Node nameNode = Node.newString("a");
+        Node valueNode = Node.newNumber(1);
+        Node varNode = new Node(Token.VAR, nameNode, valueNode);
+        Node parentNode = new Node(Token.BLOCK, varNode);
+
+        cvn.removeVarDeclaration(nameNode);
+
+        assertEquals(Token.ASSIGN, parentNode.getFirstChild().getType());
+        assertEquals(Token.NAME, parentNode.getFirstChild().getFirstChild().getType());
+        assertEquals("a", parentNode.getFirstChild().getFirstChild().getString());
+        assertEquals(Token.NUMBER, parentNode.getFirstChild().getLastChild().getType());
+        assertEquals(1, parentNode.getFirstChild().getLastChild().getDouble(), 0);
+    }
+
+    @Test
+    public void testRemoveVarDeclarationSingleVar() {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        CoalesceVariableNames cvn = new CoalesceVariableNames(compiler, false);
+
+        Node nameNode = Node.newString("a");
+        Node valueNode = Node.newNumber(1);
+        Node varNode = new Node(Token.VAR, nameNode, valueNode);
+        Node parentNode = new Node(Token.BLOCK, varNode);
+
+        // Simulate the case where varNode only has one child (nameNode)
+        varNode.removeChild(valueNode);
+
+        cvn.removeVarDeclaration(nameNode);
+
+        assertEquals(Token.ASSIGN, parentNode.getFirstChild().getType());
+        assertEquals(Token.NAME, parentNode.getFirstChild().getFirstChild().getType());
+        assertEquals("a", parentNode.getFirstChild().getFirstChild().getString());
+        assertTrue(parentNode.getFirstChild().getLastChild() == null); // No value
+    }
+
+    @Test
+    public void testRemoveVarDeclarationForInLoop() {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        CoalesceVariableNames cvn = new CoalesceVariableNames(compiler, false);
+
+        Node nameNode = Node.newString("a");
+        Node varNode = new Node(Token.VAR, nameNode);
+        Node forInNode = new Node(Token.FOR_IN, varNode, Node.newNumber(1));
+        
+        cvn.removeVarDeclaration(nameNode);
+
+        assertEquals(Token.NAME, forInNode.getFirstChild().getType());
+        assertEquals("a", forInNode.getFirstChild().getString());
+        assertFalse(forInNode.hasChild(Token.VAR));
+    }
+
+    @Test
+    public void testRemoveVarDeclarationNoChildren() {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        CoalesceVariableNames cvn = new CoalesceVariableNames(compiler, false);
+
+        Node nameNode = Node.newString("a");
+        Node varNode = new Node(Token.VAR, nameNode);
+        Node parentNode = new Node(Token.BLOCK, varNode);
+
+        cvn.removeVarDeclaration(nameNode);
+
+        assertEquals(Token.EMPTY, parentNode.getFirstChild().getType());
+        assertFalse(parentNode.hasChild(Token.VAR));
+    }
+    
+    @Test
+    public void testComputeVariableNamesInterferenceGraph() {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        MockScope scope = new MockScope(false, new Node(Token.FUNCTION));
+        MockNodeTraversal traversal = new MockNodeTraversal(compiler, scope);
+        CoalesceVariableNames cvn = new CoalesceVariableNames(compiler, false);
+        
+        // Setup some mock Var objects
+        MockVar varA = new MockVar("a", null, 0);
+        MockVar varB = new MockVar("b", null, 1);
+        MockVar varC = new MockVar("c", null, 2); // Escaped local
+        
+        scope.addVar(varA);
+        scope.addVar(varB);
+        
+        // Mock escaped locals
+        Set<Var> escapedLocals = new HashSet<>();
+        escapedLocals.add(varC);
+        
+        // Mock ControlFlowGraph
+        com.google.javascript.jscomp.ControlFlowGraph<Node> cfg = new com.google.javascript.jscomp.ControlFlowGraph<>(new MockDiGraph<Node, Branch>(), null, false);
+
+        // Construct a simple interference graph
+        UndiGraph<Var, Void> graph = cvn.computeVariableNamesInterferenceGraph(traversal, cfg, escapedLocals);
+        
+        assertNotNull(graph);
+        assertTrue(graph.hasNode(varA));
+        assertTrue(graph.hasNode(varB));
+        assertFalse(graph.hasNode(varC)); // Escaped locals should not be in the graph
+    }
+
+    @Test
+    public void testCheckRangesWithCrossedRanges() {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        CoalesceVariableNames cvn = new CoalesceVariableNames(compiler, false);
+        
+        MockVar varA = new MockVar("a", null, 0);
+        MockVar varB = new MockVar("b", null, 1);
+        
+        // Mock LiveRangeChecker that indicates a crossed range
+        CoalesceVariableNames.LiveRangeChecker checker1 = new CoalesceVariableNames.LiveRangeChecker(varA, varB);
+        checker1.defFound = true;
+        checker1.crossed = true;
+
+        CoalesceVariableNames.LiveRangeChecker checker2 = new CoalesceVariableNames.LiveRangeChecker(varB, varA);
+        checker2.defFound = true;
+        checker2.crossed = true;
+
+        ArrayList<CoalesceVariableNames.CombinedLiveRangeChecker> rangesToCheck = new ArrayList<>();
+        rangesToCheck.add(new CoalesceVariableNames.CombinedLiveRangeChecker(checker1, checker2));
+        
+        UndiGraph<Var, Void> interferenceGraph = new LinkedUndirectedGraph<>();
+        interferenceGraph.createNode(varA);
+        interferenceGraph.createNode(varB);
+
+        Node dummyNode = new Node(Token.SCRIPT);
+        cvn.checkRanges(rangesToCheck, dummyNode);
+        
+        // After checkRanges, the CombinedLiveRangeChecker should have updated the graph
+        assertTrue(interferenceGraph.hasEdge(varA, varB));
+    }
+    
+    @Test
+    public void testCombinedLiveRangeCheckerVisit() {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        CoalesceVariableNames cvn = new CoalesceVariableNames(compiler, false);
+
+        MockVar varA = new MockVar("a", null, 0);
+        MockVar varB = new MockVar("b", null, 1);
+
+        CoalesceVariableNames.LiveRangeChecker lrChecker1 = new CoalesceVariableNames.LiveRangeChecker(varA, varB);
+        CoalesceVariableNames.LiveRangeChecker lrChecker2 = new CoalesceVariableNames.LiveRangeChecker(varB, varA);
+
+        CoalesceVariableNames.CombinedLiveRangeChecker combinedChecker = 
+            new CoalesceVariableNames.CombinedLiveRangeChecker(lrChecker1, lrChecker2);
+
+        // Mock NodeTraversal and Node
+        MockNodeTraversal traversal = new MockNodeTraversal(compiler, new MockScope(false, new Node(Token.SCRIPT)));
+        Node nameNode = Node.newString("a");
+        Node parentNode = new Node(Token.ASSIGN, nameNode, Node.newNumber(1));
+
+        // Mock the visit call
+        combinedChecker.visit(traversal, nameNode, parentNode);
+
+        // Check if the internal LiveRangeCheckers were visited
+        assertTrue(lrChecker1.defFound || lrChecker2.defFound); // depends on exact logic in LiveRangeChecker.isAssignTo
+    }
+
+    @Test
+    public void testCombinedCfgNodeLiveRangeCheckerVisit() {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        CoalesceVariableNames cvn = new CoalesceVariableNames(compiler, false);
+
+        MockVar varA = new MockVar("a", null, 0);
+        MockVar varB = new MockVar("b", null, 1);
+
+        CoalesceVariableNames.LiveRangeChecker lrChecker1 = new CoalesceVariableNames.LiveRangeChecker(varA, varB);
+        CoalesceVariableNames.LiveRangeChecker lrChecker2 = new CoalesceVariableNames.LiveRangeChecker(varB, varA);
+        
+        ArrayList<CoalesceVariableNames.CombinedLiveRangeChecker> callbacks = new ArrayList<>();
+        callbacks.add(new CoalesceVariableNames.CombinedLiveRangeChecker(lrChecker1, lrChecker2));
+        
+        CoalesceVariableNames.CombinedCfgNodeLiveRangeChecker combinedChecker = 
+            new CoalesceVariableNames.CombinedCfgNodeLiveRangeChecker(callbacks);
+
+        // Mock NodeTraversal and Node
+        MockNodeTraversal traversal = new MockNodeTraversal(compiler, new MockScope(false, new Node(Token.SCRIPT)));
+        Node nameNode = Node.newString("a");
+        Node parentNode = new Node(Token.ASSIGN, nameNode, Node.newNumber(1));
+
+        // Mock the visit call
+        combinedChecker.visit(traversal, nameNode, parentNode);
+
+        // Check if the internal CombinedLiveRangeChecker was visited and its visit method was called
+        assertTrue(lrChecker1.defFound || lrChecker2.defFound);
+    }
+    
+    @Test
+    public void testLiveRangeCheckerIsAssignTo() {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        MockVar varA = new MockVar("a", null, 0);
+
+        // Test assignment
+        Node nameNodeAssign = Node.newString("a");
+        Node assignNode = new Node(Token.ASSIGN, nameNodeAssign, Node.newNumber(1));
+        assertTrue(CoalesceVariableNames.LiveRangeChecker.isAssignTo(varA, nameNodeAssign, assignNode));
+
+        // Test var declaration with value
+        Node nameNodeVar = Node.newString("a");
+        Node varDeclNode = new Node(Token.VAR, nameNodeVar, Node.newNumber(1));
+        assertTrue(CoalesceVariableNames.LiveRangeChecker.isAssignTo(varA, nameNodeVar, varDeclNode));
+
+        // Test function parameter
+        Node nameNodeParam = Node.newString("a");
+        Node funcNode = new Node(Token.FUNCTION, new Node(Token.BLOCK), nameNodeParam); // Mock parameter
+        assertTrue(CoalesceVariableNames.LiveRangeChecker.isAssignTo(varA, nameNodeParam, funcNode));
+
+        // Test no assignment
+        Node nameNodeRead = Node.newString("a");
+        Node readNode = new Node(Token.NAME, nameNodeRead);
+        assertFalse(CoalesceVariableNames.LiveRangeChecker.isAssignTo(varA, nameNodeRead, readNode));
+    }
+
+    @Test
+    public void testLiveRangeCheckerIsReadFrom() {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        MockVar varA = new MockVar("a", null, 0);
+
+        Node nameNodeRead = Node.newString("a");
+        Node parentNode = new Node(Token.ADD, nameNodeRead, Node.newNumber(1));
+        assertTrue(CoalesceVariableNames.LiveRangeChecker.isReadFrom(varA, nameNodeRead));
+
+        // Test with LHS assignment - should not be read
+        Node nameNodeLHS = Node.newString("a");
+        Node assignNode = new Node(Token.ASSIGN, nameNodeLHS, Node.newNumber(1));
+        assertFalse(CoalesceVariableNames.LiveRangeChecker.isReadFrom(varA, nameNodeLHS));
+
+        // Test with different name
+        Node differentNameNode = Node.newString("b");
+        assertFalse(CoalesceVariableNames.LiveRangeChecker.isReadFrom(varA, differentNameNode));
+    }
+
+    @Test
+    public void testLiveRangeCheckerShouldVisit() {
+        assertTrue(CoalesceVariableNames.LiveRangeChecker.shouldVisit(Node.newString("a")));
+        assertTrue(CoalesceVariableNames.LiveRangeChecker.shouldVisit(new Node(Token.ASSIGN, Node.newString("a"), Node.newNumber(1))));
+        assertFalse(CoalesceVariableNames.LiveRangeChecker.shouldVisit(new Node(Token.NUMBER, 1.0)));
+    }
+
+    @Test
+    public void testCoalesceVariableNamesWithSimpleCase() throws Exception {
+        // Minimal setup for testing the process method
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        String source = "function f() { var a = 1; var b = 2; return a + b; }";
+        Node root = compiler.parse(source);
+        
+        // Manually set up a Scope and Var for a simple case
+        Node funcNode = root.getFirstChild();
+        Node blockNode = funcNode.getChildAtIndex(1);
+        Node varANode = blockNode.getFirstChild();
+        Node varBNode = varANode.getNext();
+        
+        MockVar varA = new MockVar("a", varANode, 0);
+        MockVar varB = new MockVar("b", varBNode, 1);
+        
+        MockScope scope = new MockScope(false, funcNode);
+        scope.addVar(varA);
+        scope.addVar(varB);
+        
+        MockNodeTraversal traversal = new MockNodeTraversal(compiler, scope);
+        
+        // Need to populate colorings manually for this test to work
+        UndiGraph<Var, Void> interferenceGraph = new LinkedUndirectedGraph<Var, Void>();
+        interferenceGraph.createNode(varA);
+        interferenceGraph.createNode(varB);
+        interferenceGraph.connectIfNotFound(varA, null, varB); // Assume they can be coalesced
+
+        GraphColoring<Var, Void> coloring = new GreedyGraphColoring<>(interferenceGraph, coloringTieBreaker);
+        coloring.color();
+        
+        CoalesceVariableNames cvn = new CoalesceVariableNames(compiler, false);
+        cvn.colorings.push(coloring);
+        
+        cvn.process(null, root); // externs can be null
+        
+        // Verify that 'b' has been replaced by 'a'
+        Node returnNode = blockNode.getLastChild();
+        Node addNode = returnNode.getFirstChild();
+        assertEquals("a", addNode.getFirstChild().getString());
+        assertEquals("a", addNode.getLastChild().getString());
+        assertTrue(compiler.codeChanged);
+        
+        cvn.colorings.pop(); // Clean up
+    }
+    
+    @Test
+    public void testCoalesceVariableNamesWithPseudoNames() throws Exception {
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        String source = "function f() { var a = 1; var b = 2; return a + b; }";
+        Node root = compiler.parse(source);
+        
+        Node funcNode = root.getFirstChild();
+        Node blockNode = funcNode.getChildAtIndex(1);
+        Node varANode = blockNode.getFirstChild();
+        Node varBNode = varANode.getNext();
+        
+        MockVar varA = new MockVar("a", varANode, 0);
+        MockVar varB = new MockVar("b", varBNode, 1);
+        
+        MockScope scope = new MockScope(false, funcNode);
+        scope.addVar(varA);
+        scope.addVar(varB);
+        
+        MockNodeTraversal traversal = new MockNodeTraversal(compiler, scope);
+        
+        UndiGraph<Var, Void> interferenceGraph = new LinkedUndirectedGraph<Var, Void>();
+        interferenceGraph.createNode(varA);
+        interferenceGraph.createNode(varB);
+        interferenceGraph.connectIfNotFound(varA, null, varB);
+
+        GraphColoring<Var, Void> coloring = new GreedyGraphColoring<>(interferenceGraph, coloringTieBreaker);
+        coloring.color();
+        
+        CoalesceVariableNames cvn = new CoalesceVariableNames(compiler, true); // Use pseudo names
+        cvn.colorings.push(coloring);
+        
+        cvn.process(null, root);
+        
+        // Verify that 'a' and 'b' are renamed to 'a_b'
+        Node returnNode = blockNode.getLastChild();
+        Node addNode = returnNode.getFirstChild();
+        assertEquals("a_b", addNode.getFirstChild().getString());
+        assertEquals("a_b", addNode.getLastChild().getString());
+        assertTrue(compiler.codeChanged);
+        
+        cvn.colorings.pop();
+    }
+
+    @Test
+    public void testCoalesceVariableNamesWithExportedVar() throws Exception {
+        // This test aims to check if exported variables are handled correctly, 
+        // though the current implementation skips global scope processing in enterScope.
+        MockAbstractCompiler compiler = new MockAbstractCompiler();
+        String source = "var x = 1; function f() { var y = 2; }";
+        Node root = compiler.parse(source);
+
+        CoalesceVariableNames cvn = new CoalesceVariableNames(compiler, false);
+        cvn.process(null, root);
+
+        // Expect no code change as global scope processing is a no-op
+        assertFalse(compiler.codeChanged);
+    }
+    
+    // Helper method to create a minimal CFG and Var for testing
+    private void setupMinimalScopeAndCfg(MockAbstractCompiler compiler, MockScope scope, MockNodeTraversal traversal, CoalesceVariableNames cvn, Set<Var> escapedLocals) {
+        // Minimal CFG
+        com.google.javascript.jscomp.ControlFlowGraph<Node> cfg = new com.google.javascript.jscomp.ControlFlowGraph<>(new MockDiGraph<Node, Branch>(), null, false);
+        
+        // Need to manually add nodes and edges to simulate a basic CFG if required for specific tests
+        // For now, a basic CFG object is sufficient for enterScope
+        
+        UndiGraph<Var, Void> interferenceGraph = cvn.computeVariableNamesInterferenceGraph(traversal, cfg, escapedLocals);
+        GraphColoring<Var, Void> coloring = new GreedyGraphColoring<>(interferenceGraph, coloringTieBreaker);
+        coloring.color();
+        cvn.colorings.push(coloring);
+    }
+}
+```
+1. SOURCE CODE ANALYSIS - The test class targets the `CoalesceVariableNames` class, focusing on its core logic for variable coalescing. Key methods tested include `process`, `enterScope`, `exitScope`, `visit`, `computeVariableNamesInterferenceGraph`, `checkRanges`, and `removeVarDeclaration`. The tests cover scenarios with and without pseudo names, simple variable coalescing, and edge cases like non-name nodes and function parents.
+2. TEST CASE DESIGN -
+    - `testColoringTieBreaker`: Tests the comparator for `Var` objects based on their index. Input: `Var` objects with different indices. Expected result: Correct comparison result (-1, 0, or 1). Derived from `coloringTieBreaker` logic.
+    - `testConstructorWithPseudoNames`: Tests the constructor when `usePseudoNames` is true. Input: Mock `AbstractCompiler`, `true`. Expected result: Non-null `CoalesceVariableNames` instance. Derived from constructor call.
+    - `testConstructorWithoutPseudoNames`: Tests the constructor when `usePseudoNames` is false. Input: Mock `AbstractCompiler`, `false`. Expected result: Non-null `CoalesceVariableNames` instance. Derived from constructor call.
+    - `testProcessWithEmptyNodes`: Tests `process` with empty `Node` inputs. Input: `new Node(Token.EMPTY)`, `new Node(Token.EMPTY)`. Expected result: No code change reported. Derived from `process` method's handling of empty nodes.
+    - `testEnterScopeGlobalScope`: Tests `enterScope` in a global scope. Input: `MockNodeTraversal` in global scope. Expected result: `colorings` stack remains empty. Derived from `enterScope`'s conditional check.
+    - `testExitScopeGlobalScope`: Tests `exitScope` in a global scope. Input: `MockNodeTraversal` in global scope. Expected result: `colorings` stack remains empty. Derived from `exitScope`'s conditional check.
+    - `testVisitNonNameNode`: Tests `visit` with a non-`NAME` node. Input: `Node(Token.NUMBER)`. Expected result: No code change. Derived from `visit`'s `NodeUtil.isName(n)` check.
+    - `testVisitFunctionParent`: Tests `visit` when the parent is a function node. Input: `Node(Token.NAME)` with `Node(Token.FUNCTION)` parent. Expected result: No code change. Derived from `visit`'s `NodeUtil.isFunction(parent)` check.
+    - `testVisitUnknownVar`: Tests `visit` when the variable is not found in the scope. Input: `Node(Token.NAME)` for an unknown var. Expected result: No code change. Derived from `colorings.peek().getGraph().getNode(var) == null` check.
+    - `testVisitCoalescedVarNoPseudoNames`: Tests `visit` for a coalesced variable when not using pseudo names. Input: `Node(Token.NAME)` that is coalesced. Expected result: Variable name is changed, code change reported. Derived from `n.setString(coalescedVar.name)` and `compiler.reportCodeChange()`.
+    - `testVisitCoalescedVarWithPseudoNames`: Tests `visit` for a coalesced variable when using pseudo names. Input: `Node(Token.NAME)` that is coalesced. Expected result: Variable name is changed to pseudo name, code change reported. Derived from `pseudoName = Joiner.on("_").join(allMergedNames)` and `n.setString(pseudoName)`.
+    - `testVisitSelfCoalescedVarNoPseudoNames`: Tests `visit` when a variable coalesces with itself. Input: `Node(Token.NAME)` that is its own supernode. Expected result: No name change, no code change. Derived from `vNode.getValue().equals(coalescedVar)` check.
+    - `testRemoveVarDeclarationSimple`: Tests `removeVarDeclaration` in a simple assignment context. Input: `Node(Token.VAR)` with name and value. Expected result: Replaced by an assignment statement. Derived from `removeVarDeclaration` logic.
+    - `testRemoveVarDeclarationSingleVar`: Tests `removeVarDeclaration` when it's the only variable in `VAR`. Input: `Node(Token.VAR)` with only name. Expected result: Replaced by an assignment with no value. Derived from `var.getChildCount() == 1` logic.
+    - `testRemoveVarDeclarationForInLoop`: Tests `removeVarDeclaration` within a `FOR-IN` loop. Input: `Node(Token.VAR)` inside `Token.FOR_IN`. Expected result: `NAME` node replaces `VAR` node. Derived from `NodeUtil.isForIn(parent)` logic.
+    - `testRemoveVarDeclarationNoChildren`: Tests `removeVarDeclaration` when the `VAR` node has no children. Input: `Node(Token.VAR)` with only name. Expected result: Replaced by `Token.EMPTY`. Derived from `!name.hasChildren()` logic.
+    - `testComputeVariableNamesInterferenceGraph`: Tests graph creation with escaped locals. Input: Mock `NodeTraversal`, `ControlFlowGraph`, and escaped locals. Expected result: Graph with non-escaped locals as nodes. Derived from `computeVariableNamesInterferenceGraph` logic.
+    - `testCheckRangesWithCrossedRanges`: Tests `checkRanges` when live ranges cross. Input: `CombinedLiveRangeChecker` indicating crossing. Expected result: Edge added to interference graph. Derived from `range.connectIfCrossed(interferenceGraph)`.
+    - `testCombinedLiveRangeCheckerVisit`: Tests `CombinedLiveRangeChecker.visit`. Input: Mock components. Expected result: Internal checkers are called. Derived from `callback1.visit(t, n, parent); callback2.visit(t, n, parent);`.
+    - `testCombinedCfgNodeLiveRangeCheckerVisit`: Tests `CombinedCfgNodeLiveRangeChecker.visit`. Input: Mock components. Expected result: Internal `CombinedLiveRangeChecker`s are called. Derived from `callback.visit(t, n, parent);`.
+    - `testLiveRangeCheckerIsAssignTo`: Tests `LiveRangeChecker.isAssignTo`. Inputs: Various node configurations. Expected results: `true` for assignments, `false` otherwise. Derived from `isAssignTo` logic.
+    - `testLiveRangeCheckerIsReadFrom`: Tests `LiveRangeChecker.isReadFrom`. Inputs: Various node configurations. Expected results: `true` for reads, `false` otherwise. Derived from `isReadFrom` logic.
+    - `testLiveRangeCheckerShouldVisit`: Tests `LiveRangeChecker.shouldVisit`. Inputs: `Node(Token.NAME)` and `Node(Token.ASSIGN)` with `Node(Token.NAME)`. Expected results: `true`. Derived from `shouldVisit` logic.
+    - `testCoalesceVariableNamesWithSimpleCase`: Tests `process` with a basic variable coalescing scenario. Input: Source code with two simple variables. Expected result: Variables coalesced, names updated. Derived from `process` and `visit` logic.
+    - `testCoalesceVariableNamesWithPseudoNames`: Tests `process` with pseudo names enabled. Input: Source code. Expected result: Variables renamed using pseudo names. Derived from `visit` logic with `usePseudoNames = true`.
+    - `testCoalesceVariableNamesWithExportedVar`: Tests `process` with an exported variable. Input: Source code with `var x = 1;`. Expected result: No change, as global scope is skipped. Derived from `enterScope` logic.
+    - `setupMinimalScopeAndCfg`: Helper method for setting up mocks.
+4. DEFECT DETECTION STRATEGY - The tests focus on the correct renaming of variables, particularly when they are coalesced. They verify that the correct variable names are used (either the original coalesced name or a pseudo name) and that declarations are handled appropriately. Defects in the interference graph construction, graph coloring, or the renaming logic would likely cause these tests to fail.
+5. SUMMARY - 25 tests.
+6. LIMITATIONS - The tests rely on mock objects and simplified inputs. They do not fully replicate the complex environment of `AbstractCompiler`, `ControlFlowGraph`, or `Scope` as they exist in the real `closure-compiler` project, which might limit the detection of certain subtle bugs. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.
+```

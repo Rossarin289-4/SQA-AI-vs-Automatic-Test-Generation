@@ -1,0 +1,646 @@
+```java
+package com.fasterxml.jackson.databind.deser.impl;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.io.IOException;
+import java.util.*;
+import com.fasterxml.jackson.core.*;
+import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.deser.SettableBeanProperty;
+import com.fasterxml.jackson.databind.jsontype.TypeDeserializer;
+import com.fasterxml.jackson.databind.util.TokenBuffer;
+
+public class ExternalTypeHandlerTest {
+
+    // Helper method to create a dummy DeserializationContext
+    private DeserializationContext createDummyContext() {
+        return new ObjectMapper().getDeserializationContext();
+    }
+
+    // Helper method to create a dummy JsonParser
+    private JsonParser createDummyParser() throws IOException {
+        return new ObjectMapper().createParser("{}");
+    }
+
+    // Helper method to create a dummy SettableBeanProperty
+    private SettableBeanProperty createDummyProperty(String name, JavaType type) {
+        return new SettableBeanProperty.FieldProperty(new PropertyName(name), type, null, null, null, null, null) {
+            private static final long serialVersionUID = 1L;
+            private Object _value;
+
+            @Override
+            public void set(Object instance, Object value) throws IOException {
+                _value = value;
+            }
+
+            @Override
+            public Object get(Object instance) {
+                return _value;
+            }
+
+            @Override
+            public SettableBeanProperty withValueDeserializer(com.fasterxml.jackson.databind.JsonDeserializer<?> deser) {
+                return this; // No-op for dummy
+            }
+        };
+    }
+
+    // Helper method to create a dummy TypeDeserializer
+    private TypeDeserializer createDummyTypeDeserializer(String propertyName, JavaType defaultImpl) {
+        return new TypeDeserializer(0, null, null) {
+            @Override
+            public TypeDeserializer forProperty(BeanProperty prop) {
+                return this;
+            }
+
+            @Override
+            public As getTypeInclusion() {
+                return As.EXTERNAL_PROPERTY;
+            }
+
+            @Override
+            public String getPropertyName() {
+                return propertyName;
+            }
+
+            @Override
+            public TypeIdResolver getTypeIdResolver() {
+                return new com.fasterxml.jackson.databind.jsontype.impl.TypeNameIdResolver(null, defaultImpl) {
+                    @Override
+                    public String idFromValueAndType(Object value, Class<?> type) {
+                        return type.getSimpleName();
+                    }
+                };
+            }
+
+            @Override
+            public Class<?> getDefaultImpl() {
+                return defaultImpl;
+            }
+
+            @Override
+            public Object deserializeTypedFromObject(JsonParser jp, DeserializationContext ctxt) throws IOException {
+                return null;
+            }
+
+            @Override
+            public Object deserializeTypedFromArray(JsonParser jp, DeserializationContext ctxt) throws IOException {
+                return null;
+            }
+
+            @Override
+            public Object deserializeTypedFromScalar(JsonParser jp, DeserializationContext ctxt) throws IOException {
+                return null;
+            }
+
+            @Override
+            public Object deserializeTypedFromAny(JsonParser jp, DeserializationContext ctxt) throws IOException {
+                return null;
+            }
+        };
+    }
+
+
+    @Test
+    public void testStartReturnsNewInstance() throws Exception {
+        ExternalTypeHandler.Builder builder = new ExternalTypeHandler.Builder();
+        SettableBeanProperty prop = createDummyProperty("testProp", null);
+        TypeDeserializer typeDeser = createDummyTypeDeserializer("typeProp", null);
+        builder.addExternal(prop, typeDeser);
+        ExternalTypeHandler handler = builder.build();
+
+        ExternalTypeHandler startedHandler = handler.start();
+        assertNotNull(startedHandler);
+        assertNotSame(handler, startedHandler);
+    }
+
+    @Test
+    public void testHandleTypePropertyValue_propertyNotFound() throws Exception {
+        ExternalTypeHandler.Builder builder = new ExternalTypeHandler.Builder();
+        SettableBeanProperty prop = createDummyProperty("testProp", null);
+        TypeDeserializer typeDeser = createDummyTypeDeserializer("typeProp", null);
+        builder.addExternal(prop, typeDeser);
+        ExternalTypeHandler handler = builder.build();
+
+        JsonParser jp = createDummyParser();
+        DeserializationContext ctxt = createDummyContext();
+        Object bean = new Object();
+
+        boolean handled = handler.handleTypePropertyValue(jp, ctxt, "nonExistentProp", bean);
+        assertFalse(handled);
+    }
+
+    @Test
+    public void testHandleTypePropertyValue_typePropertyNotFound() throws Exception {
+        ExternalTypeHandler.Builder builder = new ExternalTypeHandler.Builder();
+        SettableBeanProperty prop = createDummyProperty("testProp", null);
+        TypeDeserializer typeDeser = createDummyTypeDeserializer("typeProp", null);
+        builder.addExternal(prop, typeDeser);
+        ExternalTypeHandler handler = builder.build();
+
+        JsonParser jp = createDummyParser();
+        DeserializationContext ctxt = createDummyContext();
+        Object bean = new Object();
+
+        // Simulate parser pointing to a value, but property name doesn't match type property name
+        ((ObjectMapper) ctxt.getObjectMapper()).getFactory().createParser("{\"someOtherProp\": \"someValue\"}").nextToken();
+        boolean handled = handler.handleTypePropertyValue(jp, ctxt, "someOtherProp", bean);
+        assertFalse(handled);
+    }
+
+    @Test
+    public void testHandleTypePropertyValue_setsTypeIdAndTriggersDeserializeWhenPossible() throws Exception {
+        ExternalTypeHandler.Builder builder = new ExternalTypeHandler.Builder();
+        SettableBeanProperty prop = createDummyProperty("testProp", null);
+        TypeDeserializer typeDeser = createDummyTypeDeserializer("typeProp", null);
+        builder.addExternal(prop, typeDeser);
+        ExternalTypeHandler handler = builder.build().start();
+
+        // Simulate buffering a token for the property
+        JsonParser jpForToken = ((ObjectMapper) createDummyContext().getObjectMapper()).getFactory().createParser("{\"data\":\"value\"}");
+        TokenBuffer tokens = new TokenBuffer(jpForToken);
+        tokens.copyCurrentStructure(jpForToken);
+        // Manually set the token buffer in the handler's internal state (as handlePropertyValue would do)
+        Field _tokensField = ExternalTypeHandler.class.getDeclaredField("_tokens");
+        _tokensField.setAccessible(true);
+        TokenBuffer[] tokensArray = (TokenBuffer[]) _tokensField.get(handler);
+        tokensArray[0] = tokens;
+
+        JsonParser jp = ((ObjectMapper) createDummyContext().getObjectMapper()).getFactory().createParser("{\"typeProp\":\"someType\"}");
+        jp.nextToken(); // Move to "typeProp"
+        DeserializationContext ctxt = createDummyContext();
+        Object bean = new Object();
+
+        boolean handled = handler.handleTypePropertyValue(jp, ctxt, "typeProp", bean);
+        assertTrue(handled);
+
+        Field _typeIdsField = ExternalTypeHandler.class.getDeclaredField("_typeIds");
+        _typeIdsField.setAccessible(true);
+        String[] typeIds = (String[]) _typeIdsField.get(handler);
+        assertEquals("someType", typeIds[0]);
+
+        // Check if tokens were cleared
+        assertEquals(null, tokensArray[0]);
+    }
+
+    @Test
+    public void testHandlePropertyValue_propertyNotFound() throws Exception {
+        ExternalTypeHandler.Builder builder = new ExternalTypeHandler.Builder();
+        SettableBeanProperty prop = createDummyProperty("testProp", null);
+        TypeDeserializer typeDeser = createDummyTypeDeserializer("typeProp", null);
+        builder.addExternal(prop, typeDeser);
+        ExternalTypeHandler handler = builder.build();
+
+        JsonParser jp = createDummyParser();
+        DeserializationContext ctxt = createDummyContext();
+        Object bean = new Object();
+
+        boolean handled = handler.handlePropertyValue(jp, ctxt, "nonExistentProp", bean);
+        assertFalse(handled);
+    }
+
+    @Test
+    public void testHandlePropertyValue_buffersTokenAndTypeId() throws Exception {
+        ExternalTypeHandler.Builder builder = new ExternalTypeHandler.Builder();
+        SettableBeanProperty prop = createDummyProperty("testProp", null);
+        TypeDeserializer typeDeser = createDummyTypeDeserializer("typeProp", null);
+        builder.addExternal(prop, typeDeser);
+        ExternalTypeHandler handler = builder.build().start();
+
+        JsonParser jp = ((ObjectMapper) createDummyContext().getObjectMapper()).getFactory().createParser("{\"data\":\"value\"}");
+        jp.nextToken(); // Move to "data"
+        DeserializationContext ctxt = createDummyContext();
+        Object bean = new Object();
+
+        boolean handled = handler.handlePropertyValue(jp, ctxt, "testProp", bean);
+        assertTrue(handled);
+
+        Field _tokensField = ExternalTypeHandler.class.getDeclaredField("_tokens");
+        _tokensField.setAccessible(true);
+        TokenBuffer[] tokensArray = (TokenBuffer[]) _tokensField.get(handler);
+        assertNotNull(tokensArray[0]);
+
+        Field _typeIdsField = ExternalTypeHandler.class.getDeclaredField("_typeIds");
+        _typeIdsField.setAccessible(true);
+        String[] typeIds = (String[]) _typeIdsField.get(handler);
+        assertNull(typeIds[0]); // Type ID should not be set by handlePropertyValue directly
+    }
+
+    @Test
+    public void testHandlePropertyValue_triggersDeserializeWhenPossible() throws Exception {
+        ExternalTypeHandler.Builder builder = new ExternalTypeHandler.Builder();
+        SettableBeanProperty prop = createDummyProperty("testProp", null);
+        TypeDeserializer typeDeser = createDummyTypeDeserializer("typeProp", null);
+        builder.addExternal(prop, typeDeser);
+        ExternalTypeHandler handler = builder.build().start();
+
+        // Simulate type ID being set
+        Field _typeIdsField = ExternalTypeHandler.class.getDeclaredField("_typeIds");
+        _typeIdsField.setAccessible(true);
+        String[] typeIds = (String[]) _typeIdsField.get(handler);
+        typeIds[0] = "someType";
+
+        // Simulate buffering a token for the property
+        JsonParser jpForToken = ((ObjectMapper) createDummyContext().getObjectMapper()).getFactory().createParser("{\"data\":\"value\"}");
+        TokenBuffer tokens = new TokenBuffer(jpForToken);
+        tokens.copyCurrentStructure(jpForToken);
+
+        Field _tokensField = ExternalTypeHandler.class.getDeclaredField("_tokens");
+        _tokensField.setAccessible(true);
+        TokenBuffer[] tokensArray = (TokenBuffer[]) _tokensField.get(handler);
+        tokensArray[0] = tokens;
+
+        JsonParser jp = ((ObjectMapper) createDummyContext().getObjectMapper()).getFactory().createParser("{}"); // Dummy parser for method call
+        jp.nextToken();
+        DeserializationContext ctxt = createDummyContext();
+        Object bean = new Object();
+
+        boolean handled = handler.handlePropertyValue(jp, ctxt, "testProp", bean);
+        assertTrue(handled);
+
+        // Check if tokens and typeIds were cleared
+        assertNull(tokensArray[0]);
+        assertNull(typeIds[0]);
+    }
+
+    @Test
+    public void testComplete_handlesMissingTypeIdAndToken() throws Exception {
+        ExternalTypeHandler.Builder builder = new ExternalTypeHandler.Builder();
+        SettableBeanProperty prop = createDummyProperty("testProp", null);
+        TypeDeserializer typeDeser = createDummyTypeDeserializer("typeProp", null);
+        builder.addExternal(prop, typeDeser);
+        ExternalTypeHandler handler = builder.build();
+
+        JsonParser jp = createDummyParser();
+        DeserializationContext ctxt = createDummyContext();
+        Object bean = new Object();
+
+        Object result = handler.complete(jp, ctxt, bean);
+        assertNotNull(result);
+        // In this case, it should not throw an exception as both are missing.
+    }
+
+    @Test
+    public void testComplete_throwsExceptionWhenTypeIdMissingButTokenPresent() throws Exception {
+        ExternalTypeHandler.Builder builder = new ExternalTypeHandler.Builder();
+        SettableBeanProperty prop = createDummyProperty("testProp", null);
+        TypeDeserializer typeDeser = createDummyTypeDeserializer("typeProp", null);
+        builder.addExternal(prop, typeDeser);
+        ExternalTypeHandler handler = builder.build();
+
+        Field _tokensField = ExternalTypeHandler.class.getDeclaredField("_tokens");
+        _tokensField.setAccessible(true);
+        TokenBuffer[] tokensArray = (TokenBuffer[]) _tokensField.get(handler);
+        tokensArray[0] = new TokenBuffer(createDummyParser()); // Add a dummy token
+
+        JsonParser jp = createDummyParser();
+        DeserializationContext ctxt = createDummyContext();
+        Object bean = new Object();
+
+        try {
+            handler.complete(jp, ctxt, bean);
+            fail("Expected mapping exception for missing type ID");
+        } catch (JsonMappingException e) {
+            assertTrue(e.getMessage().contains("Missing property 'testProp' for external type id 'typeProp'"));
+        }
+    }
+
+    @Test
+    public void testComplete_throwsExceptionWhenTokenMissingButTypeIdPresent() throws Exception {
+        ExternalTypeHandler.Builder builder = new ExternalTypeHandler.Builder();
+        SettableBeanProperty prop = createDummyProperty("testProp", null);
+        TypeDeserializer typeDeser = createDummyTypeDeserializer("typeProp", null);
+        builder.addExternal(prop, typeDeser);
+        ExternalTypeHandler handler = builder.build();
+
+        Field _typeIdsField = ExternalTypeHandler.class.getDeclaredField("_typeIds");
+        _typeIdsField.setAccessible(true);
+        String[] typeIds = (String[]) _typeIdsField.get(handler);
+        typeIds[0] = "someType"; // Set a dummy type ID
+
+        JsonParser jp = createDummyParser();
+        DeserializationContext ctxt = createDummyContext();
+        Object bean = new Object();
+
+        try {
+            handler.complete(jp, ctxt, bean);
+            fail("Expected mapping exception for missing token buffer");
+        } catch (JsonMappingException e) {
+            assertTrue(e.getMessage().contains("Missing property 'testProp' for external type id 'typeProp'"));
+        }
+    }
+
+    @Test
+    public void testComplete_handlesNaturalTypes() throws Exception {
+        ExternalTypeHandler.Builder builder = new ExternalTypeHandler.Builder();
+        JavaType stringType = com.fasterxml.jackson.databind.type.TypeFactory.defaultInstance().constructType(String.class);
+        SettableBeanProperty prop = createDummyProperty("testProp", stringType);
+        TypeDeserializer typeDeser = createDummyTypeDeserializer("typeProp", null);
+        builder.addExternal(prop, typeDeser);
+        ExternalTypeHandler handler = builder.build();
+
+        // Simulate a scalar value in the token buffer
+        JsonParser jpForToken = ((ObjectMapper) createDummyContext().getObjectMapper()).getFactory().createParser("\"stringValue\"");
+        TokenBuffer tokens = new TokenBuffer(jpForToken);
+        tokens.copyCurrentStructure(jpForToken);
+
+        Field _tokensField = ExternalTypeHandler.class.getDeclaredField("_tokens");
+        _tokensField.setAccessible(true);
+        TokenBuffer[] tokensArray = (TokenBuffer[]) _tokensField.get(handler);
+        tokensArray[0] = tokens;
+
+        JsonParser jp = createDummyParser();
+        DeserializationContext ctxt = createDummyContext();
+        Object bean = new Object();
+
+        // For natural types, typeId might be null, but the token buffer should contain the value.
+        Object result = handler.complete(jp, ctxt, bean);
+        assertNotNull(result);
+
+        // Verify the property was set
+        assertEquals("stringValue", prop.get(bean));
+    }
+
+    @Test
+    public void testComplete_usesDefaultImplWhenTypeIsMissing() throws Exception {
+        ExternalTypeHandler.Builder builder = new ExternalTypeHandler.Builder();
+        JavaType defaultImplType = com.fasterxml.jackson.databind.type.TypeFactory.defaultInstance().constructType(String.class);
+        SettableBeanProperty prop = createDummyProperty("testProp", defaultImplType);
+        TypeDeserializer typeDeser = createDummyTypeDeserializer("typeProp", defaultImplType);
+        builder.addExternal(prop, typeDeser);
+        ExternalTypeHandler handler = builder.build();
+
+        // Simulate a scalar value in the token buffer
+        JsonParser jpForToken = ((ObjectMapper) createDummyContext().getObjectMapper()).getFactory().createParser("\"stringValue\"");
+        TokenBuffer tokens = new TokenBuffer(jpForToken);
+        tokens.copyCurrentStructure(jpForToken);
+
+        Field _tokensField = ExternalTypeHandler.class.getDeclaredField("_tokens");
+        _tokensField.setAccessible(true);
+        TokenBuffer[] tokensArray = (TokenBuffer[]) _tokensField.get(handler);
+        tokensArray[0] = tokens;
+
+        JsonParser jp = createDummyParser();
+        DeserializationContext ctxt = createDummyContext();
+        Object bean = new Object();
+
+        // When typeId is null and defaultImpl is present, it should use defaultImpl.
+        Object result = handler.complete(jp, ctxt, bean);
+        assertNotNull(result);
+        assertEquals("stringValue", prop.get(bean));
+    }
+
+    @Test
+    public void testComplete_throwsExceptionIfNoDefaultImplAndTypeMissing() throws Exception {
+        ExternalTypeHandler.Builder builder = new ExternalTypeHandler.Builder();
+        SettableBeanProperty prop = createDummyProperty("testProp", null);
+        TypeDeserializer typeDeser = createDummyTypeDeserializer("typeProp", null); // No default impl
+        builder.addExternal(prop, typeDeser);
+        ExternalTypeHandler handler = builder.build();
+
+        // Simulate a scalar value in the token buffer
+        JsonParser jpForToken = ((ObjectMapper) createDummyContext().getObjectMapper()).getFactory().createParser("\"stringValue\"");
+        TokenBuffer tokens = new TokenBuffer(jpForToken);
+        tokens.copyCurrentStructure(jpForToken);
+
+        Field _tokensField = ExternalTypeHandler.class.getDeclaredField("_tokens");
+        _tokensField.setAccessible(true);
+        TokenBuffer[] tokensArray = (TokenBuffer[]) _tokensField.get(handler);
+        tokensArray[0] = tokens;
+
+        JsonParser jp = createDummyParser();
+        DeserializationContext ctxt = createDummyContext();
+        Object bean = new Object();
+
+        try {
+            handler.complete(jp, ctxt, bean);
+            fail("Expected mapping exception for missing type id and no default impl");
+        } catch (JsonMappingException e) {
+            assertTrue(e.getMessage().contains("Missing external type id property 'typeProp'"));
+        }
+    }
+
+    @Test
+    public void testBuilderAddExternal() throws Exception {
+        ExternalTypeHandler.Builder builder = new ExternalTypeHandler.Builder();
+        SettableBeanProperty prop1 = createDummyProperty("prop1", null);
+        TypeDeserializer typeDeser1 = createDummyTypeDeserializer("type1", null);
+        SettableBeanProperty prop2 = createDummyProperty("prop2", null);
+        TypeDeserializer typeDeser2 = createDummyTypeDeserializer("type2", null);
+
+        builder.addExternal(prop1, typeDeser1);
+        builder.addExternal(prop2, typeDeser2);
+
+        Field _propertiesField = ExternalTypeHandler.Builder.class.getDeclaredField("_properties");
+        _propertiesField.setAccessible(true);
+        List<?> properties = (List<?>) _propertiesField.get(builder);
+        assertEquals(2, properties.size());
+
+        Field _nameToPropertyIndexField = ExternalTypeHandler.Builder.class.getDeclaredField("_nameToPropertyIndex");
+        _nameToPropertyIndexField.setAccessible(true);
+        Map<?, ?> nameToPropertyIndex = (Map<?, ?>) _nameToPropertyIndexField.get(builder);
+        assertEquals(4, nameToPropertyIndex.size()); // prop1, type1, prop2, type2
+        assertEquals(0, nameToPropertyIndex.get("prop1"));
+        assertEquals(0, nameToPropertyIndex.get("type1"));
+        assertEquals(1, nameToPropertyIndex.get("prop2"));
+        assertEquals(1, nameToPropertyIndex.get("type2"));
+    }
+
+    @Test
+    public void testBuilderBuild() throws Exception {
+        ExternalTypeHandler.Builder builder = new ExternalTypeHandler.Builder();
+        SettableBeanProperty prop = createDummyProperty("testProp", null);
+        TypeDeserializer typeDeser = createDummyTypeDeserializer("typeProp", null);
+        builder.addExternal(prop, typeDeser);
+
+        ExternalTypeHandler handler = builder.build();
+        assertNotNull(handler);
+
+        Field _propertiesField = ExternalTypeHandler.class.getDeclaredField("_properties");
+        _propertiesField.setAccessible(true);
+        Object[] properties = (Object[]) _propertiesField.get(handler);
+        assertEquals(1, properties.length);
+
+        Field _nameToPropertyIndexField = ExternalTypeHandler.class.getDeclaredField("_nameToPropertyIndex");
+        _nameToPropertyIndexField.setAccessible(true);
+        Map<?, ?> nameToPropertyIndex = (Map<?, ?>) _nameToPropertyIndexField.get(handler);
+        assertEquals(2, nameToPropertyIndex.size());
+        assertEquals(0, nameToPropertyIndex.get("testProp"));
+        assertEquals(0, nameToPropertyIndex.get("typeProp"));
+    }
+
+    // Test cases for _deserialize and _deserializeAndSet are implicitly covered by handlePropertyValue and complete,
+    // but we can add more specific ones if needed.
+
+    @Test
+    public void testDeserializeAndSet_handlesNullValue() throws Exception {
+        ExternalTypeHandler.Builder builder = new ExternalTypeHandler.Builder();
+        SettableBeanProperty prop = createDummyProperty("testProp", null);
+        TypeDeserializer typeDeser = createDummyTypeDeserializer("typeProp", null);
+        builder.addExternal(prop, typeDeser);
+        ExternalTypeHandler handler = builder.build().start();
+
+        Field _tokensField = ExternalTypeHandler.class.getDeclaredField("_tokens");
+        _tokensField.setAccessible(true);
+        TokenBuffer[] tokensArray = (TokenBuffer[]) _tokensField.get(handler);
+
+        JsonParser jpForToken = ((ObjectMapper) createDummyContext().getObjectMapper()).getFactory().createParser("null");
+        TokenBuffer tokens = new TokenBuffer(jpForToken);
+        tokens.nextToken(); // To ensure it's not empty
+        tokensArray[0] = tokens;
+
+        JsonParser jp = createDummyParser();
+        DeserializationContext ctxt = createDummyContext();
+        Object bean = new Object();
+
+        // Call _deserializeAndSet directly, simulating conditions where it's triggered
+        Method deserializeAndSetMethod = ExternalTypeHandler.class.getDeclaredMethod("_deserializeAndSet", JsonParser.class, DeserializationContext.class, Object.class, int.class, String.class);
+        deserializeAndSetMethod.setAccessible(true);
+        deserializeAndSetMethod.invoke(handler, jp, ctxt, bean, 0, "someType");
+
+        // Verify that the property on the bean was set to null
+        assertNull(prop.get(bean));
+        assertNull(tokensArray[0]); // Tokens should be cleared
+    }
+
+    @Test
+    public void testDeserialize_handlesNullValue() throws Exception {
+        ExternalTypeHandler.Builder builder = new ExternalTypeHandler.Builder();
+        SettableBeanProperty prop = createDummyProperty("testProp", null);
+        TypeDeserializer typeDeser = createDummyTypeDeserializer("typeProp", null);
+        builder.addExternal(prop, typeDeser);
+        ExternalTypeHandler handler = builder.build().start();
+
+        Field _tokensField = ExternalTypeHandler.class.getDeclaredField("_tokens");
+        _tokensField.setAccessible(true);
+        TokenBuffer[] tokensArray = (TokenBuffer[]) _tokensField.get(handler);
+
+        JsonParser jpForToken = ((ObjectMapper) createDummyContext().getObjectMapper()).getFactory().createParser("null");
+        TokenBuffer tokens = new TokenBuffer(jpForToken);
+        tokens.nextToken(); // To ensure it's not empty
+        tokensArray[0] = tokens;
+
+        JsonParser jp = createDummyParser();
+        DeserializationContext ctxt = createDummyContext();
+
+        // Call _deserialize directly
+        Method deserializeMethod = ExternalTypeHandler.class.getDeclaredMethod("_deserialize", JsonParser.class, DeserializationContext.class, int.class, String.class);
+        deserializeMethod.setAccessible(true);
+        Object result = deserializeMethod.invoke(handler, jp, ctxt, 0, "someType");
+
+        assertNull(result);
+        // Tokens are not cleared by _deserialize, only by _deserializeAndSet.
+        assertNotNull(tokensArray[0]);
+    }
+
+    // Edge case: empty properties list
+    @Test
+    public void testComplete_withEmptyProperties() throws Exception {
+        ExternalTypeHandler.Builder builder = new ExternalTypeHandler.Builder();
+        ExternalTypeHandler handler = builder.build();
+
+        JsonParser jp = createDummyParser();
+        DeserializationContext ctxt = createDummyContext();
+        Object bean = new Object();
+
+        Object result = handler.complete(jp, ctxt, bean);
+        assertNotNull(result);
+        assertSame(bean, result);
+    }
+
+    // Edge case: empty nameToPropertyIndex
+    @Test
+    public void testHandleTypePropertyValue_withEmptyIndex() throws Exception {
+        ExternalTypeHandler.Builder builder = new ExternalTypeHandler.Builder();
+        ExternalTypeHandler handler = builder.build();
+
+        JsonParser jp = createDummyParser();
+        DeserializationContext ctxt = createDummyContext();
+        Object bean = new Object();
+
+        boolean handled = handler.handleTypePropertyValue(jp, ctxt, "someProp", bean);
+        assertFalse(handled);
+    }
+
+    @Test
+    public void testHandlePropertyValue_withEmptyIndex() throws Exception {
+        ExternalTypeHandler.Builder builder = new ExternalTypeHandler.Builder();
+        ExternalTypeHandler handler = builder.build();
+
+        JsonParser jp = createDummyParser();
+        DeserializationContext ctxt = createDummyContext();
+        Object bean = new Object();
+
+        boolean handled = handler.handlePropertyValue(jp, ctxt, "someProp", bean);
+        assertFalse(handled);
+    }
+
+    // Test with multiple properties
+    @Test
+    public void testMultiplePropertiesHandling() throws Exception {
+        ExternalTypeHandler.Builder builder = new ExternalTypeHandler.Builder();
+        SettableBeanProperty prop1 = createDummyProperty("prop1", null);
+        TypeDeserializer typeDeser1 = createDummyTypeDeserializer("type1", null);
+        SettableBeanProperty prop2 = createDummyProperty("prop2", null);
+        TypeDeserializer typeDeser2 = createDummyTypeDeserializer("type2", null);
+
+        builder.addExternal(prop1, typeDeser1);
+        builder.addExternal(prop2, typeDeser2);
+        ExternalTypeHandler handler = builder.build().start();
+
+        // Simulate handling of type property for prop1
+        JsonParser jpType1 = ((ObjectMapper) createDummyContext().getObjectMapper()).getFactory().createParser("{\"type1\":\"typeA\"}");
+        jpType1.nextToken();
+        handler.handleTypePropertyValue(jpType1, createDummyContext(), "type1", new Object());
+
+        // Simulate handling of property value for prop2
+        JsonParser jpProp2 = ((ObjectMapper) createDummyContext().getObjectMapper()).getFactory().createParser("{\"prop2\":\"valueB\"}");
+        jpProp2.nextToken();
+        TokenBuffer tokensProp2 = new TokenBuffer(jpProp2);
+        tokensProp2.copyCurrentStructure(jpProp2);
+        Field _tokensField = ExternalTypeHandler.class.getDeclaredField("_tokens");
+        _tokensField.setAccessible(true);
+        TokenBuffer[] tokensArray = (TokenBuffer[]) _tokensField.get(handler);
+        tokensArray[1] = tokensProp2; // Set for index 1
+
+        // Simulate completion
+        JsonParser jpComplete = createDummyParser();
+        Object bean = new Object();
+        handler.complete(jpComplete, createDummyContext(), bean);
+
+        // Assert that the properties were not set because neither was fully processed.
+        // This test primarily checks the flow and state management with multiple properties.
+        // Full deserialization and setting requires more complex setup to mock deserializers.
+        assertNull(prop1.get(bean));
+        assertNull(prop2.get(bean));
+    }
+}
+```
+
+1. SOURCE CODE ANALYSIS - The tests focus on `ExternalTypeHandler` and its nested `Builder` class. Key methods tested include `start()`, `handleTypePropertyValue()`, `handlePropertyValue()`, `complete()`, `Builder.addExternal()`, and `Builder.build()`. Branches covered include property not found, type property mismatches, buffering of tokens and type IDs, handling of natural types, and the use of default implementations.
+2. TEST CASE DESIGN -
+    - `testStartReturnsNewInstance`: Checks that `start()` returns a distinct instance.
+    - `testHandleTypePropertyValue_propertyNotFound`: Ensures `false` is returned when property name is not in the index.
+    - `testHandleTypePropertyValue_typePropertyNotFound`: Ensures `false` is returned when property name does not match the type property name.
+    - `testHandleTypePropertyValue_setsTypeIdAndTriggersDeserializeWhenPossible`: Verifies type ID is set and deserialization is triggered when token is buffered.
+    - `testHandlePropertyValue_propertyNotFound`: Ensures `false` is returned when property name is not in the index.
+    - `testHandlePropertyValue_buffersTokenAndTypeId`: Checks that token is buffered and type ID is not yet set.
+    - `testHandlePropertyValue_triggersDeserializeWhenPossible`: Verifies deserialization is triggered when type ID and token are available.
+    - `testComplete_handlesMissingTypeIdAndToken`: Checks that `complete()` handles cases where both type ID and token are missing.
+    - `testComplete_throwsExceptionWhenTypeIdMissingButTokenPresent`: Verifies `JsonMappingException` is thrown when type ID is missing but token is present.
+    - `testComplete_throwsExceptionWhenTokenMissingButTypeIdPresent`: Verifies `JsonMappingException` is thrown when token is missing but type ID is present.
+    - `testComplete_handlesNaturalTypes`: Tests handling of natural types when only a token buffer is present.
+    - `testComplete_usesDefaultImplWhenTypeIsMissing`: Verifies use of default implementation when type ID is missing.
+    - `testComplete_throwsExceptionIfNoDefaultImplAndTypeMissing`: Checks `JsonMappingException` when type ID is missing and no default implementation exists.
+    - `testBuilderAddExternal`: Tests the internal state of the `Builder` after adding properties.
+    - `testBuilderBuild`: Tests the internal state of `ExternalTypeHandler` after being built.
+    - `testDeserializeAndSet_handlesNullValue`: Tests `_deserializeAndSet` with a null value.
+    - `testDeserialize_handlesNullValue`: Tests `_deserialize` with a null value.
+    - `testComplete_withEmptyProperties`: Tests `complete()` with an empty properties list.
+    - `testHandleTypePropertyValue_withEmptyIndex`: Tests `handleTypePropertyValue` with an empty index.
+    - `testHandlePropertyValue_withEmptyIndex`: Tests `handlePropertyValue` with an empty index.
+    - `testMultiplePropertiesHandling`: Tests basic flow with multiple properties.
+4. DEFECT DETECTION STRATEGY - The tests cover the core logic of buffering and processing external type information, including edge cases like missing data and the use of default types. They specifically target the conditional logic within `handleTypePropertyValue`, `handlePropertyValue`, and `complete`.
+5. SUMMARY - 21 tests.
+6. LIMITATIONS - Mocking complex deserialization scenarios for `_deserialize` and `_deserializeAndSet` to assert exact deserialized values is not fully implemented due to the complexity of creating dummy `DeserializationContext` and `JsonParser` that simulate actual deserialization. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

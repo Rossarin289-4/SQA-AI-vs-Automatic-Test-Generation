@@ -1,0 +1,211 @@
+package com.fasterxml.jackson.databind.node;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.math.BigDecimal;
+import java.math.BigInteger;
+import com.fasterxml.jackson.core.*;
+import com.fasterxml.jackson.core.base.ParserMinimalBase;
+import com.fasterxml.jackson.databind.JsonNode;
+
+public class TreeTraversingParserTest {
+    @Test
+    public void testCodecCanBeReplaced() throws Exception {
+        TreeTraversingParser parser = new TreeTraversingParser(new TextNode("x"));
+        ObjectCodec codec = null;
+        parser.setCodec(codec);
+        assertSame(codec, parser.getCodec());
+    }
+
+    @Test
+    public void testVersionIsAvailable() throws Exception {
+        TreeTraversingParser parser = new TreeTraversingParser(new TextNode("x"));
+        assertNotNull(parser.version());
+    }
+
+    @Test
+    public void testScalarTokenAndText() throws Exception {
+        TreeTraversingParser parser = new TreeTraversingParser(new TextNode("hello"));
+        assertEquals(JsonToken.VALUE_STRING, parser.nextToken());
+        assertEquals("hello", parser.getText());
+        assertEquals("hello", new String(parser.getTextCharacters()));
+        assertEquals(5, parser.getTextLength());
+        assertEquals(0, parser.getTextOffset());
+        assertFalse(parser.hasTextCharacters());
+    }
+
+    @Test
+    public void testRootNumberAccessors() throws Exception {
+        TreeTraversingParser parser = new TreeTraversingParser(new IntNode(17));
+        assertEquals(JsonToken.VALUE_NUMBER_INT, parser.nextToken());
+        assertEquals(JsonParser.NumberType.INT, parser.getNumberType());
+        assertEquals(17, parser.getIntValue());
+        assertEquals(17L, parser.getLongValue());
+        assertEquals(17.0, parser.getDoubleValue(), 0.0);
+        assertEquals(17.0f, parser.getFloatValue(), 0.0f);
+        assertEquals(BigInteger.valueOf(17), parser.getBigIntegerValue());
+        assertEquals(new BigDecimal("17"), parser.getDecimalValue());
+        assertEquals(Integer.valueOf(17), parser.getNumberValue());
+    }
+
+    @Test
+    public void testIntMaximum() throws Exception {
+        TreeTraversingParser parser = new TreeTraversingParser(new IntNode(Integer.MAX_VALUE));
+        assertEquals(JsonToken.VALUE_NUMBER_INT, parser.nextToken());
+        assertEquals(Integer.MAX_VALUE, parser.getIntValue());
+        assertEquals((long) Integer.MAX_VALUE, parser.getLongValue());
+    }
+
+    @Test
+    public void testLongMaximum() throws Exception {
+        TreeTraversingParser parser = new TreeTraversingParser(new LongNode(Long.MAX_VALUE));
+        assertEquals(JsonToken.VALUE_NUMBER_INT, parser.nextToken());
+        assertEquals(Long.MAX_VALUE, parser.getLongValue());
+        assertEquals(BigInteger.valueOf(Long.MAX_VALUE), parser.getBigIntegerValue());
+    }
+
+    @Test
+    public void testDecimalNumberAccessors() throws Exception {
+        TreeTraversingParser parser = new TreeTraversingParser(new DecimalNode(new BigDecimal("2.5")));
+        assertEquals(JsonToken.VALUE_NUMBER_FLOAT, parser.nextToken());
+        assertEquals(JsonParser.NumberType.BIG_DECIMAL, parser.getNumberType());
+        assertEquals(new BigDecimal("2.5"), parser.getDecimalValue());
+        assertEquals(2.5, parser.getDoubleValue(), 1e-9);
+        assertEquals(2.5f, parser.getFloatValue(), 1e-6f);
+    }
+
+    @Test
+    public void testNonNumericNodeRejectsNumericAccess() throws Exception {
+        TreeTraversingParser parser = new TreeTraversingParser(new TextNode("no"));
+        parser.nextToken();
+        try {
+            parser.getIntValue();
+            fail("expected JsonParseException");
+        } catch (JsonParseException expected) {
+            assertNotNull(expected);
+        }
+    }
+
+    @Test
+    public void testArrayTraversalAndEndOfInput() throws Exception {
+        ArrayNode array = new ArrayNode(JsonNodeFactory.instance);
+        array.add(3);
+        array.add(4);
+        TreeTraversingParser parser = new TreeTraversingParser(array);
+        assertEquals(JsonToken.START_ARRAY, parser.nextToken());
+        assertEquals(JsonToken.VALUE_NUMBER_INT, parser.nextToken());
+        assertEquals(3, parser.getIntValue());
+        assertEquals(JsonToken.VALUE_NUMBER_INT, parser.nextToken());
+        assertEquals(4, parser.getIntValue());
+        assertEquals(JsonToken.END_ARRAY, parser.nextToken());
+        assertNull(parser.nextToken());
+        assertTrue(parser.isClosed());
+    }
+
+    @Test
+    public void testEmptyArrayTokens() throws Exception {
+        ArrayNode array = new ArrayNode(JsonNodeFactory.instance);
+        TreeTraversingParser parser = new TreeTraversingParser(array);
+        assertEquals(JsonToken.START_ARRAY, parser.nextToken());
+        assertEquals(JsonToken.END_ARRAY, parser.nextToken());
+    }
+
+    @Test
+    public void testObjectFieldNameAndOverride() throws Exception {
+        ObjectNode object = new ObjectNode(JsonNodeFactory.instance);
+        object.put("a", 9);
+        TreeTraversingParser parser = new TreeTraversingParser(object);
+        assertEquals(JsonToken.START_OBJECT, parser.nextToken());
+        assertEquals(JsonToken.FIELD_NAME, parser.nextToken());
+        assertEquals("a", parser.getCurrentName());
+        assertEquals("a", parser.getText());
+        parser.overrideCurrentName("b");
+        assertEquals("b", parser.getCurrentName());
+        assertEquals("b", parser.getText());
+    }
+
+    @Test
+    public void testSkipChildrenSkipsNestedArray() throws Exception {
+        ArrayNode nested = new ArrayNode(JsonNodeFactory.instance);
+        nested.add(1);
+        ArrayNode root = new ArrayNode(JsonNodeFactory.instance);
+        root.add(nested);
+        TreeTraversingParser parser = new TreeTraversingParser(root);
+        assertEquals(JsonToken.START_ARRAY, parser.nextToken());
+        assertEquals(JsonToken.START_ARRAY, parser.nextToken());
+        assertSame(parser, parser.skipChildren());
+        assertEquals(JsonToken.END_ARRAY, parser.getCurrentToken());
+        assertEquals(JsonToken.END_ARRAY, parser.nextToken());
+    }
+
+    @Test
+    public void testLocationAndParsingContext() throws Exception {
+        TreeTraversingParser parser = new TreeTraversingParser(new TextNode("v"));
+        assertSame(JsonLocation.NA, parser.getTokenLocation());
+        assertSame(JsonLocation.NA, parser.getCurrentLocation());
+        assertNotNull(parser.getParsingContext());
+    }
+
+    @Test
+    public void testCloseClearsCurrentTextAndMarksClosed() throws Exception {
+        TreeTraversingParser parser = new TreeTraversingParser(new TextNode("v"));
+        parser.nextToken();
+        parser.close();
+        assertTrue(parser.isClosed());
+        assertNull(parser.getText());
+        assertNull(parser.getParsingContext());
+    }
+
+    @Test
+    public void testEmbeddedPojoValue() throws Exception {
+        Object value = "payload";
+        TreeTraversingParser parser = new TreeTraversingParser(new POJONode(value));
+        assertEquals(JsonToken.VALUE_EMBEDDED_OBJECT, parser.nextToken());
+        assertSame(value, parser.getEmbeddedObject());
+    }
+
+    @Test
+    public void testBinaryNodeAccessAndRead() throws Exception {
+        byte[] bytes = new byte[] {1, 2, 3};
+        TreeTraversingParser parser = new TreeTraversingParser(new BinaryNode(bytes));
+        parser.nextToken();
+        assertArrayEquals(bytes, parser.getBinaryValue(Base64Variants.getDefaultVariant()));
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        assertEquals(3, parser.readBinaryValue(Base64Variants.getDefaultVariant(), out));
+        assertArrayEquals(bytes, out.toByteArray());
+    }
+
+    @Test
+    public void testTextNodeBase64Decoding() throws Exception {
+        TreeTraversingParser parser = new TreeTraversingParser(new TextNode("AQID"));
+        parser.nextToken();
+        assertArrayEquals(new byte[] {1, 2, 3},
+                parser.getBinaryValue(Base64Variants.getDefaultVariant()));
+    }
+
+    @Test
+    public void testNonBinaryReadReturnsDecodedBytes() throws Exception {
+        TreeTraversingParser parser = new TreeTraversingParser(new TextNode("ordinary"));
+        parser.nextToken();
+        OutputStream out = new OutputStream() {
+            @Override public void write(int b) { }
+        };
+        assertEquals(6, parser.readBinaryValue(Base64Variants.getDefaultVariant(), out));
+    }
+
+    @Test
+    public void testNullTextWhenBeforeFirstToken() throws Exception {
+        TreeTraversingParser parser = new TreeTraversingParser(new TextNode("v"));
+        assertEquals(JsonToken.VALUE_STRING, parser.nextToken());
+        assertEquals("v", parser.getText());
+    }
+
+    @Test
+    public void testBooleanTokenText() throws Exception {
+        TreeTraversingParser parser = new TreeTraversingParser(BooleanNode.TRUE);
+        assertEquals(JsonToken.VALUE_TRUE, parser.nextToken());
+        assertEquals("true", parser.getText());
+    }
+}

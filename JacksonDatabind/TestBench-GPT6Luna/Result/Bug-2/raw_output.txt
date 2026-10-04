@@ -1,0 +1,313 @@
+```java
+package com.fasterxml.jackson.databind.util;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.io.*;
+import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.util.TreeMap;
+import com.fasterxml.jackson.core.*;
+import com.fasterxml.jackson.core.base.ParserMinimalBase;
+import com.fasterxml.jackson.core.json.JsonReadContext;
+import com.fasterxml.jackson.core.json.JsonWriteContext;
+import com.fasterxml.jackson.core.util.ByteArrayBuilder;
+import com.fasterxml.jackson.databind.*;
+
+public class TokenBufferTest {
+    @Test
+    public void testEmptyBufferParser() throws Exception {
+        TokenBuffer buffer = new TokenBuffer((ObjectCodec) null, false);
+        JsonParser parser = buffer.asParser();
+        assertNull(buffer.firstToken());
+        assertNull(parser.nextToken());
+    }
+
+    @Test
+    public void testFirstTokenAndBooleanTraversal() throws Exception {
+        TokenBuffer buffer = new TokenBuffer((ObjectCodec) null, false);
+        buffer.writeBoolean(true);
+        buffer.writeBoolean(false);
+        assertEquals(JsonToken.VALUE_TRUE, buffer.firstToken());
+        JsonParser parser = buffer.asParser();
+        assertEquals(JsonToken.VALUE_TRUE, parser.nextToken());
+        assertEquals("true", parser.getText());
+        assertEquals(JsonToken.VALUE_FALSE, parser.nextToken());
+        assertEquals("false", parser.getText());
+        assertNull(parser.nextToken());
+    }
+
+    @Test
+    public void testNullStringIsNullToken() throws Exception {
+        TokenBuffer buffer = new TokenBuffer((ObjectCodec) null, false);
+        buffer.writeString((String) null);
+        JsonParser parser = buffer.asParser();
+        assertEquals(JsonToken.VALUE_NULL, parser.nextToken());
+        assertEquals("null", parser.getText());
+    }
+
+    @Test
+    public void testObjectFieldAndContext() throws Exception {
+        TokenBuffer buffer = new TokenBuffer((ObjectCodec) null, false);
+        buffer.writeStartObject();
+        buffer.writeFieldName("a");
+        buffer.writeString("b");
+        buffer.writeEndObject();
+
+        JsonParser parser = buffer.asParser();
+        assertEquals(JsonToken.START_OBJECT, parser.nextToken());
+        assertEquals(JsonToken.FIELD_NAME, parser.nextToken());
+        assertEquals("a", parser.getCurrentName());
+        assertEquals(JsonToken.VALUE_STRING, parser.nextToken());
+        assertEquals("b", parser.getText());
+        assertEquals(JsonToken.END_OBJECT, parser.nextToken());
+        assertTrue(parser.getParsingContext().inRoot());
+    }
+
+    @Test
+    public void testNumericTypeEdgesAndValues() throws Exception {
+        TokenBuffer buffer = new TokenBuffer((ObjectCodec) null, false);
+        buffer.writeNumber(Integer.MAX_VALUE);
+        buffer.writeNumber((long) Integer.MAX_VALUE + 1L);
+        buffer.writeNumber(Long.MAX_VALUE);
+        JsonParser parser = buffer.asParser();
+
+        assertEquals(JsonToken.VALUE_NUMBER_INT, parser.nextToken());
+        assertEquals(Integer.MAX_VALUE, parser.getIntValue());
+        assertEquals(JsonParser.NumberType.INT, parser.getNumberType());
+        assertEquals(JsonToken.VALUE_NUMBER_INT, parser.nextToken());
+        assertEquals((long) Integer.MAX_VALUE + 1L, parser.getLongValue());
+        assertEquals(JsonParser.NumberType.LONG, parser.getNumberType());
+        assertEquals(JsonToken.VALUE_NUMBER_INT, parser.nextToken());
+        assertEquals(Long.MAX_VALUE, parser.getLongValue());
+    }
+
+    @Test
+    public void testNegativeIntegerEdge() throws Exception {
+        TokenBuffer buffer = new TokenBuffer((ObjectCodec) null, false);
+        buffer.writeNumber(Integer.MIN_VALUE);
+        JsonParser parser = buffer.asParser();
+        assertEquals(JsonToken.VALUE_NUMBER_INT, parser.nextToken());
+        assertEquals(Integer.MIN_VALUE, parser.getIntValue());
+        assertEquals(BigInteger.valueOf(Integer.MIN_VALUE), parser.getBigIntegerValue());
+    }
+
+    @Test
+    public void testBigIntegerPreserved() throws Exception {
+        BigInteger value = BigInteger.valueOf(Long.MAX_VALUE).add(BigInteger.ONE);
+        TokenBuffer buffer = new TokenBuffer((ObjectCodec) null, false);
+        buffer.writeNumber(value);
+        JsonParser parser = buffer.asParser();
+        assertEquals(JsonToken.VALUE_NUMBER_INT, parser.nextToken());
+        assertEquals(value, parser.getBigIntegerValue());
+        assertEquals(JsonParser.NumberType.BIG_INTEGER, parser.getNumberType());
+    }
+
+    @Test
+    public void testDecimalPreserved() throws Exception {
+        BigDecimal value = new BigDecimal("12.50");
+        TokenBuffer buffer = new TokenBuffer((ObjectCodec) null, false);
+        buffer.writeNumber(value);
+        JsonParser parser = buffer.asParser();
+        assertEquals(JsonToken.VALUE_NUMBER_FLOAT, parser.nextToken());
+        assertEquals(value, parser.getDecimalValue());
+        assertEquals(JsonParser.NumberType.BIG_DECIMAL, parser.getNumberType());
+    }
+
+    @Test
+    public void testFloatAndDoubleValues() throws Exception {
+        TokenBuffer buffer = new TokenBuffer((ObjectCodec) null, false);
+        buffer.writeNumber(1.5f);
+        buffer.writeNumber(2.25d);
+        JsonParser parser = buffer.asParser();
+        assertEquals(JsonToken.VALUE_NUMBER_FLOAT, parser.nextToken());
+        assertEquals(1.5f, parser.getFloatValue(), 1e-6f);
+        assertEquals(JsonParser.NumberType.FLOAT, parser.getNumberType());
+        assertEquals(JsonToken.VALUE_NUMBER_FLOAT, parser.nextToken());
+        assertEquals(2.25d, parser.getDoubleValue(), 1e-9);
+        assertEquals(JsonParser.NumberType.DOUBLE, parser.getNumberType());
+    }
+
+    @Test
+    public void testEncodedNumberText() throws Exception {
+        TokenBuffer buffer = new TokenBuffer((ObjectCodec) null, false);
+        buffer.writeNumber("3.75");
+        JsonParser parser = buffer.asParser();
+        assertEquals(JsonToken.VALUE_NUMBER_FLOAT, parser.nextToken());
+        assertEquals("3.75", parser.getText());
+        assertEquals(3.75d, parser.getDoubleValue(), 1e-9);
+    }
+
+    @Test
+    public void testNumberWithoutDecimalPointParsesAsLong() throws Exception {
+        TokenBuffer buffer = new TokenBuffer((ObjectCodec) null, false);
+        buffer.writeNumber("17");
+        JsonParser parser = buffer.asParser();
+        assertEquals(JsonToken.VALUE_NUMBER_FLOAT, parser.nextToken());
+        assertEquals(17L, parser.getLongValue());
+        assertEquals(JsonParser.NumberType.LONG, parser.getNumberType());
+    }
+
+    @Test
+    public void testEmbeddedObjectAndByteArray() throws Exception {
+        byte[] bytes = new byte[] { 1, 2, 3 };
+        TokenBuffer buffer = new TokenBuffer((ObjectCodec) null, false);
+        buffer.writeObject(bytes);
+        JsonParser parser = buffer.asParser();
+        assertEquals(JsonToken.VALUE_EMBEDDED_OBJECT, parser.nextToken());
+        assertSame(bytes, parser.getEmbeddedObject());
+        assertArrayEquals(bytes, parser.getBinaryValue(Base64Variants.getDefaultVariant()));
+    }
+
+    @Test
+    public void testWriteBinaryCopiesSelectedRange() throws Exception {
+        byte[] source = new byte[] { 4, 5, 6, 7 };
+        TokenBuffer buffer = new TokenBuffer((ObjectCodec) null, false);
+        buffer.writeBinary(Base64Variants.getDefaultVariant(), source, 1, 2);
+        source[1] = 99;
+
+        JsonParser parser = buffer.asParser();
+        assertEquals(JsonToken.VALUE_EMBEDDED_OBJECT, parser.nextToken());
+        assertArrayEquals(new byte[] { 5, 6 },
+                parser.getBinaryValue(Base64Variants.getDefaultVariant()));
+    }
+
+    @Test
+    public void testTokenBoundaryAcrossSegments() throws Exception {
+        TokenBuffer buffer = new TokenBuffer((ObjectCodec) null, false);
+        for (int i = 0; i < 17; i++) {
+            buffer.writeNumber(i);
+        }
+        JsonParser parser = buffer.asParser();
+        for (int i = 0; i < 17; i++) {
+            assertEquals(JsonToken.VALUE_NUMBER_INT, parser.nextToken());
+            assertEquals(i, parser.getIntValue());
+        }
+        assertNull(parser.nextToken());
+    }
+
+    @Test
+    public void testAppendCopiesStructure() throws Exception {
+        TokenBuffer source = new TokenBuffer((ObjectCodec) null, false);
+        source.writeStartArray();
+        source.writeString("x");
+        source.writeNumber(8);
+        source.writeEndArray();
+
+        TokenBuffer target = new TokenBuffer((ObjectCodec) null, false);
+        assertSame(target, target.append(source));
+        JsonParser parser = target.asParser();
+        assertEquals(JsonToken.START_ARRAY, parser.nextToken());
+        assertEquals(JsonToken.VALUE_STRING, parser.nextToken());
+        assertEquals("x", parser.getText());
+        assertEquals(JsonToken.VALUE_NUMBER_INT, parser.nextToken());
+        assertEquals(8, parser.getIntValue());
+        assertEquals(JsonToken.END_ARRAY, parser.nextToken());
+        assertNull(parser.nextToken());
+    }
+
+    @Test
+    public void testToStringShowsTokensAndField() throws Exception {
+        TokenBuffer buffer = new TokenBuffer((ObjectCodec) null, false);
+        buffer.writeStartObject();
+        buffer.writeFieldName("k");
+        buffer.writeNumber(2);
+        buffer.writeEndObject();
+        assertEquals("[TokenBuffer: START_OBJECT, FIELD_NAME(k), VALUE_NUMBER_INT, END_OBJECT]",
+                buffer.toString());
+    }
+
+    @Test
+    public void testFeatureConfiguration() throws Exception {
+        TokenBuffer buffer = new TokenBuffer((ObjectCodec) null, false);
+        JsonGenerator.Feature feature = JsonGenerator.Feature.AUTO_CLOSE_TARGET;
+        assertEquals(buffer, buffer.enable(feature));
+        assertTrue(buffer.isEnabled(feature));
+        int enabledMask = buffer.getFeatureMask();
+        assertEquals(feature.getMask(), enabledMask & feature.getMask());
+
+        buffer.disable(feature);
+        assertFalse(buffer.isEnabled(feature));
+        assertEquals(enabledMask & ~feature.getMask(), buffer.getFeatureMask());
+
+        buffer.setFeatureMask(feature.getMask());
+        assertTrue(buffer.isEnabled(feature));
+    }
+
+    @Test
+    public void testCodecAndPrettyPrinterFluentMethods() throws Exception {
+        TokenBuffer buffer = new TokenBuffer((ObjectCodec) null, false);
+        assertSame(buffer, buffer.useDefaultPrettyPrinter());
+        assertSame(buffer, buffer.setCodec(null));
+        assertNull(buffer.getCodec());
+    }
+
+    @Test
+    public void testCloseAndBinaryCapability() throws Exception {
+        TokenBuffer buffer = new TokenBuffer((ObjectCodec) null, false);
+        assertTrue(buffer.canWriteBinaryNatively());
+        assertFalse(buffer.isClosed());
+        buffer.close();
+        assertTrue(buffer.isClosed());
+    }
+
+    @Test
+    public void testNativeIdCapabilities() throws Exception {
+        TokenBuffer noIds = new TokenBuffer((ObjectCodec) null, false);
+        assertFalse(noIds.canWriteTypeId());
+        assertFalse(noIds.canWriteObjectId());
+
+        TokenBuffer withIds = new TokenBuffer((ObjectCodec) null, true);
+        assertTrue(withIds.canWriteTypeId());
+        assertTrue(withIds.canWriteObjectId());
+    }
+
+    @Test
+    public void testUnsupportedRawWriteThrows() throws Exception {
+        TokenBuffer buffer = new TokenBuffer((ObjectCodec) null, false);
+        try {
+            buffer.writeRaw("x");
+            fail("expected UnsupportedOperationException");
+        } catch (UnsupportedOperationException expected) {
+        }
+        assertNull(buffer.firstToken());
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+Method selection is exploratory because no target method was specified. Tests cover token writing and traversal, numeric representations, segment rollover, appending, serialization text, feature configuration, lifecycle, and unsupported raw output.
+The configured cases include nested structures, populated buffers, and numeric values spanning integer representations.
+
+### 2. TEST CASE DESIGN
+- `testEmptyBufferParser`: empty buffer; first token and next parser token are null, as the initial segment has no token.
+- `testFirstTokenAndBooleanTraversal`: true then false; exact boolean token sequence and text from parser token rendering.
+- `testNullStringIsNullToken`: null string; produces `VALUE_NULL` and `"null"` token text.
+- `testObjectFieldAndContext`: object with field `a` and value `b`; verifies token order, field name, text, and root context after closing.
+- `testNumericTypeEdgesAndValues`: integer max, first larger long, and long max; values and parser number types follow stored Java number types.
+- `testNegativeIntegerEdge`: integer minimum; int and BigInteger values follow the stored Integer.
+- `testBigIntegerPreserved`: one above long max; stored BigInteger remains exact and reports BIG_INTEGER.
+- `testDecimalPreserved`: decimal `12.50`; BigDecimal retains scale and reports BIG_DECIMAL.
+- `testFloatAndDoubleValues`: float 1.5 and double 2.25; values and corresponding parser number types follow stored values.
+- `testEncodedNumberText`: encoded decimal; text is preserved and parsing yields 3.75.
+- `testNumberWithoutDecimalPointParsesAsLong`: encoded integer text; numeric accessor parses it as Long.
+- `testEmbeddedObjectAndByteArray`: byte array object; embedded reference and binary contents are preserved.
+- `testWriteBinaryCopiesSelectedRange`: source range `[1, 3)`; buffered bytes are copied before the source is changed.
+- `testTokenBoundaryAcrossSegments`: 17 numbers; verifies all tokens across the 16-token segment boundary.
+- `testAppendCopiesStructure`: array from source buffer; append returns destination and reproduces its token sequence.
+- `testToStringShowsTokensAndField`: object tokens; formatted text follows `toString()` token and field-name construction.
+- `testFeatureConfiguration`: enable, disable, and set a feature mask; mask and enabled state follow bit operations.
+- `testCodecAndPrettyPrinterFluentMethods`: null codec and pretty-printer call; fluent return is the buffer and codec reads back null.
+- `testCloseAndBinaryCapability`: buffer starts open, reports native binary support, and is closed after `close()`.
+- `testNativeIdCapabilities`: constructor flag false/true; both native-ID capability results match initialization.
+- `testUnsupportedRawWriteThrows`: raw string write; source explicitly reports unsupported operation and does not append a token.
+
+### 4. DEFECT DETECTION STRATEGY
+Assertions pin observable token sequence, data, state changes, feature masks, and boundary behavior. These checks may expose regressions in those paths, but no defect detection is claimed.
+
+### 5. SUMMARY
+21 tests.
+
+### 6. LIMITATIONS
+No faulty implementation or execution results are available; coverage and actual pass/fail outcomes are unverified.  
+Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

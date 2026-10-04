@@ -1,0 +1,341 @@
+```java
+package com.google.javascript.rhino.jstype;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Preconditions;
+import com.google.common.collect.ArrayListMultimap;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.LinkedHashMultimap;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.common.collect.Multimap;
+import com.google.javascript.rhino.ErrorReporter;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.ScriptRuntime;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.jstype.RecordTypeBuilder.RecordProperty;
+import java.io.Serializable;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Sets;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.jstype.StaticReference;
+import com.google.javascript.rhino.jstype.StaticSlot;
+import java.util.SortedMap;
+import java.util.Collections;
+
+public class JSTypeRegistryTest {
+    @Test
+    public void testNativeTypeLookup() throws Exception {
+        JSTypeRegistry registry = new JSTypeRegistry(null);
+        assertTrue(registry.getNativeType(JSTypeNative.NUMBER_TYPE).isNumber());
+        assertTrue(registry.getNativeType(JSTypeNative.STRING_TYPE).isString());
+    }
+
+    @Test
+    public void testNativeObjectTypeLookup() throws Exception {
+        JSTypeRegistry registry = new JSTypeRegistry(null);
+        assertTrue(registry.getNativeObjectType(JSTypeNative.OBJECT_TYPE).isObject());
+    }
+
+    @Test
+    public void testNativeFunctionTypeLookup() throws Exception {
+        JSTypeRegistry registry = new JSTypeRegistry(null);
+        assertTrue(registry.getNativeFunctionType(
+                JSTypeNative.ARRAY_FUNCTION_TYPE).isConstructor());
+    }
+
+    @Test
+    public void testUndefinedToleranceSetting() throws Exception {
+        JSTypeRegistry strict = new JSTypeRegistry(null);
+        JSTypeRegistry tolerant = new JSTypeRegistry(null, true);
+        assertFalse(strict.shouldTolerateUndefinedValues());
+        assertTrue(tolerant.shouldTolerateUndefinedValues());
+    }
+
+    @Test
+    public void testDeclareTypeAndDuplicate() throws Exception {
+        JSTypeRegistry registry = new JSTypeRegistry(null);
+        JSType number = registry.getNativeType(JSTypeNative.NUMBER_TYPE);
+        assertTrue(registry.declareType("Local", number));
+        assertFalse(registry.declareType("Local",
+                registry.getNativeType(JSTypeNative.STRING_TYPE)));
+        assertSame(number, registry.getType("Local"));
+    }
+
+    @Test
+    public void testOverwriteDeclaredType() throws Exception {
+        JSTypeRegistry registry = new JSTypeRegistry(null);
+        JSType number = registry.getNativeType(JSTypeNative.NUMBER_TYPE);
+        JSType string = registry.getNativeType(JSTypeNative.STRING_TYPE);
+        assertTrue(registry.declareType("Local", number));
+        registry.overwriteDeclaredType("Local", string);
+        assertSame(string, registry.getType("Local"));
+    }
+
+    @Test
+    public void testForwardDeclaration() throws Exception {
+        JSTypeRegistry registry = new JSTypeRegistry(null);
+        assertFalse(registry.isForwardDeclaredType("Future"));
+        registry.forwardDeclareType("Future");
+        assertTrue(registry.isForwardDeclaredType("Future"));
+    }
+
+    @Test
+    public void testNamespaceFromDeclaredName() throws Exception {
+        JSTypeRegistry registry = new JSTypeRegistry(null);
+        assertTrue(registry.declareType("pkg.Local",
+                registry.getNativeType(JSTypeNative.NUMBER_TYPE)));
+        assertTrue(registry.hasNamespace("pkg"));
+        assertFalse(registry.hasNamespace("other"));
+    }
+
+    @Test
+    public void testGetUnknownName() throws Exception {
+        JSTypeRegistry registry = new JSTypeRegistry(null);
+        assertNull(registry.getType("NotDeclared"));
+    }
+
+    @Test
+    public void testTemplateNameSetAndClear() throws Exception {
+        JSTypeRegistry registry = new JSTypeRegistry(null);
+        assertNull(registry.getType("T"));
+        registry.setTemplateTypeName("T");
+        JSType template = registry.getType("T");
+        assertNotNull(template);
+        assertTrue(template.isTemplateType());
+        registry.clearTemplateTypeName();
+        assertNull(registry.getType("T"));
+    }
+
+    @Test
+    public void testOptionalTypeAddsVoid() throws Exception {
+        JSTypeRegistry registry = new JSTypeRegistry(null);
+        JSType optional = registry.createOptionalType(
+                registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        assertTrue(optional.isUnionType());
+        assertTrue(optional.isSubtype(registry.getNativeType(JSTypeNative.VOID_TYPE)));
+        assertTrue(optional.isSubtype(registry.getNativeType(JSTypeNative.NUMBER_TYPE)));
+    }
+
+    @Test
+    public void testOptionalUnknownRemainsUnknown() throws Exception {
+        JSTypeRegistry registry = new JSTypeRegistry(null);
+        JSType unknown = registry.getNativeType(JSTypeNative.UNKNOWN_TYPE);
+        assertSame(unknown, registry.createOptionalType(unknown));
+    }
+
+    @Test
+    public void testNullableTypeContainsNull() throws Exception {
+        JSTypeRegistry registry = new JSTypeRegistry(null);
+        JSType nullable = registry.createNullableType(
+                registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        assertTrue(nullable.isUnionType());
+        assertTrue(nullable.isSubtype(registry.getNativeType(JSTypeNative.NULL_TYPE)));
+        assertTrue(nullable.isSubtype(registry.getNativeType(JSTypeNative.NUMBER_TYPE)));
+    }
+
+    @Test
+    public void testDefaultObjectUnionStrictMode() throws Exception {
+        JSTypeRegistry registry = new JSTypeRegistry(null);
+        JSType result = registry.createDefaultObjectUnion(
+                registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        assertTrue(result.isSubtype(registry.getNativeType(JSTypeNative.NULL_TYPE)));
+        assertFalse(result.isSubtype(registry.getNativeType(JSTypeNative.VOID_TYPE)));
+    }
+
+    @Test
+    public void testDefaultObjectUnionTolerantMode() throws Exception {
+        JSTypeRegistry registry = new JSTypeRegistry(null, true);
+        JSType result = registry.createDefaultObjectUnion(
+                registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        assertTrue(result.isSubtype(registry.getNativeType(JSTypeNative.NULL_TYPE)));
+        assertTrue(result.isSubtype(registry.getNativeType(JSTypeNative.VOID_TYPE)));
+    }
+
+    @Test
+    public void testExplicitOptionalNullableType() throws Exception {
+        JSTypeRegistry registry = new JSTypeRegistry(null);
+        JSType result = registry.createOptionalNullableType(
+                registry.getNativeType(JSTypeNative.STRING_TYPE));
+        assertTrue(result.isSubtype(registry.getNativeType(JSTypeNative.STRING_TYPE)));
+        assertTrue(result.isSubtype(registry.getNativeType(JSTypeNative.NULL_TYPE)));
+        assertTrue(result.isSubtype(registry.getNativeType(JSTypeNative.VOID_TYPE)));
+    }
+
+    @Test
+    public void testCreateUnionCollapsesSingleAlternative() throws Exception {
+        JSTypeRegistry registry = new JSTypeRegistry(null);
+        JSType number = registry.getNativeType(JSTypeNative.NUMBER_TYPE);
+        assertSame(number, registry.createUnionType(number));
+    }
+
+    @Test
+    public void testCreateUnionContainsAlternatives() throws Exception {
+        JSTypeRegistry registry = new JSTypeRegistry(null);
+        JSType number = registry.getNativeType(JSTypeNative.NUMBER_TYPE);
+        JSType string = registry.getNativeType(JSTypeNative.STRING_TYPE);
+        JSType union = registry.createUnionType(number, string);
+        assertTrue(union.isSubtype(number));
+        assertTrue(union.isSubtype(string));
+    }
+
+    @Test
+    public void testCreateObjectTypeAndResetPrototype() throws Exception {
+        JSTypeRegistry registry = new JSTypeRegistry(null);
+        ObjectType base = registry.getNativeObjectType(JSTypeNative.OBJECT_TYPE);
+        ObjectType child = registry.createObjectType(base);
+        assertSame(base, child.getImplicitPrototype());
+        ObjectType replacement = registry.createAnonymousObjectType();
+        assertTrue(registry.resetImplicitPrototype(child, replacement));
+        assertSame(replacement, child.getImplicitPrototype());
+    }
+
+    @Test
+    public void testResetPrototypeRejectsNonPrototypeType() throws Exception {
+        JSTypeRegistry registry = new JSTypeRegistry(null);
+        assertFalse(registry.resetImplicitPrototype(
+                registry.getNativeType(JSTypeNative.NUMBER_TYPE),
+                registry.getNativeObjectType(JSTypeNative.OBJECT_TYPE)));
+    }
+
+    @Test
+    public void testPropertyRegistryRecordsTypesAndCanDefine() throws Exception {
+        JSTypeRegistry registry = new JSTypeRegistry(null);
+        ObjectType object = registry.createAnonymousObjectType();
+        JSType number = registry.getNativeType(JSTypeNative.NUMBER_TYPE);
+        registry.registerPropertyOnType("field", object);
+        assertTrue(registry.canPropertyBeDefined(object, "field"));
+        assertFalse(registry.canPropertyBeDefined(number, "field"));
+        assertTrue(registry.getTypesWithProperty("field").iterator().hasNext());
+        assertTrue(registry.getEachReferenceTypeWithProperty("field").iterator().hasNext());
+    }
+
+    @Test
+    public void testUnregisteredPropertyHasNoPossibleType() throws Exception {
+        JSTypeRegistry registry = new JSTypeRegistry(null);
+        assertFalse(registry.canPropertyBeDefined(
+                registry.getNativeType(JSTypeNative.NUMBER_TYPE), "missing"));
+        assertTrue(registry.getTypesWithProperty("missing").iterator().hasNext() == false);
+        assertTrue(registry.getEachReferenceTypeWithProperty("missing").iterator().hasNext() == false);
+    }
+
+    @Test
+    public void testCreateFunctionTypeArguments() throws Exception {
+        JSTypeRegistry registry = new JSTypeRegistry(null);
+        FunctionType function = registry.createFunctionType(
+                registry.getNativeType(JSTypeNative.STRING_TYPE),
+                registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        assertEquals(1, function.getMinArguments());
+        assertEquals(1, function.getMaxArguments());
+        assertSame(registry.getNativeType(JSTypeNative.STRING_TYPE),
+                function.getReturnType());
+    }
+
+    @Test
+    public void testFunctionTypeWithVarArgs() throws Exception {
+        JSTypeRegistry registry = new JSTypeRegistry(null);
+        FunctionType function = registry.createFunctionTypeWithVarArgs(
+                registry.getNativeType(JSTypeNative.STRING_TYPE),
+                Collections.singletonList(
+                        registry.getNativeType(JSTypeNative.NUMBER_TYPE)));
+        assertEquals(1, function.getMinArguments());
+        assertEquals(Integer.MAX_VALUE, function.getMaxArguments());
+    }
+
+    @Test
+    public void testRecordBuilderEmptyAndNonempty() throws Exception {
+        JSTypeRegistry registry = new JSTypeRegistry(null);
+        RecordTypeBuilder empty = new RecordTypeBuilder(registry);
+        assertSame(registry.getNativeObjectType(JSTypeNative.OBJECT_TYPE), empty.build());
+
+        RecordTypeBuilder builder = new RecordTypeBuilder(registry);
+        assertSame(builder, builder.addProperty("x",
+                registry.getNativeType(JSTypeNative.NUMBER_TYPE), null));
+        JSType record = builder.build();
+        assertTrue(record.isRecordType());
+        assertTrue(record.toObjectType().hasProperty("x"));
+        assertSame(registry.getNativeType(JSTypeNative.NUMBER_TYPE),
+                record.toObjectType().getPropertyType("x"));
+    }
+
+    @Test
+    public void testRecordBuilderRejectsDuplicateField() throws Exception {
+        JSTypeRegistry registry = new JSTypeRegistry(null);
+        RecordTypeBuilder builder = new RecordTypeBuilder(registry);
+        assertSame(builder, builder.addProperty("x",
+                registry.getNativeType(JSTypeNative.NUMBER_TYPE), null));
+        assertNull(builder.addProperty("x",
+                registry.getNativeType(JSTypeNative.STRING_TYPE), null));
+        assertSame(registry.getNativeType(JSTypeNative.NUMBER_TYPE),
+                builder.build().toObjectType().getPropertyType("x"));
+    }
+
+    @Test
+    public void testSetResolveMode() throws Exception {
+        JSTypeRegistry registry = new JSTypeRegistry(null);
+        registry.setResolveMode(JSTypeRegistry.ResolveMode.IMMEDIATE);
+        assertSame(registry.getNativeType(JSTypeNative.NUMBER_TYPE),
+                registry.getType("Number"));
+    }
+
+    @Test
+    public void testResetForTypeCheckClearsUserTypes() throws Exception {
+        JSTypeRegistry registry = new JSTypeRegistry(null);
+        JSType number = registry.getNativeType(JSTypeNative.NUMBER_TYPE);
+        assertTrue(registry.declareType("Local", number));
+        registry.resetForTypeCheck();
+        assertNull(registry.getType("Local"));
+        assertNotNull(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+The target class is not specified, so method selection is exploratory. Tests cover registry naming, native lookups, type unions, property indexing, function creation, record building, and reset behavior.
+
+### 2. TEST CASE DESIGN
+- `testNativeTypeLookup`: native Number and String lookups; verify each native type’s predicate.
+- `testNativeObjectTypeLookup`: native Object lookup; verify it is an object.
+- `testNativeFunctionTypeLookup`: native Array function lookup; verify constructor status.
+- `testUndefinedToleranceSetting`: default and explicit tolerant constructors; verify the setting.
+- `testDeclareTypeAndDuplicate`: declare a name twice; first succeeds, second fails, original mapping remains.
+- `testOverwriteDeclaredType`: declare then overwrite; verify replacement mapping.
+- `testForwardDeclaration`: absent then recorded name; verify membership changes.
+- `testNamespaceFromDeclaredName`: declare dotted name; registration records its prefix namespace.
+- `testGetUnknownName`: unknown name lookup returns null.
+- `testTemplateNameSetAndClear`: unset, set, and clear template name; verify lookup and template predicate.
+- `testOptionalTypeAddsVoid`: optional Number includes Number and Void.
+- `testOptionalUnknownRemainsUnknown`: optional Unknown is returned unchanged.
+- `testNullableTypeContainsNull`: nullable Number includes Number and Null.
+- `testDefaultObjectUnionStrictMode`: strict default union includes Null but not Void.
+- `testDefaultObjectUnionTolerantMode`: tolerant default union includes Null and Void.
+- `testExplicitOptionalNullableType`: String union includes String, Null, and Void.
+- `testCreateUnionCollapsesSingleAlternative`: one-alternative union returns that native type.
+- `testCreateUnionContainsAlternatives`: Number/String union includes both members.
+- `testCreateObjectTypeAndResetPrototype`: create child with base, reset to replacement; verify prototypes.
+- `testResetPrototypeRejectsNonPrototypeType`: native Number is not resettable as a prototype object.
+- `testPropertyRegistryRecordsTypesAndCanDefine`: register property on object; verify possibility and indexed collections.
+- `testUnregisteredPropertyHasNoPossibleType`: unregistered name yields false and empty iterables.
+- `testCreateFunctionTypeArguments`: one required parameter; verify arity and return type.
+- `testFunctionTypeWithVarArgs`: one varargs parameter; verify minimum and unbounded maximum.
+- `testRecordBuilderEmptyAndNonempty`: empty builder yields native Object; populated builder exposes field and type.
+- `testRecordBuilderRejectsDuplicateField`: duplicate addition fails and original field type is retained.
+- `testSetResolveMode`: set mode, then verify built-in Number lookup.
+- `testResetForTypeCheckClearsUserTypes`: registry reset removes user declaration and retains native type.
+
+### 4. DEFECT DETECTION STRATEGY
+Assertions pin observable registration, type composition, function arity, property indexing, record construction, and reset behavior. No defect detection is claimed without execution against both versions.
+
+### 5. SUMMARY
+27 independent test methods.
+
+### 6. LIMITATIONS
+Method selection is exploratory because no target method was supplied; actual outcomes depend on compilation and execution in the experiment environment. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

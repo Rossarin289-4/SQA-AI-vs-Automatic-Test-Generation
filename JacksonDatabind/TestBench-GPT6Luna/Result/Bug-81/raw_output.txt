@@ -1,0 +1,279 @@
+```java
+package com.fasterxml.jackson.databind.introspect;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.lang.annotation.Annotation;
+import java.lang.reflect.Field;
+import java.util.*;
+import com.fasterxml.jackson.annotation.*;
+import com.fasterxml.jackson.core.Version;
+import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.annotation.*;
+import com.fasterxml.jackson.databind.cfg.HandlerInstantiator;
+import com.fasterxml.jackson.databind.cfg.MapperConfig;
+import com.fasterxml.jackson.databind.ext.Java7Support;
+import com.fasterxml.jackson.databind.jsontype.NamedType;
+import com.fasterxml.jackson.databind.jsontype.TypeIdResolver;
+import com.fasterxml.jackson.databind.jsontype.TypeResolverBuilder;
+import com.fasterxml.jackson.databind.jsontype.impl.StdTypeResolverBuilder;
+import com.fasterxml.jackson.databind.ser.BeanPropertyWriter;
+import com.fasterxml.jackson.databind.ser.VirtualBeanPropertyWriter;
+import com.fasterxml.jackson.databind.ser.impl.AttributePropertyWriter;
+import com.fasterxml.jackson.databind.ser.std.RawSerializer;
+import com.fasterxml.jackson.databind.type.MapLikeType;
+import com.fasterxml.jackson.databind.type.TypeFactory;
+import com.fasterxml.jackson.databind.util.*;
+
+public class JacksonAnnotationIntrospectorTest {
+    enum EnumCases {
+        @JsonProperty("renamed") FIRST,
+        @JsonProperty("") EMPTY,
+        THIRD
+    }
+
+    @JsonRootName(value = "root", namespace = "urn:test")
+    static class RootAnnotated { }
+
+    @JsonFilter("filter-id")
+    static class FilterAnnotated { }
+
+    @JsonClassDescription("class description")
+    static class Described { }
+
+    static class Plain { }
+
+    static class Members {
+        @JsonProperty(value = "required-name", required = true, index = 0, defaultValue = "fallback")
+        public String required;
+
+        @JsonProperty(index = 1)
+        public String indexed;
+
+        @JsonAlias({"old", "older"})
+        public String aliased;
+
+        @JsonIgnore
+        public String ignored;
+
+        @JsonPropertyDescription("member description")
+        public String described;
+
+        @JsonProperty(access = JsonProperty.Access.READ_ONLY)
+        public String readOnly;
+
+        @JsonFormat(shape = JsonFormat.Shape.STRING)
+        public String formatted;
+
+        @JsonView({String.class})
+        public String viewed;
+
+        @JsonTypeId
+        public String typeId;
+
+        @JsonUnwrapped(prefix = "pre", suffix = "post")
+        public String unwrapped;
+
+        @JsonValue
+        public String asValue() { return ""; }
+
+        @JsonAnyGetter
+        public Map<String, Object> anyGetter() { return Collections.emptyMap(); }
+
+        @JsonGetter("getter-name")
+        public String getter() { return ""; }
+
+        @JsonSetter("setter-name")
+        public void setter(String value) { }
+    }
+
+    @Test
+    public void testEnumExplicitNameAndFallback() throws Exception {
+        JacksonAnnotationIntrospector ai = new JacksonAnnotationIntrospector();
+        assertEquals("renamed", ai.findEnumValue(EnumCases.FIRST));
+        assertEquals("EMPTY", ai.findEnumValue(EnumCases.EMPTY));
+        assertEquals("THIRD", ai.findEnumValue(EnumCases.THIRD));
+    }
+
+    @Test
+    public void testEnumValuesUpdatesOnlyNonEmptyExplicitName() throws Exception {
+        JacksonAnnotationIntrospector ai = new JacksonAnnotationIntrospector();
+        String[] names = {"a", "b", "c"};
+        String[] result = ai.findEnumValues(EnumCases.class, EnumCases.values(), names);
+        assertSame(names, result);
+        assertArrayEquals(new String[]{"renamed", "b", "c"}, result);
+    }
+
+    @Test
+    public void testRootNameAndNamespace() throws Exception {
+        JacksonAnnotationIntrospector ai = new JacksonAnnotationIntrospector();
+        AnnotatedClass ac = AnnotatedClass.constructWithoutSuperTypes(RootAnnotated.class,
+                new ObjectMapper().getSerializationConfig());
+        PropertyName name = ai.findRootName(ac);
+        assertEquals("root", name.getSimpleName());
+        assertEquals("urn:test", name.getNamespace());
+    }
+
+    @Test
+    public void testUnannotatedRootNameIsNull() throws Exception {
+        JacksonAnnotationIntrospector ai = new JacksonAnnotationIntrospector();
+        AnnotatedClass ac = AnnotatedClass.constructWithoutSuperTypes(Plain.class,
+                new ObjectMapper().getSerializationConfig());
+        assertNull(ai.findRootName(ac));
+    }
+
+    @Test
+    public void testFilterId() throws Exception {
+        JacksonAnnotationIntrospector ai = new JacksonAnnotationIntrospector();
+        AnnotatedClass ac = AnnotatedClass.constructWithoutSuperTypes(FilterAnnotated.class,
+                new ObjectMapper().getSerializationConfig());
+        assertEquals("filter-id", ai.findFilterId(ac));
+    }
+
+    @Test
+    public void testClassDescription() throws Exception {
+        JacksonAnnotationIntrospector ai = new JacksonAnnotationIntrospector();
+        AnnotatedClass ac = AnnotatedClass.constructWithoutSuperTypes(Described.class,
+                new ObjectMapper().getSerializationConfig());
+        assertEquals("class description", ai.findClassDescription(ac));
+    }
+
+    @Test
+    public void testPropertyNameIndexDefaultAndRequired() throws Exception {
+        JacksonAnnotationIntrospector ai = new JacksonAnnotationIntrospector();
+        AnnotatedClass ac = AnnotatedClass.constructWithoutSuperTypes(Members.class,
+                new ObjectMapper().getSerializationConfig());
+        AnnotatedField field = findField(ac, "required");
+        assertEquals("required-name", ai.findNameForSerialization(field).getSimpleName());
+        assertEquals(Integer.valueOf(0), ai.findPropertyIndex(field));
+        assertEquals("fallback", ai.findPropertyDefaultValue(field));
+        assertEquals(Boolean.TRUE, ai.hasRequiredMarker(field));
+    }
+
+    @Test
+    public void testUnknownPropertyIndexAndEmptyDefaultAreNull() throws Exception {
+        JacksonAnnotationIntrospector ai = new JacksonAnnotationIntrospector();
+        AnnotatedClass ac = AnnotatedClass.constructWithoutSuperTypes(Members.class,
+                new ObjectMapper().getSerializationConfig());
+        AnnotatedField field = findField(ac, "indexed");
+        assertEquals(Integer.valueOf(1), ai.findPropertyIndex(field));
+        assertNull(ai.findPropertyDefaultValue(field));
+        assertNull(ai.hasRequiredMarker(field));
+    }
+
+    @Test
+    public void testAliasesAndIgnoreMarker() throws Exception {
+        JacksonAnnotationIntrospector ai = new JacksonAnnotationIntrospector();
+        AnnotatedClass ac = AnnotatedClass.constructWithoutSuperTypes(Members.class,
+                new ObjectMapper().getSerializationConfig());
+        List<PropertyName> aliases = ai.findPropertyAliases(findField(ac, "aliased"));
+        assertEquals(2, aliases.size());
+        assertEquals("old", aliases.get(0).getSimpleName());
+        assertEquals("older", aliases.get(1).getSimpleName());
+        assertTrue(ai.hasIgnoreMarker(findField(ac, "ignored")));
+    }
+
+    @Test
+    public void testDescriptionAccessFormatAndViews() throws Exception {
+        JacksonAnnotationIntrospector ai = new JacksonAnnotationIntrospector();
+        AnnotatedClass ac = AnnotatedClass.constructWithoutSuperTypes(Members.class,
+                new ObjectMapper().getSerializationConfig());
+        assertEquals("member description", ai.findPropertyDescription(findField(ac, "described")));
+        assertEquals(JsonProperty.Access.READ_ONLY, ai.findPropertyAccess(findField(ac, "readOnly")));
+        assertEquals(JsonFormat.Shape.STRING, ai.findFormat(findField(ac, "formatted")).getShape());
+        assertArrayEquals(new Class<?>[]{String.class}, ai.findViews(findField(ac, "viewed")));
+    }
+
+    @Test
+    public void testNameForSerializationAndDeserializationPrecedence() throws Exception {
+        JacksonAnnotationIntrospector ai = new JacksonAnnotationIntrospector();
+        AnnotatedClass ac = AnnotatedClass.constructWithoutSuperTypes(Members.class,
+                new ObjectMapper().getSerializationConfig());
+        AnnotatedMethod getter = ac.findMethod("getter", new Class<?>[0]);
+        AnnotatedMethod setter = ac.findMethod("setter", new Class<?>[]{String.class});
+        assertEquals("getter-name", ai.findNameForSerialization(getter).getSimpleName());
+        assertEquals("setter-name", ai.findNameForDeserialization(setter).getSimpleName());
+    }
+
+    @Test
+    public void testAsValueAndAnyGetterMarkers() throws Exception {
+        JacksonAnnotationIntrospector ai = new JacksonAnnotationIntrospector();
+        AnnotatedClass ac = AnnotatedClass.constructWithoutSuperTypes(Members.class,
+                new ObjectMapper().getSerializationConfig());
+        AnnotatedMethod value = ac.findMethod("asValue", new Class<?>[0]);
+        AnnotatedMethod any = ac.findMethod("anyGetter", new Class<?>[0]);
+        assertEquals(Boolean.TRUE, ai.hasAsValue(value));
+        assertEquals(Boolean.TRUE, ai.hasAnyGetter(any));
+        assertTrue(ai.hasAsValueAnnotation(value));
+        assertTrue(ai.hasAnyGetterAnnotation(any));
+    }
+
+    @Test
+    public void testTypeIdAndUnwrappingTransformer() throws Exception {
+        JacksonAnnotationIntrospector ai = new JacksonAnnotationIntrospector();
+        AnnotatedClass ac = AnnotatedClass.constructWithoutSuperTypes(Members.class,
+                new ObjectMapper().getSerializationConfig());
+        AnnotatedField typeId = findField(ac, "typeId");
+        assertEquals(Boolean.TRUE, ai.isTypeId(typeId));
+        NameTransformer transformer = ai.findUnwrappingNameTransformer(findField(ac, "unwrapped"));
+        assertEquals("prevaluepost", transformer.transform("value"));
+        assertEquals("value", transformer.reverse("prevaluepost"));
+    }
+
+    @Test
+    public void testIncludeAndSerializationTypingDefaults() throws Exception {
+        JacksonAnnotationIntrospector ai = new JacksonAnnotationIntrospector();
+        AnnotatedClass ac = AnnotatedClass.constructWithoutSuperTypes(Members.class,
+                new ObjectMapper().getSerializationConfig());
+        AnnotatedField plain = findField(ac, "aliased");
+        assertEquals(JsonInclude.Include.USE_DEFAULTS,
+                ai.findPropertyInclusion(plain).getValueInclusion());
+        assertNull(ai.findSerializationTyping(plain));
+        assertNull(ai.findSerializer(plain));
+    }
+
+    @Test
+    public void testSetConstructorPropertiesFlagIsFluent() throws Exception {
+        JacksonAnnotationIntrospector ai = new JacksonAnnotationIntrospector();
+        assertSame(ai, ai.setConstructorPropertiesImpliesCreator(false));
+    }
+
+    private static AnnotatedField findField(AnnotatedClass ac, String name) {
+        for (AnnotatedField field : ac.fields()) {
+            if (name.equals(field.getName())) {
+                return field;
+            }
+        }
+        throw new AssertionError("missing field: " + name);
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+Method selection is exploratory because no target method is specified. Tests focus on enum name mapping, class/property annotation lookup, naming, metadata, and member marker branches.
+
+### 2. TEST CASE DESIGN
+- `testEnumExplicitNameAndFallback`: annotated names and an empty/unannotated annotation value; expects explicit nonempty name or enum constant name.
+- `testEnumValuesUpdatesOnlyNonEmptyExplicitName`: three initial names; only the nonempty explicit enum annotation replaces an entry.
+- `testRootNameAndNamespace`: annotated class; reads its explicit root name and namespace.
+- `testUnannotatedRootNameIsNull`: plain class; source returns null without `JsonRootName`.
+- `testFilterId`: nonempty filter ID; source returns the annotation value.
+- `testClassDescription`: annotated class; source returns its description value.
+- `testPropertyNameIndexDefaultAndRequired`: required property with index zero and default; values come directly from `JsonProperty`.
+- `testUnknownPropertyIndexAndEmptyDefaultAreNull`: index one is retained; omitted default and required marker produce null.
+- `testAliasesAndIgnoreMarker`: two aliases are constructed in order; `JsonIgnore` true marks the field ignored.
+- `testDescriptionAccessFormatAndViews`: checks description, access mode, format shape, and the declared view class.
+- `testNameForSerializationAndDeserializationPrecedence`: getter and setter annotations each supply their configured name.
+- `testAsValueAndAnyGetterMarkers`: enabled annotations yield true through modern and deprecated marker methods.
+- `testTypeIdAndUnwrappingTransformer`: `JsonTypeId` yields true; configured prefix/suffix transform and reverse the sample name.
+- `testIncludeAndSerializationTypingDefaults`: absent inclusion uses `USE_DEFAULTS`; absent `JsonSerialize` yields null typing and serializer.
+- `testSetConstructorPropertiesFlagIsFluent`: setter returns the same introspector instance. 
+
+### 4. DEFECT DETECTION STRATEGY
+The tests pin observable annotation interpretation and boundary distinctions such as empty versus nonempty annotation values, index zero versus unknown index, and absent annotations versus configured markers.
+
+### 5. SUMMARY
+15 independent test methods.
+
+### 6. LIMITATIONS
+The broad public API is not exhaustively covered; reflection-based annotation and type-resolution paths are left out. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

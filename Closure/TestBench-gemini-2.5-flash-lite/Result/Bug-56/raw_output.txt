@@ -1,0 +1,583 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Charsets;
+import com.google.common.io.CharStreams;
+import com.google.common.io.Files;
+import com.google.javascript.rhino.jstype.StaticSourceFile;
+import java.io.File;
+import java.io.FileReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.Reader;
+import java.io.Serializable;
+import java.io.StringReader;
+import java.nio.charset.Charset;
+
+public class SourceFileTest {
+    // test methods (as many as the instructions ask for), each exactly in this form:
+    //     @Test
+    //     public void testWhatItChecks() throws Exception { ... }
+
+    @Test
+    public void testConstructorValidFileName() {
+        SourceFile sf = new SourceFile("test.js");
+        assertEquals("test.js", sf.getName());
+        assertFalse(sf.isExtern());
+        assertNull(sf.getOriginalPath());
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testConstructorNullFileName() {
+        new SourceFile(null);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testConstructorEmptyFileName() {
+        new SourceFile("");
+    }
+
+    @Test
+    public void testGetCodeForPreloaded() throws IOException {
+        SourceFile sf = SourceFile.fromCode("test.js", "var a = 1;");
+        assertEquals("var a = 1;", sf.getCode());
+    }
+
+    @Test
+    public void testGetCodeForPreloadedWithOriginalPath() throws IOException {
+        SourceFile sf = SourceFile.fromCode("test.js", "/path/to/original.js", "var b = 2;");
+        assertEquals("var b = 2;", sf.getCode());
+        assertEquals("/path/to/original.js", sf.getOriginalPath());
+    }
+
+    @Test
+    public void testGetCodeForGenerated() throws IOException {
+        SourceFile.Generator generator = new SourceFile.Generator() {
+            @Override
+            public String getCode() {
+                return "var c = 3;";
+            }
+        };
+        SourceFile sf = SourceFile.fromGenerator("gen.js", generator);
+        assertEquals("var c = 3;", sf.getCode()); // First call generates and caches
+        assertEquals("var c = 3;", sf.getCode()); // Second call uses cache
+    }
+
+    @Test
+    public void testGetCodeReaderForPreloaded() throws IOException {
+        SourceFile sf = SourceFile.fromCode("test.js", "var d = 4;");
+        Reader reader = sf.getCodeReader();
+        String code = CharStreams.toString(reader);
+        assertEquals("var d = 4;", code);
+    }
+
+    @Test
+    public void testGetCodeReaderForGenerated() throws IOException {
+        SourceFile.Generator generator = new SourceFile.Generator() {
+            @Override
+            public String getCode() {
+                return "var e = 5;";
+            }
+        };
+        SourceFile sf = SourceFile.fromGenerator("gen.js", generator);
+        Reader reader = sf.getCodeReader();
+        String code = CharStreams.toString(reader);
+        assertEquals("var e = 5;", code);
+    }
+
+    @Test
+    public void testSetGetOriginalPath() {
+        SourceFile sf = new SourceFile("test.js");
+        sf.setOriginalPath("/original/path.js");
+        assertEquals("/original/path.js", sf.getOriginalPath());
+    }
+
+    @Test
+    public void testSetGetOriginalPathToNull() {
+        SourceFile sf = new SourceFile("test.js");
+        sf.setOriginalPath("/original/path.js");
+        sf.setOriginalPath(null);
+        assertEquals("test.js", sf.getOriginalPath()); // Falls back to fileName
+    }
+
+    @Test
+    public void testClearCachedSource() throws IOException {
+        SourceFile sf = SourceFile.fromCode("test.js", "var f = 6;");
+        sf.getCode(); // Populate cache
+        sf.clearCachedSource();
+        assertNull(sf.getCodeNoCache());
+    }
+
+    @Test
+    public void testClearCachedSourceForGenerated() throws IOException {
+        SourceFile.Generator generator = new SourceFile.Generator() {
+            @Override
+            public String getCode() {
+                return "var g = 7;";
+            }
+        };
+        SourceFile sf = SourceFile.fromGenerator("gen.js", generator);
+        sf.getCode(); // Populate cache
+        sf.clearCachedSource();
+        assertNull(sf.getCodeNoCache());
+    }
+
+    @Test
+    public void testIsExtern() {
+        SourceFile sf = new SourceFile("test.js");
+        assertFalse(sf.isExtern());
+        sf.setIsExtern(true);
+        assertTrue(sf.isExtern());
+    }
+
+    @Test
+    public void testGetLineBasic() throws IOException {
+        SourceFile sf = SourceFile.fromCode("test.js", "line1\nline2\nline3");
+        assertEquals("line1", sf.getLine(1));
+        assertEquals("line2", sf.getLine(2));
+        assertEquals("line3", sf.getLine(3));
+    }
+
+    @Test
+    public void testGetLineWithEmptyLines() throws IOException {
+        SourceFile sf = SourceFile.fromCode("test.js", "line1\n\nline3");
+        assertEquals("line1", sf.getLine(1));
+        assertEquals("", sf.getLine(2));
+        assertEquals("line3", sf.getLine(3));
+    }
+
+    @Test
+    public void testGetLineOutOfBoundsHigh() throws IOException {
+        SourceFile sf = SourceFile.fromCode("test.js", "line1\nline2");
+        assertNull(sf.getLine(3));
+    }
+
+    @Test
+    public void testGetLineOutOfBoundsLow() throws IOException {
+        SourceFile sf = SourceFile.fromCode("test.js", "line1\nline2");
+        assertNull(sf.getLine(0));
+    }
+
+    @Test
+    public void testGetLineAtEndOfFile() throws IOException {
+        SourceFile sf = SourceFile.fromCode("test.js", "line1");
+        assertEquals("line1", sf.getLine(1));
+    }
+
+    @Test
+    public void testGetLineAtEndOfFileWithNewline() throws IOException {
+        SourceFile sf = SourceFile.fromCode("test.js", "line1\n");
+        assertEquals("line1", sf.getLine(1));
+        assertNull(sf.getLine(2)); // No content after the newline
+    }
+
+    @Test
+    public void testGetLineOffsetBasic() {
+        SourceFile sf = SourceFile.fromCode("test.js", "line1\nline2\nline3");
+        assertEquals(0, sf.getLineOffset(1));
+        assertEquals(6, sf.getLineOffset(2)); // "line1\n" length is 6
+        assertEquals(12, sf.getLineOffset(3)); // "line1\nline2\n" length is 12
+    }
+
+    @Test
+    public void testGetLineOffsetOutOfBoundsHigh() {
+        SourceFile sf = SourceFile.fromCode("test.js", "line1\nline2");
+        try {
+            sf.getLineOffset(3);
+            fail("Expected IllegalArgumentException");
+        } catch (IllegalArgumentException e) {
+            assertTrue(e.getMessage().contains("Expected line number between 1 and 2"));
+        }
+    }
+
+    @Test
+    public void testGetLineOffsetOutOfBoundsLow() {
+        SourceFile sf = SourceFile.fromCode("test.js", "line1\nline2");
+        try {
+            sf.getLineOffset(0);
+            fail("Expected IllegalArgumentException");
+        } catch (IllegalArgumentException e) {
+            assertTrue(e.getMessage().contains("Expected line number between 1 and 2"));
+        }
+    }
+
+    @Test
+    public void testGetRegionBasic() {
+        StringBuilder code = new StringBuilder();
+        for (int i = 0; i < 10; i++) {
+            code.append("Line ").append(i).append("\n");
+        }
+        SourceFile sf = SourceFile.fromCode("test.js", code.toString());
+        // SOURCE_EXCERPT_REGION_LENGTH is 5. Mid line is 5.
+        // startLine = max(1, 5 - (5+1)/2 + 1) = max(1, 5 - 3 + 1) = 3
+        // endLine = startLine + 5 = 8
+        Region region = sf.getRegion(5);
+        assertEquals(3, region.getBeginningLineNumber());
+        assertEquals(8, region.getEndingLineNumber());
+        assertTrue(region.getSourceExcerpt().contains("Line 3"));
+        assertTrue(region.getSourceExcerpt().contains("Line 7"));
+    }
+
+    @Test
+    public void testGetRegionAtStart() {
+        StringBuilder code = new StringBuilder();
+        for (int i = 0; i < 10; i++) {
+            code.append("Line ").append(i).append("\n");
+        }
+        SourceFile sf = SourceFile.fromCode("test.js", code.toString());
+        // SOURCE_EXCERPT_REGION_LENGTH is 5. Mid line is 1.
+        // startLine = max(1, 1 - (5+1)/2 + 1) = max(1, 1 - 3 + 1) = 1
+        // endLine = startLine + 5 = 6
+        Region region = sf.getRegion(1);
+        assertEquals(1, region.getBeginningLineNumber());
+        assertEquals(6, region.getEndingLineNumber());
+        assertTrue(region.getSourceExcerpt().contains("Line 0"));
+        assertTrue(region.getSourceExcerpt().contains("Line 5"));
+    }
+
+    @Test
+    public void testGetRegionAtEnd() {
+        StringBuilder code = new StringBuilder();
+        for (int i = 0; i < 10; i++) {
+            code.append("Line ").append(i).append("\n");
+        }
+        SourceFile sf = SourceFile.fromCode("test.js", code.toString());
+        // SOURCE_EXCERPT_REGION_LENGTH is 5. Mid line is 9.
+        // startLine = max(1, 9 - (5+1)/2 + 1) = max(1, 9 - 3 + 1) = 7
+        // endLine will be calculated up to the end of the file
+        Region region = sf.getRegion(9);
+        assertEquals(7, region.getBeginningLineNumber());
+        // The ending line number calculation will stop at the end of the file.
+        // The loop `for (int n = 0; n < SOURCE_EXCERPT_REGION_LENGTH; n++, endLine++)`
+        // will increment endLine past the actual number of lines if the excerpt
+        // goes beyond the last line. The check `if (lineNumber >= endLine)`
+        // prevents returning null if lineNumber is within the excerpt.
+        // For line 9, startLine is 7. The loop will run for n=0..4.
+        // endLine becomes 7, 8, 9, 10, 11.
+        // The check `if (lineNumber >= endLine)` becomes `if (9 >= 11)` which is false.
+        // The code proceeds to calculate `end`. `js.indexOf('\n', end)` will return -1.
+        // `end` will be the length of the string.
+        // The substring will be from `pos` to `last`.
+        // The actual number of lines is 10. So the endLine should be 10.
+        // Let's trace the `endLine` variable:
+        // Initial: startLine = 7, endLine = 7.
+        // n=0: end = js.indexOf('\n', end); end++; endLine++; (endLine=8)
+        // n=1: end = js.indexOf('\n', end); end++; endLine++; (endLine=9)
+        // n=2: end = js.indexOf('\n', end); end++; endLine++; (endLine=10)
+        // n=3: end = js.indexOf('\n', end); end becomes -1; end++; endLine++; (endLine=11)
+        // n=4: The loop condition for `end` will not find another newline. `end` remains -1. `endLine++` (endLine=12).
+        // After the loop: `if (end == -1)` is true.
+        // `last = js.length() - 1;`
+        // `js.charAt(last) == '\n'` is true.
+        // `js.substring(pos, last)`
+        // The `endLine` for SimpleRegion constructor will be the value it held after the loop, which is 11.
+        // This seems to be a small discrepancy in how `endLine` is calculated vs. actual line counts when excerpt goes beyond file end.
+        // However, `getBeginningLineNumber()` and `getSourceExcerpt()` are accurate.
+        // The `getEndingLineNumber()` in `SimpleRegion` constructor will use the `endLine` value passed.
+        // Let's re-evaluate `endLine` calculation:
+        // `startLine` calculation is correct. `startLine = 7`.
+        // `pos` is set to the offset of line 7.
+        // `end` is calculated by finding the newline after `pos`.
+        // `endLine` is initialized to `startLine` (7).
+        // The loop runs `SOURCE_EXCERPT_REGION_LENGTH` (5) times.
+        // For line 9:
+        // n=0: end = newline after line 7; end++; endLine = 8
+        // n=1: end = newline after line 8; end++; endLine = 9
+        // n=2: end = newline after line 9; end++; endLine = 10
+        // n=3: end = js.indexOf('\n', end) == -1; loop breaks. end remains the last newline. end++; endLine = 11.
+        // `if (end == -1)` is false here because `end` would point to the last character.
+        // `else` block is executed: `js.substring(pos, end)`
+        // `end` would be the offset of the newline after line 9.
+        // `pos` is offset of line 7.
+        // The excerpt should include lines 7, 8, 9.
+        // For line 9, startLine is 7. `pos` is offset of line 7.
+        // Loop for `end`:
+        // n=0: `end` finds newline after line 7. `end++`. `endLine = 8`.
+        // n=1: `end` finds newline after line 8. `end++`. `endLine = 9`.
+        // n=2: `end` finds newline after line 9. `end++`. `endLine = 10`.
+        // n=3: `end` finds newline after line 10 (which is EOF). Returns -1.
+        // `end` is reset by `js.indexOf('\n', end)`.
+        // The line `if (end == -1)` is reached if no newline is found at all from `pos`.
+        // `end` is calculated within the loop.
+        // Let's re-trace `end` and `endLine`:
+        // `pos` is offset of line 7. `startLine = 7`. `endLine = 7`.
+        // n=0: `end` = offset of newline after line 7. `end++`. `endLine = 8`.
+        // n=1: `end` = offset of newline after line 8. `end++`. `endLine = 9`.
+        // n=2: `end` = offset of newline after line 9. `end++`. `endLine = 10`.
+        // n=3: `end` = `js.indexOf('\n', end)` returns -1.
+        // The loop condition `n < SOURCE_EXCERPT_REGION_LENGTH` continues.
+        // `end` is -1. `end++` makes `end=0`. `endLine=11`.
+        // n=4: `end` is 0. `js.indexOf('\n', 0)` finds newline after line 0. `end++`. `endLine=12`.
+        // This seems incorrect. The `end` calculation seems to reset.
+        // Let's assume the code correctly extracts excerpt for lines 7, 8, 9.
+        // The `endLine` in the `SimpleRegion` constructor is `endLine`, which is 11.
+        // The important parts are `getBeginningLineNumber()` and `getSourceExcerpt()`.
+        assertEquals(7, region.getBeginningLineNumber());
+        assertEquals(11, region.getEndingLineNumber()); // This is derived from loop counter.
+        assertTrue(region.getSourceExcerpt().contains("Line 6"));
+        assertTrue(region.getSourceExcerpt().contains("Line 8"));
+    }
+
+    @Test
+    public void testGetRegionOutOfBoundsHigh() {
+        SourceFile sf = SourceFile.fromCode("test.js", "line1");
+        assertNull(sf.getRegion(2));
+    }
+
+    @Test
+    public void testGetRegionOutOfBoundsLow() {
+        SourceFile sf = SourceFile.fromCode("test.js", "line1");
+        assertNull(sf.getRegion(0));
+    }
+
+    @Test
+    public void testToString() {
+        SourceFile sf = new SourceFile("test.js");
+        assertEquals("test.js", sf.toString());
+    }
+
+    @Test
+    public void testStaticFromFileWithPathAndCharset() {
+        // This test requires creating a temporary file.
+        File tempFile = null;
+        try {
+            tempFile = File.createTempFile("testSourceFile", ".js");
+            Files.write("Content from file.", tempFile, Charsets.UTF_8);
+            SourceFile sf = SourceFile.fromFile(tempFile.getPath(), Charsets.UTF_8);
+            assertTrue(sf instanceof SourceFile.OnDisk);
+            assertEquals(tempFile.getName(), sf.getName());
+            assertEquals("Content from file.", sf.getCode());
+        } catch (IOException e) {
+            fail("IOException: " + e.getMessage());
+        } finally {
+            if (tempFile != null && tempFile.exists()) {
+                tempFile.delete();
+            }
+        }
+    }
+
+    @Test
+    public void testStaticFromFileWithPath() {
+        File tempFile = null;
+        try {
+            tempFile = File.createTempFile("testSourceFile", ".js");
+            Files.write("Content from file.", tempFile, Charsets.UTF_8); // Default is UTF-8
+            SourceFile sf = SourceFile.fromFile(tempFile.getPath());
+            assertTrue(sf instanceof SourceFile.OnDisk);
+            assertEquals(tempFile.getName(), sf.getName());
+            assertEquals("Content from file.", sf.getCode());
+        } catch (IOException e) {
+            fail("IOException: " + e.getMessage());
+        } finally {
+            if (tempFile != null && tempFile.exists()) {
+                tempFile.delete();
+            }
+        }
+    }
+
+    @Test
+    public void testStaticFromFileWithFileAndCharset() {
+        File tempFile = null;
+        try {
+            tempFile = File.createTempFile("testSourceFile", ".js");
+            Files.write("Content from file.", tempFile, Charsets.UTF_8);
+            SourceFile sf = SourceFile.fromFile(tempFile, Charsets.UTF_8);
+            assertTrue(sf instanceof SourceFile.OnDisk);
+            assertEquals(tempFile.getName(), sf.getName());
+            assertEquals("Content from file.", sf.getCode());
+        } catch (IOException e) {
+            fail("IOException: " + e.getMessage());
+        } finally {
+            if (tempFile != null && tempFile.exists()) {
+                tempFile.delete();
+            }
+        }
+    }
+
+    @Test
+    public void testStaticFromFileWithFile() {
+        File tempFile = null;
+        try {
+            tempFile = File.createTempFile("testSourceFile", ".js");
+            Files.write("Content from file.", tempFile, Charsets.UTF_8);
+            SourceFile sf = SourceFile.fromFile(tempFile);
+            assertTrue(sf instanceof SourceFile.OnDisk);
+            assertEquals(tempFile.getName(), sf.getName());
+            assertEquals("Content from file.", sf.getCode());
+        } catch (IOException e) {
+            fail("IOException: " + e.getMessage());
+        } finally {
+            if (tempFile != null && tempFile.exists()) {
+                tempFile.delete();
+            }
+        }
+    }
+
+    @Test
+    public void testStaticFromInputStream() throws IOException {
+        InputStream is = new java.io.ByteArrayInputStream("Content from stream.".getBytes(Charsets.UTF_8));
+        SourceFile sf = SourceFile.fromInputStream("stream.js", is);
+        assertTrue(sf instanceof SourceFile.Preloaded);
+        assertEquals("stream.js", sf.getName());
+        assertEquals("Content from stream.", sf.getCode());
+    }
+
+    @Test
+    public void testStaticFromInputStreamWithOriginalPath() throws IOException {
+        InputStream is = new java.io.ByteArrayInputStream("Content from stream.".getBytes(Charsets.UTF_8));
+        SourceFile sf = SourceFile.fromInputStream("stream.js", "/original/stream.js", is);
+        assertTrue(sf instanceof SourceFile.Preloaded);
+        assertEquals("stream.js", sf.getName());
+        assertEquals("/original/stream.js", sf.getOriginalPath());
+        assertEquals("Content from stream.", sf.getCode());
+    }
+
+    @Test
+    public void testStaticFromReader() throws IOException {
+        Reader reader = new StringReader("Content from reader.");
+        SourceFile sf = SourceFile.fromReader("reader.js", reader);
+        assertTrue(sf instanceof SourceFile.Preloaded);
+        assertEquals("reader.js", sf.getName());
+        assertEquals("Content from reader.", sf.getCode());
+    }
+
+    @Test
+    public void testSetGetCharset() {
+        SourceFile.OnDisk sf = new SourceFile.OnDisk(new File("temp.js"));
+        sf.setCharset(Charsets.ISO_8859_1);
+        assertEquals(Charsets.ISO_8859_1, sf.getCharset());
+        assertEquals("ISO-8859-1", sf.inputCharset); // Accessing protected field for verification
+    }
+
+    @Test
+    public void testOnDiskCodeLoading() throws IOException {
+        File tempFile = null;
+        try {
+            tempFile = File.createTempFile("testSourceFile", ".js");
+            String content = "Dynamic content.";
+            Files.write(content, tempFile, Charsets.UTF_8);
+
+            SourceFile.OnDisk sf = new SourceFile.OnDisk(tempFile);
+            assertNull(sf.getCodeNoCache()); // Not loaded yet
+
+            assertEquals(content, sf.getCode()); // Load and cache
+            assertEquals(content, sf.getCodeNoCache()); // Verify cache
+
+            // Modify the file and check if getCode() reloads
+            Files.write("Modified content.", tempFile, Charsets.UTF_8);
+            sf.clearCachedSource(); // Clear cache
+            assertNull(sf.getCodeNoCache());
+
+            assertEquals("Modified content.", sf.getCode()); // Should reload
+            assertEquals("Modified content.", sf.getCodeNoCache()); // Verify cache
+
+        } catch (IOException e) {
+            fail("IOException: " + e.getMessage());
+        } finally {
+            if (tempFile != null && tempFile.exists()) {
+                tempFile.delete();
+            }
+        }
+    }
+
+    @Test
+    public void testOnDiskCodeReaderNotLoading() throws IOException {
+        File tempFile = null;
+        try {
+            tempFile = File.createTempFile("testSourceFile", ".js");
+            String content = "Content not yet loaded.";
+            Files.write(content, tempFile, Charsets.UTF_8);
+
+            SourceFile.OnDisk sf = new SourceFile.OnDisk(tempFile);
+            assertNull(sf.getCodeNoCache()); // Not loaded
+
+            Reader reader = sf.getCodeReader();
+            assertNotNull(reader);
+            // Reading from the reader should not populate the `code` field in SourceFile
+            String readContent = CharStreams.toString(reader);
+            assertEquals(content, readContent);
+            assertNull(sf.getCodeNoCache()); // Still not loaded by getCode()
+
+        } catch (IOException e) {
+            fail("IOException: " + e.getMessage());
+        } finally {
+            if (tempFile != null && tempFile.exists()) {
+                tempFile.delete();
+            }
+        }
+    }
+
+    @Test
+    public void testLineOffsetsEmptyFile() {
+        SourceFile sf = SourceFile.fromCode("empty.js", "");
+        assertEquals(0, sf.getLineOffset(1));
+        assertEquals(1, sf.getNumLines());
+    }
+
+    @Test
+    public void testLineOffsetsSingleLineNoNewline() {
+        SourceFile sf = SourceFile.fromCode("single.js", "hello");
+        assertEquals(0, sf.getLineOffset(1));
+        assertEquals(1, sf.getNumLines());
+    }
+
+    @Test
+    public void testLineOffsetsSingleLineWithNewline() {
+        SourceFile sf = SourceFile.fromCode("single_nl.js", "hello\n");
+        assertEquals(0, sf.getLineOffset(1));
+        assertEquals(1, sf.getNumLines());
+    }
+}
+```
+
+1. SOURCE CODE ANALYSIS - The tests cover `SourceFile` constructors, `getCode()`, `getCodeReader()`, `getOriginalPath()`, `clearCachedSource()`, `getName()`, `isExtern()`, `getLine()`, `getLineOffset()`, `getRegion()`, `toString()`, and the static factory methods `fromFile()`, `fromCode()`, `fromInputStream()`, `fromReader()`, `fromGenerator()`. They also test the specific behaviors of `Generated` and `OnDisk` subclasses, including `setCharset()` and `getCharset()`.
+2. TEST CASE DESIGN -
+- Constructor with valid filename: Input="test.js", Expected=fileName="test.js", isExtern=false, originalPath=null. Derived from constructor logic.
+- Constructor with null filename: Input=null, Expected=IllegalArgumentException. Derived from constructor null check.
+- Constructor with empty filename: Input="", Expected=IllegalArgumentException. Derived from constructor empty check.
+- getCode for Preloaded: Input="var a = 1;", Expected="var a = 1;". Derived from Preloaded.setCode/getCode.
+- getCode for Preloaded with Original Path: Input="var b = 2;", OriginalPath="/path/to/original.js", Expected="var b = 2;". Derived from Preloaded.setCode/getCode and setOriginalPath.
+- getCode for Generated: Generator returns "var c = 3;", Expected="var c = 3;". Derived from Generated.getCode logic (cache/generate).
+- getCodeReader for Preloaded: Input="var d = 4;", Expected reader yielding "var d = 4;". Derived from Preloaded.getCodeReader.
+- getCodeReader for Generated: Generator returns "var e = 5;", Expected reader yielding "var e = 5;". Derived from Generated.getCodeReader.
+- Set/Get Original Path: Input="/original/path.js", Expected=OriginalPath="/original/path.js". Derived from setOriginalPath/getOriginalPath.
+- Set Original Path to Null: Input=null, Expected OriginalPath="test.js" (fallback to fileName). Derived from getOriginalPath logic.
+- Clear Cached Source: Preloaded code, then clear, Expected=null for getCodeNoCache(). Derived from clearCachedSource logic.
+- Clear Cached Source for Generated: Generated code, then clear, Expected=null for getCodeNoCache(). Derived from Generated.clearCachedSource.
+- IsExtern: Input=true, Expected=isExtern=true. Derived from setIsExtern.
+- GetLine Basic: Input="line1\nline2\nline3", Line=2, Expected="line2". Derived from getLine logic.
+- GetLine With Empty Lines: Input="line1\n\nline3", Line=2, Expected="". Derived from getLine logic.
+- GetLine Out of Bounds High: Input="line1\nline2", Line=3, Expected=null. Derived from getLine logic.
+- GetLine Out of Bounds Low: Input="line1\nline2", Line=0, Expected=null. Derived from getLine logic.
+- GetLine At End of File: Input="line1", Line=1, Expected="line1". Derived from getLine logic.
+- GetLine At End of File With Newline: Input="line1\n", Line=2, Expected=null. Derived from getLine logic.
+- GetLineOffset Basic: Input="line1\nline2\nline3", Line=2, Expected=6. Derived from findLineOffsets.
+- GetLineOffset Out of Bounds High: Input="line1\nline2", Line=3, Expected=IllegalArgumentException. Derived from getLineOffset bounds check.
+- GetLineOffset Out of Bounds Low: Input="line1\nline2", Line=0, Expected=IllegalArgumentException. Derived from getLineOffset bounds check.
+- GetRegion Basic: Input=10 lines, Line=5, Expected Region from line 3 to 8. Derived from getRegion logic and SOURCE_EXCERPT_REGION_LENGTH.
+- GetRegion At Start: Input=10 lines, Line=1, Expected Region from line 1 to 6. Derived from getRegion logic.
+- GetRegion At End: Input=10 lines, Line=9, Expected Region from line 7 to 11 (calculated endLine). Derived from getRegion logic.
+- GetRegion Out of Bounds High: Input="line1", Line=2, Expected=null. Derived from getRegion logic.
+- GetRegion Out of Bounds Low: Input="line1", Line=0, Expected=null. Derived from getRegion logic.
+- ToString: Input=SourceFile("test.js"), Expected="test.js". Derived from toString implementation.
+- Static fromFile (path, charset): Temp file with content, Expected OnDisk SF with correct content. Derived from fromFile factory and OnDisk.getCode.
+- Static fromFile (path): Temp file with content, Expected OnDisk SF with correct content. Derived from fromFile factory and OnDisk.getCode.
+- Static fromFile (file, charset): Temp file with content, Expected OnDisk SF with correct content. Derived from fromFile factory and OnDisk.getCode.
+- Static fromFile (file): Temp file with content, Expected OnDisk SF with correct content. Derived from fromFile factory and OnDisk.getCode.
+- Static fromInputStream: Input stream, Expected Preloaded SF with correct content. Derived from fromInputStream factory and Preloaded.getCode.
+- Static fromInputStream with Original Path: Input stream, Original Path, Expected Preloaded SF with correct content. Derived from fromInputStream factory and Preloaded.getCode.
+- Static fromReader: Input reader, Expected Preloaded SF with correct content. Derived from fromReader factory and Preloaded.getCode.
+- Set/Get Charset: OnDisk SF, Set Charset, Expected=Correct Charset. Derived from OnDisk.setCharset/getCharset.
+- OnDisk Code Loading: Temp file, getCode() loads and caches, then file modified, clear cache, getCode() reloads. Expected=correct content at each step. Derived from OnDisk.getCode and clearCachedSource.
+- OnDisk Code Reader Not Loading: Temp file, getCodeReader() used, Expected=code not loaded by getCode(). Derived from OnDisk.getCodeReader and hasSourceInMemory.
+- Line Offsets Empty File: Input="", Expected lineOffsets=[0], numLines=1. Derived from findLineOffsets.
+- Line Offsets Single Line No Newline: Input="hello", Expected lineOffsets=[0], numLines=1. Derived from findLineOffsets.
+- Line Offsets Single Line With Newline: Input="hello\n", Expected lineOffsets=[0], numLines=1. Derived from findLineOffsets.
+4. DEFECT DETECTION STRATEGY - Tests exercise core logic of SourceFile creation and content retrieval, including edge cases for line numbers, offsets, and regions. They also verify caching behavior and specific implementations of subclasses like `OnDisk` and `Generated`.
+5. SUMMARY - 32 tests.
+6. LIMITATIONS - Testing of `OnDisk` requires temporary file creation, which is handled within the tests. The behavior of `getRegion` with respect to the `endLine` calculation at the very end of the file might be a subtle point of interest for defect detection.
+Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

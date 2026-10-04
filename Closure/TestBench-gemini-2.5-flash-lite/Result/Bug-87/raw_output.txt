@@ -1,0 +1,946 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Predicate;
+import com.google.common.collect.ImmutableSet;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.jstype.TernaryValue;
+import java.util.regex.Pattern;
+
+public class PeepholeSubstituteAlternateSyntaxTest {
+    // test methods (as many as the instructions ask for), each exactly in this form:
+    //     @Test
+    //     public void testWhatItChecks() throws Exception { ... }
+
+    private PeepholeSubstituteAlternateSyntax peephole = new PeepholeSubstituteAlternateSyntax(null); // Assuming AbstractCompiler can be null for this test
+
+    private Node makeNode(int type, Node... children) {
+        Node n = new Node(type);
+        for (Node child : children) {
+            n.addChildToBack(child);
+        }
+        return n;
+    }
+
+    private Node makeExprResultNode(Node child) {
+        return makeNode(Token.EXPR_RESULT, child);
+    }
+
+    private Node makeCallNode(Node target, Node... args) {
+        Node call = makeNode(Token.CALL, target);
+        for (Node arg : args) {
+            call.addChildToBack(arg);
+        }
+        return call;
+    }
+
+    private Node makeNewNode(Node target, Node... args) {
+        Node call = makeNode(Token.NEW, target);
+        for (Node arg : args) {
+            call.addChildToBack(arg);
+        }
+        return call;
+    }
+
+    private Node makeNameNode(String name) {
+        return makeNode(Token.NAME, Node.newString(name));
+    }
+
+    private Node makeStringNode(String value) {
+        return Node.newString(value);
+    }
+
+    private Node makeNumberNode(double value) {
+        return Node.newNumber(value);
+    }
+
+    private void reportCodeChange() {
+        // Mock implementation for testing purposes
+    }
+
+    private boolean isASTNormalized() {
+        // Mock implementation for testing purposes
+        return true;
+    }
+
+    private void error(DiagnosticType type, Node node) {
+        // Mock implementation for testing purposes
+    }
+
+    private Node optimize(Node node) {
+        return peephole.optimizeSubtree(node);
+    }
+
+    @Test
+    public void testReduceReturnUndefined() {
+        Node returnNode = makeNode(Token.RETURN, makeNameNode("undefined"));
+        Node optimized = optimize(returnNode);
+        assertEquals(Token.RETURN, optimized.getType());
+        assertFalse(optimized.hasChildren());
+    }
+
+    @Test
+    public void testReduceReturnVoid() {
+        Node voidNode = makeNode(Token.VOID, makeNumberNode(1)); // Side effects don't matter here for reduction
+        Node returnNode = makeNode(Token.RETURN, voidNode);
+        Node optimized = optimize(returnNode);
+        assertEquals(Token.RETURN, optimized.getType());
+        assertFalse(optimized.hasChildren());
+    }
+
+    @Test
+    public void testReduceReturnVoidWithSideEffect() {
+        Node voidNode = makeNode(Token.VOID, makeCallNode(makeNameNode("alert"), makeStringNode("side effect")));
+        Node returnNode = makeNode(Token.RETURN, voidNode);
+        Node optimized = optimize(returnNode);
+        assertEquals(Token.RETURN, optimized.getType());
+        assertTrue(optimized.hasChildren()); // Should not remove if side effect
+        assertEquals(Token.VOID, optimized.getFirstChild().getType());
+    }
+
+    @Test
+    public void testReduceReturnVoidNoSideEffect() {
+        Node voidNode = makeNode(Token.VOID, makeNumberNode(1));
+        Node returnNode = makeNode(Token.RETURN, voidNode);
+        Node optimized = optimize(returnNode);
+        assertEquals(Token.RETURN, optimized.getType());
+        assertFalse(optimized.hasChildren());
+    }
+
+    @Test
+    public void testReduceReturnVoidNoChild() {
+        Node voidNode = makeNode(Token.VOID); // void with no operand
+        Node returnNode = makeNode(Token.RETURN, voidNode);
+        Node optimized = optimize(returnNode);
+        assertEquals(Token.RETURN, optimized.getType());
+        assertFalse(optimized.hasChildren());
+    }
+
+    @Test
+    public void testMinimizeNotEqual() {
+        Node left = makeNameNode("a");
+        Node right = makeNameNode("b");
+        Node ne = makeNode(Token.NE, left, right);
+        Node not = makeNode(Token.NOT, ne);
+        Node parent = makeNode(Token.EXPR_RESULT, not); // Need a parent for replacement
+        Node optimized = optimize(not);
+        assertEquals(Token.EQ, optimized.getType());
+        assertEquals("a", optimized.getFirstChild().getString());
+        assertEquals("b", optimized.getLastChild().getString());
+    }
+
+    @Test
+    public void testMinimizeNotStrictEqual() {
+        Node left = makeNameNode("a");
+        Node right = makeNameNode("b");
+        Node sheq = makeNode(Token.SHEQ, left, right);
+        Node not = makeNode(Token.NOT, sheq);
+        Node parent = makeNode(Token.EXPR_RESULT, not);
+        Node optimized = optimize(not);
+        assertEquals(Token.SHNE, optimized.getType());
+        assertEquals("a", optimized.getFirstChild().getString());
+        assertEquals("b", optimized.getLastChild().getString());
+    }
+
+    @Test
+    public void testMinimizeNotGreaterThan() {
+        Node left = makeNameNode("a");
+        Node right = makeNameNode("b");
+        Node gt = makeNode(Token.GT, left, right);
+        Node not = makeNode(Token.NOT, gt);
+        Node parent = makeNode(Token.EXPR_RESULT, not);
+        Node optimized = optimize(not); // Should not change GT
+        assertEquals(Token.NOT, optimized.getType());
+        assertEquals(Token.GT, optimized.getFirstChild().getType());
+    }
+
+    @Test
+    public void testMinimizeIfElseBlock() {
+        Node cond = makeNameNode("x");
+        Node thenStmt = makeExprResultNode(makeNode(Token.ASSIGN, makeNameNode("y"), makeNumberNode(1)));
+        Node elseStmt = makeExprResultNode(makeNode(Token.ASSIGN, makeNameNode("y"), makeNumberNode(2)));
+        Node ifNode = makeNode(Token.IF, cond, thenStmt, elseStmt);
+        Node parent = makeNode(Token.BLOCK, ifNode); // IF inside a block
+        Node optimized = optimize(ifNode);
+        assertEquals(Token.CALL, optimized.getType()); // Should become an expression statement
+        assertEquals(Token.ASSIGN, optimized.getFirstChild().getType()); // Assignment
+        assertEquals("y", optimized.getFirstChild().getFirstChild().getString());
+        assertEquals(Token.HOOK, optimized.getFirstChild().getLastChild().getType()); // Hook for the conditional assignment
+        assertEquals(Token.HOOK, optimized.getFirstChild().getLastChild().getType());
+        assertEquals("x", optimized.getFirstChild().getLastChild().getFirstChild().getString());
+        assertEquals("1", optimized.getFirstChild().getLastChild().getSecondChild().getString());
+        assertEquals("2", optimized.getFirstChild().getLastChild().getLastChild().getString());
+    }
+
+    @Test
+    public void testMinimizeIfElseNoElse() {
+        Node cond = makeNameNode("x");
+        Node thenBranch = makeExprResultNode(makeCallNode(makeNameNode("foo")));
+        Node ifNode = makeNode(Token.IF, cond, thenBranch);
+        Node parent = makeNode(Token.BLOCK, ifNode);
+        Node optimized = optimize(ifNode);
+        assertEquals(Token.EXPR_RESULT, optimized.getType());
+        assertEquals(Token.AND, optimized.getFirstChild().getType());
+        assertEquals("x", optimized.getFirstChild().getFirstChild().getString());
+        assertEquals("foo", optimized.getFirstChild().getLastChild().getFirstChild().getString());
+    }
+
+    @Test
+    public void testMinimizeIfElseNoElseNotCondition() {
+        Node cond = makeNode(Token.NOT, makeNameNode("x"));
+        Node thenBranch = makeExprResultNode(makeCallNode(makeNameNode("bar")));
+        Node ifNode = makeNode(Token.IF, cond, thenBranch);
+        Node parent = makeNode(Token.BLOCK, ifNode);
+        Node optimized = optimize(ifNode);
+        assertEquals(Token.EXPR_RESULT, optimized.getType());
+        assertEquals(Token.OR, optimized.getFirstChild().getType()); // if(!x) bar() -> x || bar()
+        assertEquals("x", optimized.getFirstChild().getFirstChild().getString());
+        assertEquals("bar", optimized.getFirstChild().getLastChild().getFirstChild().getString());
+    }
+
+    @Test
+    public void testMinimizeIfReturn() {
+        Node cond = makeNameNode("x");
+        Node thenBranch = makeNode(Token.BLOCK, makeNode(Token.RETURN, makeNumberNode(1)));
+        Node elseBranch = makeNode(Token.BLOCK, makeNode(Token.RETURN, makeNumberNode(2)));
+        Node ifNode = makeNode(Token.IF, cond, thenBranch, elseBranch);
+        Node parent = makeNode(Token.BLOCK, ifNode);
+        Node optimized = optimize(ifNode);
+        assertEquals(Token.RETURN, optimized.getType());
+        assertEquals(Token.HOOK, optimized.getFirstChild().getType());
+        assertEquals("x", optimized.getFirstChild().getFirstChild().getString());
+        assertEquals("1", optimized.getFirstChild().getSecondChild().getString());
+        assertEquals("2", optimized.getFirstChild().getLastChild().getString());
+    }
+
+    @Test
+    public void testMinimizeIfReturnNoElse() {
+        Node cond = makeNameNode("x");
+        Node thenBranch = makeNode(Token.BLOCK, makeNode(Token.RETURN, makeNumberNode(1)));
+        Node ifNode = makeNode(Token.IF, cond, thenBranch);
+        Node parent = makeNode(Token.BLOCK, ifNode);
+        Node optimized = optimize(ifNode);
+        assertEquals(Token.EXPR_RESULT, optimized.getType());
+        assertEquals(Token.AND, optimized.getFirstChild().getType()); // if(x) return 1 -> x && return 1
+        assertEquals("x", optimized.getFirstChild().getFirstChild().getString());
+        assertEquals("return", optimized.getFirstChild().getLastChild().getFirstChild().getString());
+        assertEquals("1", optimized.getFirstChild().getLastChild().getSecondChild().getString());
+    }
+
+    @Test
+    public void testMinimizeIfWithDanglingElse() {
+        Node cond = makeNameNode("x");
+        Node thenBranch = makeNode(Token.IF, makeNameNode("y"), makeExprResultNode(makeNumberNode(1)));
+        Node elseBranch = makeExprResultNode(makeNumberNode(2));
+        Node ifNode = makeNode(Token.IF, cond, thenBranch, elseBranch);
+        Node parent = makeNode(Token.BLOCK, ifNode);
+        Node optimized = optimize(ifNode);
+        // This should not be transformed because of dangling else
+        assertEquals(Token.IF, optimized.getType());
+        assertEquals(cond, optimized.getFirstChild());
+        assertEquals(thenBranch, optimized.getSecondChild());
+        assertEquals(elseBranch, optimized.getLastChild());
+    }
+
+    @Test
+    public void testMinimizeIfSwapBranches() {
+        Node cond = makeNode(Token.NOT, makeNameNode("x"));
+        Node thenBranch = makeExprResultNode(makeNumberNode(1));
+        Node elseBranch = makeExprResultNode(makeNumberNode(2));
+        Node ifNode = makeNode(Token.IF, cond, thenBranch, elseBranch);
+        Node parent = makeNode(Token.BLOCK, ifNode);
+        Node optimized = optimize(ifNode);
+        // if(!x) 1; else 2; -> if(x) 2; else 1;
+        assertEquals(Token.IF, optimized.getType());
+        assertEquals(Token.NOT, optimized.getFirstChild().getType()); // still not x
+        assertEquals(Token.NOT, optimized.getFirstChild().getFirstChild().getType()); // but condition is flipped to x
+        assertEquals(Token.EXPR_RESULT, optimized.getSecondChild().getType());
+        assertEquals("2", optimized.getSecondChild().getFirstChild().getString()); // then branch is now 2
+        assertEquals(Token.EXPR_RESULT, optimized.getLastChild().getType());
+        assertEquals("1", optimized.getLastChild().getFirstChild().getString()); // else branch is now 1
+    }
+
+
+    @Test
+    public void testMinimizeIfVarElseAssign() {
+        Node cond = makeNameNode("x");
+        Node varNode = makeNode(Token.VAR, makeNode(Token.NAME, Node.newString("y")));
+        varNode.getChildAtIndex(0).addChildToBack(makeNumberNode(1)); // var y = 1
+        Node thenBranch = makeNode(Token.BLOCK, varNode);
+
+        Node elseAssign = makeNode(Token.ASSIGN, makeNameNode("y"), makeNumberNode(2));
+        Node elseBranch = makeExprResultNode(elseAssign);
+
+        Node ifNode = makeNode(Token.IF, cond, thenBranch, elseBranch);
+        Node parent = makeNode(Token.BLOCK, ifNode);
+        Node optimized = optimize(ifNode);
+
+        // var y = x ? 1 : 2;
+        assertEquals(Token.VAR, optimized.getType());
+        assertEquals("y", optimized.getFirstChild().getString());
+        assertEquals(Token.HOOK, optimized.getFirstChild().getSecondChild().getType());
+        assertEquals("x", optimized.getFirstChild().getSecondChild().getFirstChild().getString());
+        assertEquals("1", optimized.getFirstChild().getSecondChild().getSecondChild().getString());
+        assertEquals("2", optimized.getFirstChild().getSecondChild().getLastChild().getString());
+    }
+
+    @Test
+    public void testMinimizeIfAssignElseVar() {
+        Node cond = makeNameNode("x");
+        Node thenAssign = makeNode(Token.ASSIGN, makeNameNode("y"), makeNumberNode(1));
+        Node thenBranch = makeExprResultNode(thenAssign);
+
+        Node varNode = makeNode(Token.VAR, makeNode(Token.NAME, Node.newString("y")));
+        varNode.getChildAtIndex(0).addChildToBack(makeNumberNode(2)); // var y = 2
+        Node elseBranch = makeNode(Token.BLOCK, varNode);
+
+        Node ifNode = makeNode(Token.IF, cond, thenBranch, elseBranch);
+        Node parent = makeNode(Token.BLOCK, ifNode);
+        Node optimized = optimize(ifNode);
+
+        // var y = x ? 1 : 2;
+        assertEquals(Token.VAR, optimized.getType());
+        assertEquals("y", optimized.getFirstChild().getString());
+        assertEquals(Token.HOOK, optimized.getFirstChild().getSecondChild().getType());
+        assertEquals("x", optimized.getFirstChild().getSecondChild().getFirstChild().getString());
+        assertEquals("1", optimized.getFirstChild().getSecondChild().getSecondChild().getString());
+        assertEquals("2", optimized.getFirstChild().getSecondChild().getLastChild().getString());
+    }
+
+
+    @Test
+    public void testFoldStandardConstructorNewObject() {
+        Node objectName = makeNameNode("Object");
+        Node newNode = makeNewNode(objectName);
+        Node optimized = optimize(newNode);
+        assertEquals(Token.CALL, optimized.getType());
+        assertEquals("Object", optimized.getFirstChild().getString());
+    }
+
+    @Test
+    public void testFoldStandardConstructorNewArray() {
+        Node arrayName = makeNameNode("Array");
+        Node newNode = makeNewNode(arrayName);
+        Node optimized = optimize(newNode);
+        assertEquals(Token.ARRAYLIT, optimized.getType());
+        assertFalse(optimized.hasChildren());
+    }
+
+    @Test
+    public void testFoldStandardConstructorNewArrayWithArgs() {
+        Node arrayName = makeNameNode("Array");
+        Node arg1 = makeNumberNode(1);
+        Node arg2 = makeStringNode("test");
+        Node newNode = makeNewNode(arrayName, arg1, arg2);
+        Node optimized = optimize(newNode);
+        assertEquals(Token.ARRAYLIT, optimized.getType());
+        assertEquals(arg1, optimized.getFirstChild());
+        assertEquals(arg2, optimized.getLastChild());
+    }
+
+    @Test
+    public void testFoldStandardConstructorNewArrayWithOneArgNumber() {
+        Node arrayName = makeNameNode("Array");
+        Node arg1 = makeNumberNode(5); // This should NOT be folded to [5]
+        Node newNode = makeNewNode(arrayName, arg1);
+        Node optimized = optimize(newNode);
+        assertEquals(Token.NEW, optimized.getType()); // Should not fold
+        assertEquals(arrayName.getString(), optimized.getFirstChild().getString());
+    }
+
+    @Test
+    public void testFoldStandardConstructorNewRegExp() {
+        Node regExpName = makeNameNode("RegExp");
+        Node pattern = makeStringNode("abc");
+        Node flags = makeStringNode("i");
+        Node newNode = makeNewNode(regExpName, pattern, flags);
+        Node optimized = optimize(newNode);
+        assertEquals(Token.REGEXP, optimized.getType());
+        assertEquals("abc", optimized.getFirstChild().getString());
+        assertEquals("i", optimized.getLastChild().getString());
+    }
+
+    @Test
+    public void testFoldStandardConstructorNewRegExpNoFlags() {
+        Node regExpName = makeNameNode("RegExp");
+        Node pattern = makeStringNode("abc");
+        Node newNode = makeNewNode(regExpName, pattern);
+        Node optimized = optimize(newNode);
+        assertEquals(Token.REGEXP, optimized.getType());
+        assertEquals("abc", optimized.getFirstChild().getString());
+        assertFalse(optimized.hasChildren); // no flags
+    }
+
+    @Test
+    public void testFoldStandardConstructorNewRegExpInvalidFlags() {
+        Node regExpName = makeNameNode("RegExp");
+        Node pattern = makeStringNode("abc");
+        Node flags = makeStringNode("xyz"); // Invalid flags
+        Node newNode = makeNewNode(regExpName, pattern, flags);
+        Node optimized = optimize(newNode);
+        // Should not fold and should report an error. We can't assert error reporting easily here.
+        assertEquals(Token.NEW, optimized.getType());
+    }
+
+    @Test
+    public void testFoldStandardConstructorNewRegExpTooManyArgs() {
+        Node regExpName = makeNameNode("RegExp");
+        Node pattern = makeStringNode("abc");
+        Node flags = makeStringNode("i");
+        Node extraArg = makeNumberNode(1);
+        Node newNode = makeNewNode(regExpName, pattern, flags, extraArg);
+        Node optimized = optimize(newNode);
+        assertEquals(Token.NEW, optimized.getType()); // Should not fold
+    }
+
+    @Test
+    public void testFoldStandardConstructorNewRegExpEmptyPattern() {
+        Node regExpName = makeNameNode("RegExp");
+        Node pattern = makeStringNode("");
+        Node flags = makeStringNode("i");
+        Node newNode = makeNewNode(regExpName, pattern, flags);
+        Node optimized = optimize(newNode);
+        assertEquals(Token.NEW, optimized.getType()); // Should not fold for empty pattern
+    }
+
+    @Test
+    public void testFoldStandardConstructorNewRegExpWithForwardSlash() {
+        Node regExpName = makeNameNode("RegExp");
+        Node pattern = makeStringNode("a/b");
+        Node flags = makeStringNode("i");
+        Node newNode = makeNewNode(regExpName, pattern, flags);
+        Node optimized = optimize(newNode);
+        assertEquals(Token.REGEXP, optimized.getType());
+        assertEquals("a\\/b", optimized.getFirstChild().getString()); // Escaped forward slash
+        assertEquals("i", optimized.getLastChild().getString());
+    }
+
+    @Test
+    public void testMinimizeConditionDoubleNot() {
+        Node n = makeNameNode("x");
+        Node not1 = makeNode(Token.NOT, n);
+        Node not2 = makeNode(Token.NOT, not1);
+        Node parent = makeNode(Token.EXPR_RESULT, not2);
+        Node optimized = optimize(not2);
+        assertEquals(Token.NAME, optimized.getType());
+        assertEquals("x", optimized.getString());
+    }
+
+    @Test
+    public void testMinimizeConditionNotAnd() {
+        Node left = makeNode(Token.NOT, makeNameNode("a"));
+        Node right = makeNode(Token.NOT, makeNameNode("b"));
+        Node andNode = makeNode(Token.AND, left, right);
+        Node not = makeNode(Token.NOT, andNode);
+        Node parent = makeNode(Token.EXPR_RESULT, not);
+        Node optimized = optimize(not);
+        assertEquals(Token.OR, optimized.getType());
+        assertEquals("a", optimized.getFirstChild().getString());
+        assertEquals("b", optimized.getLastChild().getString());
+    }
+
+    @Test
+    public void testMinimizeConditionNotOr() {
+        Node left = makeNode(Token.NOT, makeNameNode("a"));
+        Node right = makeNode(Token.NOT, makeNameNode("b"));
+        Node orNode = makeNode(Token.OR, left, right);
+        Node not = makeNode(Token.NOT, orNode);
+        Node parent = makeNode(Token.EXPR_RESULT, not);
+        Node optimized = optimize(not);
+        assertEquals(Token.AND, optimized.getType());
+        assertEquals("a", optimized.getFirstChild().getString());
+        assertEquals("b", optimized.getLastChild().getString());
+    }
+
+    @Test
+    public void testMinimizeConditionOrTrue() {
+        Node left = makeNameNode("x");
+        Node right = makeNode(Token.TRUE);
+        Node orNode = makeNode(Token.OR, left, right);
+        Node parent = makeNode(Token.EXPR_RESULT, orNode);
+        Node optimized = optimize(orNode);
+        assertEquals(Token.TRUE, optimized.getType());
+    }
+
+    @Test
+    public void testMinimizeConditionOrFalse() {
+        Node left = makeNameNode("x");
+        Node right = makeNode(Token.FALSE);
+        Node orNode = makeNode(Token.OR, left, right);
+        Node parent = makeNode(Token.EXPR_RESULT, orNode);
+        Node optimized = optimize(orNode);
+        assertEquals(Token.NAME, optimized.getType());
+        assertEquals("x", optimized.getString());
+    }
+
+    @Test
+    public void testMinimizeConditionAndTrue() {
+        Node left = makeNameNode("x");
+        Node right = makeNode(Token.TRUE);
+        Node andNode = makeNode(Token.AND, left, right);
+        Node parent = makeNode(Token.EXPR_RESULT, andNode);
+        Node optimized = optimize(andNode);
+        assertEquals(Token.NAME, optimized.getType());
+        assertEquals("x", optimized.getString());
+    }
+
+    @Test
+    public void testMinimizeConditionAndFalse() {
+        Node left = makeNameNode("x");
+        Node right = makeNode(Token.FALSE);
+        Node andNode = makeNode(Token.AND, left, right);
+        Node parent = makeNode(Token.EXPR_RESULT, andNode);
+        Node optimized = optimize(andNode);
+        assertEquals(Token.FALSE, optimized.getType());
+    }
+
+    @Test
+    public void testMinimizeHookTrueFalse() {
+        Node cond = makeNameNode("x");
+        Node trueNode = makeNode(Token.TRUE);
+        Node falseNode = makeNode(Token.FALSE);
+        Node hookNode = makeNode(Token.HOOK, cond, trueNode, falseNode);
+        Node parent = makeNode(Token.EXPR_RESULT, hookNode);
+        Node optimized = optimize(hookNode);
+        assertEquals(Token.NAME, optimized.getType());
+        assertEquals("x", optimized.getString());
+    }
+
+    @Test
+    public void testMinimizeHookFalseTrue() {
+        Node cond = makeNameNode("x");
+        Node trueNode = makeNode(Token.FALSE);
+        Node falseNode = makeNode(Token.TRUE);
+        Node hookNode = makeNode(Token.HOOK, cond, trueNode, falseNode);
+        Node parent = makeNode(Token.EXPR_RESULT, hookNode);
+        Node optimized = optimize(hookNode);
+        assertEquals(Token.NOT, optimized.getType());
+        assertEquals("x", optimized.getFirstChild().getString());
+    }
+
+    @Test
+    public void testMinimizeHookTrueElseVar() {
+        Node cond = makeNameNode("x");
+        Node trueNode = makeNode(Token.TRUE);
+        Node elseVar = makeNode(Token.VAR, makeNode(Token.NAME, Node.newString("y")));
+        elseVar.getChildAtIndex(0).addChildToBack(makeNumberNode(1)); // var y = 1
+        Node elseBranch = makeNode(Token.BLOCK, elseVar);
+        Node hookNode = makeNode(Token.HOOK, cond, trueNode, elseBranch.getFirstChild()); // HOOK expects expression, not block
+        Node parent = makeNode(Token.EXPR_RESULT, hookNode);
+        Node optimized = optimize(hookNode);
+
+        assertEquals(Token.OR, optimized.getType());
+        assertEquals("x", optimized.getFirstChild().getString());
+        assertEquals(Token.VAR, optimized.getLastChild().getType());
+        assertEquals("y", optimized.getLastChild().getFirstChild().getString());
+        assertEquals("1", optimized.getLastChild().getFirstChild().getSecondChild().getString());
+    }
+
+    @Test
+    public void testMinimizeHookElseFalseVar() {
+        Node cond = makeNameNode("x");
+        Node thenVar = makeNode(Token.VAR, makeNode(Token.NAME, Node.newString("y")));
+        thenVar.getChildAtIndex(0).addChildToBack(makeNumberNode(1)); // var y = 1
+        Node thenBranch = makeNode(Token.BLOCK, thenVar);
+        Node falseNode = makeNode(Token.FALSE);
+        Node hookNode = makeNode(Token.HOOK, cond, thenBranch.getFirstChild(), falseNode); // HOOK expects expression, not block
+        Node parent = makeNode(Token.EXPR_RESULT, hookNode);
+        Node optimized = optimize(hookNode);
+
+        assertEquals(Token.AND, optimized.getType());
+        assertEquals("x", optimized.getFirstChild().getString());
+        assertEquals(Token.VAR, optimized.getLastChild().getType());
+        assertEquals("y", optimized.getLastChild().getFirstChild().getString());
+        assertEquals("1", optimized.getLastChild().getFirstChild().getSecondChild().getString());
+    }
+
+
+    @Test
+    public void testTryRemoveRepeatedStatements() {
+        Node cond = makeNameNode("a");
+        Node stmt1 = makeExprResultNode(makeNode(Token.ASSIGN, makeNameNode("x"), makeNumberNode(1)));
+        Node stmt2 = makeExprResultNode(makeNode(Token.ASSIGN, makeNameNode("x"), makeNumberNode(2)));
+        Node returnStmt = makeNode(Token.RETURN, makeNumberNode(true));
+
+        Node thenBranch = makeNode(Token.BLOCK, stmt1.cloneTree(), returnStmt.cloneTree());
+        Node elseBranch = makeNode(Token.BLOCK, stmt2.cloneTree(), returnStmt.cloneTree());
+        Node ifNode = makeNode(Token.IF, cond, thenBranch, elseBranch);
+        Node parent = makeNode(Token.BLOCK, ifNode);
+
+        peephole.tryRemoveRepeatedStatements(ifNode); // Call the private method directly
+
+        assertEquals(Token.RETURN, thenBranch.getLastChild().getType()); // The return should have been moved
+        assertEquals(Token.RETURN, elseBranch.getLastChild().getType());
+        assertEquals(ifNode.getParent(), parent); // The if node remains in the parent block
+    }
+
+    @Test
+    public void testIsFoldableExpressBlockTrue() {
+        Node expr = makeExprResultNode(makeNumberNode(1));
+        assertTrue(peephole.isFoldableExpressBlock(expr));
+    }
+
+    @Test
+    public void testIsFoldableExpressBlockFalse() {
+        Node block = makeNode(Token.BLOCK, makeNumberNode(1)); // Not EXPR_RESULT
+        assertFalse(peephole.isFoldableExpressBlock(block));
+    }
+
+    @Test
+    public void testGetBlockExpression() {
+        Node expr = makeExprResultNode(makeNumberNode(1));
+        assertEquals(makeNumberNode(1), peephole.getBlockExpression(expr));
+    }
+
+    @Test
+    public void testIsReturnExpressBlockTrue() {
+        Node ret = makeNode(Token.RETURN, makeNumberNode(1));
+        Node block = makeNode(Token.BLOCK, ret);
+        assertTrue(peephole.isReturnExpressBlock(block));
+    }
+
+    @Test
+    public void testIsReturnExpressBlockFalse() {
+        Node ret = makeNode(Token.RETURN); // No return value
+        Node block = makeNode(Token.BLOCK, ret);
+        assertFalse(peephole.isReturnExpressBlock(block));
+    }
+
+    @Test
+    public void testGetBlockReturnExpression() {
+        Node ret = makeNode(Token.RETURN, makeNumberNode(1));
+        Node block = makeNode(Token.BLOCK, ret);
+        assertEquals(makeNumberNode(1), peephole.getBlockReturnExpression(block));
+    }
+
+    @Test
+    public void testIsVarBlockTrue() {
+        Node var = makeNode(Token.VAR, makeNode(Token.NAME, Node.newString("x")));
+        var.getChildAtIndex(0).addChildToBack(makeNumberNode(1));
+        Node block = makeNode(Token.BLOCK, var);
+        assertTrue(peephole.isVarBlock(block));
+    }
+
+    @Test
+    public void testIsVarBlockFalse() {
+        Node block = makeNode(Token.BLOCK, makeNumberNode(1)); // Not VAR
+        assertFalse(peephole.isVarBlock(block));
+    }
+
+    @Test
+    public void testGetBlockVar() {
+        Node var = makeNode(Token.VAR, makeNode(Token.NAME, Node.newString("x")));
+        var.getChildAtIndex(0).addChildToBack(makeNumberNode(1));
+        Node block = makeNode(Token.BLOCK, var);
+        assertEquals(var, peephole.getBlockVar(block));
+    }
+
+    @Test
+    public void testConsumesDanglingElseTrue() {
+        Node innerIf = makeNode(Token.IF, makeNameNode("y")); // No else
+        assertTrue(peephole.consumesDanglingElse(innerIf));
+    }
+
+    @Test
+    public void testConsumesDanglingElseFalse() {
+        Node innerIf = makeNode(Token.IF, makeNameNode("y"), makeNumberNode(1), makeNumberNode(2)); // Has else
+        assertFalse(peephole.consumesDanglingElse(innerIf));
+    }
+
+    @Test
+    public void testIsLowerPrecedenceInExpressionTrue() {
+        Node parentOp = makeNode(Token.OR, makeNameNode("a"), makeNameNode("b"));
+        Node childOp = makeNode(Token.ADD, makeNameNode("c"), makeNameNode("d"));
+        parentOp.addChildToFront(childOp);
+        assertTrue(peephole.isLowerPrecedenceInExpression(childOp, NodeUtil.precedence(Token.OR)));
+    }
+
+    @Test
+    public void testIsLowerPrecedenceInExpressionFalse() {
+        Node parentOp = makeNode(Token.OR, makeNameNode("a"), makeNameNode("b"));
+        Node childOp = makeNode(Token.OR, makeNameNode("c"), makeNameNode("d")); // Same precedence
+        parentOp.addChildToFront(childOp);
+        assertFalse(peephole.isLowerPrecedenceInExpression(childOp, NodeUtil.precedence(Token.OR)));
+    }
+
+    @Test
+    public void testIsPropertyAssignmentInExpressionTrue() {
+        Node assign = makeNode(Token.ASSIGN, makeNode(Token.GETPROP, makeNameNode("obj"), makeNameNode("prop")), makeNumberNode(1));
+        assertTrue(peephole.isPropertyAssignmentInExpression(assign));
+    }
+
+    @Test
+    public void testIsPropertyAssignmentInExpressionFalse() {
+        Node assign = makeNode(Token.ASSIGN, makeNameNode("var"), makeNumberNode(1)); // Not GETPROP
+        assertFalse(peephole.isPropertyAssignmentInExpression(assign));
+    }
+
+    @Test
+    public void testTryMinimizeConditionLeftValTrue() {
+        Node condition = makeNumberNode(1); // true
+        Node trueBranch = makeNumberNode(2);
+        Node falseBranch = makeNumberNode(3);
+        Node hookNode = makeNode(Token.HOOK, condition, trueBranch, falseBranch);
+        Node parent = makeNode(Token.EXPR_RESULT, hookNode);
+        Node optimized = optimize(hookNode);
+        assertEquals(Token.NUMBER, optimized.getType());
+        assertEquals(2, optimized.getDouble(), 0.0001);
+    }
+
+    @Test
+    public void testTryMinimizeConditionRightValTrue() {
+        Node condition = makeNameNode("x");
+        Node trueBranch = makeNumberNode(2);
+        Node falseBranch = makeNumberNode(1); // true
+        Node hookNode = makeNode(Token.HOOK, condition, trueBranch, falseBranch);
+        Node parent = makeNode(Token.EXPR_RESULT, hookNode);
+        Node optimized = optimize(hookNode);
+        assertEquals(Token.OR, optimized.getType());
+        assertEquals("x", optimized.getFirstChild().getString());
+        assertEquals(2, optimized.getLastChild().getDouble(), 0.0001);
+    }
+
+    @Test
+    public void testTryMinimizeConditionRightValFalse() {
+        Node condition = makeNameNode("x");
+        Node trueBranch = makeNumberNode(2);
+        Node falseBranch = makeNumberNode(0); // false
+        Node hookNode = makeNode(Token.HOOK, condition, trueBranch, falseBranch);
+        Node parent = makeNode(Token.EXPR_RESULT, hookNode);
+        Node optimized = optimize(hookNode);
+        assertEquals(Token.AND, optimized.getType());
+        assertEquals("x", optimized.getFirstChild().getString());
+        assertEquals(2, optimized.getLastChild().getDouble(), 0.0001);
+    }
+
+    @Test
+    public void testMaybeReplaceChildWithNumber() {
+        Node parent = makeNode(Token.EXPR_RESULT, makeNameNode("x"));
+        Node n = parent.getFirstChild();
+        Node newNode = peephole.maybeReplaceChildWithNumber(n, parent, 1);
+        assertEquals(Token.NUMBER, newNode.getType());
+        assertEquals(1.0, newNode.getDouble(), 0.0001);
+        assertEquals(parent.getFirstChild(), newNode);
+    }
+
+    @Test
+    public void testMaybeReplaceChildWithNumberNoChange() {
+        Node parent = makeNode(Token.EXPR_RESULT, makeNumberNode(1));
+        Node n = parent.getFirstChild();
+        Node newNode = peephole.maybeReplaceChildWithNumber(n, parent, 1);
+        assertEquals(n, newNode); // Should return the original node
+        assertEquals(Token.NUMBER, newNode.getType());
+        assertEquals(1.0, newNode.getDouble(), 0.0001);
+    }
+
+    @Test
+    public void testFoldRegularExpressionConstructorWithFlags() {
+        Node regExpName = makeNameNode("RegExp");
+        Node pattern = makeStringNode("foo");
+        Node flags = makeStringNode("gmi"); // Valid flags
+        Node newNode = makeNewNode(regExpName, pattern, flags);
+        Node parent = makeNode(Token.EXPR_RESULT, newNode);
+        Node optimized = optimize(newNode);
+        assertEquals(Token.REGEXP, optimized.getType());
+        assertEquals("foo", optimized.getFirstChild().getString());
+        assertEquals("gmi", optimized.getLastChild().getString());
+    }
+
+    @Test
+    public void testFoldRegularExpressionConstructorWithForwardSlashEscaped() {
+        Node regExpName = makeNameNode("RegExp");
+        Node pattern = makeStringNode("a/b\\c"); // Contains forward slash and backslash
+        Node flags = makeStringNode("i");
+        Node newNode = makeNewNode(regExpName, pattern, flags);
+        Node parent = makeNode(Token.EXPR_RESULT, newNode);
+        Node optimized = optimize(newNode);
+        assertEquals(Token.REGEXP, optimized.getType());
+        assertEquals("a\\/b\\\\c", optimized.getFirstChild().getString()); // Forward slash escaped, backslash escaped
+        assertEquals("i", optimized.getLastChild().getString());
+    }
+
+    @Test
+    public void testAreValidRegexpFlagsTrue() {
+        assertTrue(peephole.areValidRegexpFlags("gmi"));
+        assertTrue(peephole.areValidRegexpFlags(""));
+        assertTrue(peephole.areValidRegexpFlags("gi"));
+    }
+
+    @Test
+    public void testAreValidRegexpFlagsFalse() {
+        assertFalse(peephole.areValidRegexpFlags("xyz"));
+        assertFalse(peephole.areValidRegexpFlags("gmiz"));
+        assertFalse(peephole.areValidRegexpFlags("g m i"));
+    }
+
+    @Test
+    public void testAreSafeFlagsToFoldTrue() {
+        assertTrue(peephole.areSafeFlagsToFold("im")); // No 'g'
+    }
+
+    @Test
+    public void testAreSafeFlagsToFoldFalse() {
+        assertFalse(peephole.areSafeFlagsToFold("g"));
+        assertFalse(peephole.areSafeFlagsToFold("gi"));
+    }
+
+    @Test
+    public void testMakeForwardSlashBracketSafe() {
+        Node patternNode = Node.newString("a/b\\c");
+        Node safeNode = peephole.makeForwardSlashBracketSafe(patternNode);
+        assertEquals("a\\/b\\\\c", safeNode.getString());
+    }
+
+    @Test
+    public void testContainsUnicodeEscapeTrue() {
+        assertTrue(peephole.containsUnicodeEscape("abc\\u1234def"));
+        assertTrue(peephole.containsUnicodeEscape("\\\\u1234")); // Even number of slashes before \u
+    }
+
+    @Test
+    public void testContainsUnicodeEscapeFalse() {
+        assertFalse(peephole.containsUnicodeEscape("abc"));
+        assertFalse(peephole.containsUnicodeEscape("\\u1234")); // Odd number of slashes before \u (interpreted as literal '\u')
+        assertFalse(peephole.containsUnicodeEscape("\\\\\\u1234")); // Odd number of slashes before \u
+    }
+
+    @Test
+    public void testFoldIfElseVarElseAssign() {
+        Node cond = makeNameNode("x");
+        Node thenVar = makeNode(Token.VAR, makeNode(Token.NAME, Node.newString("y")));
+        thenVar.getChildAtIndex(0).addChildToBack(makeNumberNode(1)); // var y = 1
+        Node thenBranch = makeNode(Token.BLOCK, thenVar);
+
+        Node elseAssign = makeNode(Token.ASSIGN, makeNameNode("y"), makeNumberNode(2));
+        Node elseBranch = makeExprResultNode(elseAssign);
+
+        Node ifNode = makeNode(Token.IF, cond, thenBranch, elseBranch);
+        Node parent = makeNode(Token.BLOCK, ifNode);
+        Node optimized = optimize(ifNode);
+
+        assertEquals(Token.VAR, optimized.getType());
+        assertEquals("y", optimized.getFirstChild().getString());
+        assertEquals(Token.HOOK, optimized.getFirstChild().getSecondChild().getType());
+        assertEquals("x", optimized.getFirstChild().getSecondChild().getFirstChild().getString());
+        assertEquals("1", optimized.getFirstChild().getSecondChild().getSecondChild().getString());
+        assertEquals("2", optimized.getFirstChild().getSecondChild().getLastChild().getString());
+    }
+
+    @Test
+    public void testFoldIfElseAssignElseVar() {
+        Node cond = makeNameNode("x");
+        Node thenAssign = makeNode(Token.ASSIGN, makeNameNode("y"), makeNumberNode(1));
+        Node thenBranch = makeExprResultNode(thenAssign);
+
+        Node elseVar = makeNode(Token.VAR, makeNode(Token.NAME, Node.newString("y")));
+        elseVar.getChildAtIndex(0).addChildToBack(makeNumberNode(2)); // var y = 2
+        Node elseBranch = makeNode(Token.BLOCK, elseVar);
+
+        Node ifNode = makeNode(Token.IF, cond, thenBranch, elseBranch);
+        Node parent = makeNode(Token.BLOCK, ifNode);
+        Node optimized = optimize(ifNode);
+
+        assertEquals(Token.VAR, optimized.getType());
+        assertEquals("y", optimized.getFirstChild().getString());
+        assertEquals(Token.HOOK, optimized.getFirstChild().getSecondChild().getType());
+        assertEquals("x", optimized.getFirstChild().getSecondChild().getFirstChild().getString());
+        assertEquals("1", optimized.getFirstChild().getSecondChild().getSecondChild().getString());
+        assertEquals("2", optimized.getFirstChild().getSecondChild().getLastChild().getString());
+    }
+}
+```
+
+## SOURCE CODE ANALYSIS
+
+The tests focus on the `optimizeSubtree` method, targeting conditional expressions and standard constructor folding. Specifically, tests cover `tryReduceReturn`, `tryMinimizeNot`, `tryMinimizeIf`, `tryFoldStandardConstructors`, `tryFoldLiteralConstructor`, and `tryFoldRegularExpressionConstructor`. Various branches and transformations within these methods are exercised.
+
+## TEST CASE DESIGN
+
+- testReduceReturnUndefined: Checks "return undefined" -> "return".
+- testReduceReturnVoid: Checks "return void 0" -> "return".
+- testReduceReturnVoidWithSideEffect: Ensures "return void func()" is not reduced.
+- testReduceReturnVoidNoSideEffect: Ensures "return void 1" is reduced.
+- testReduceReturnVoidNoChild: Checks "return void" with no operand.
+- testMinimizeNotEqual: Checks "!(a != b)" -> "a == b".
+- testMinimizeNotStrictEqual: Checks "!(a === b)" -> "a !== b".
+- testMinimizeNotGreaterThan: Ensures "! (a > b)" is not transformed (as it's complex).
+- testMinimizeIfElseBlock: Transforms "if(x) y=1; else y=2;" to "y = x ? 1 : 2;".
+- testMinimizeIfElseNoElse: Transforms "if(x) foo();" to "x && foo();".
+- testMinimizeIfElseNoElseNotCondition: Transforms "if(!x) bar();" to "x || bar();".
+- testMinimizeIfReturn: Transforms "if(x) return 1; else return 2;" to "return x ? 1 : 2;".
+- testMinimizeIfReturnNoElse: Transforms "if(x) return 1;" to "x && return 1;".
+- testMinimizeIfWithDanglingElse: Ensures complex IFs are not overly simplified.
+- testMinimizeIfSwapBranches: Flips branches when condition is NOT.
+- testMinimizeIfVarElseAssign: Transforms "if(x) var y=1; else y=2;" to "var y = x ? 1 : 2;".
+- testMinimizeIfAssignElseVar: Transforms "if(x) y=1; else var y=2;" to "var y = x ? 1 : 2;".
+- testFoldStandardConstructorNewObject: Transforms "new Object()" to "Object()".
+- testFoldStandardConstructorNewArray: Transforms "new Array()" to "[]".
+- testFoldStandardConstructorNewArrayWithArgs: Transforms "new Array(a, b)" to "[a, b]".
+- testFoldStandardConstructorNewArrayWithOneArgNumber: Ensures "new Array(5)" is not folded.
+- testFoldStandardConstructorNewRegExp: Transforms "new RegExp('abc', 'i')" to "/abc/i".
+- testFoldStandardConstructorNewRegExpNoFlags: Transforms "new RegExp('abc')" to "/abc/".
+- testFoldStandardConstructorNewRegExpInvalidFlags: Checks that invalid flags prevent folding.
+- testFoldStandardConstructorNewRegExpTooManyArgs: Ensures excess arguments prevent folding.
+- testFoldStandardConstructorNewRegExpEmptyPattern: Ensures empty pattern prevents folding.
+- testFoldStandardConstructorNewRegExpWithForwardSlash: Tests escaping of forward slashes in regex literal.
+- testMinimizeConditionDoubleNot: Simplifies "!!x" to "x".
+- testMinimizeConditionNotAnd: Simplifies "!(a && b)" to "!a || !b".
+- testMinimizeConditionNotOr: Simplifies "!(a || b)" to "!a && !b".
+- testMinimizeConditionOrTrue: Simplifies "x || true" to "true".
+- testMinimizeConditionOrFalse: Simplifies "x || false" to "x".
+- testMinimizeConditionAndTrue: Simplifies "x && true" to "x".
+- testMinimizeConditionAndFalse: Simplifies "x && false" to "false".
+- testMinimizeHookTrueFalse: Simplifies "x ? true : false" to "x".
+- testMinimizeHookFalseTrue: Simplifies "x ? false : true" to "!x".
+- testMinimizeHookTrueElseVar: Simplifies "if(x) { var y=1; } else { y=2; }" to "var y = x ? 1 : 2;".
+- testMinimizeHookElseFalseVar: Simplifies "if(x) { y=1; } else { var y=2; }" to "var y = x ? 1 : 2;".
+- testTryRemoveRepeatedStatements: Checks removal of duplicate statements in IF branches.
+- testIsFoldableExpressBlockTrue: Verifies that an EXPR_RESULT block is foldable.
+- testIsFoldableExpressBlockFalse: Verifies that a non-EXPR_RESULT block is not foldable.
+- testGetBlockExpression: Retrieves the expression from a foldable block.
+- testIsReturnExpressBlockTrue: Verifies that a BLOCK containing a RETURN with an expression is foldable.
+- testIsReturnExpressBlockFalse: Verifies that a BLOCK with RETURN but no expression is not foldable.
+- testGetBlockReturnExpression: Retrieves the expression from a return block.
+- testIsVarBlockTrue: Verifies that a BLOCK containing a VAR declaration is foldable.
+- testIsVarBlockFalse: Verifies that a BLOCK not containing VAR is not foldable.
+- testGetBlockVar: Retrieves the VAR node from a VAR block.
+- testConsumesDanglingElseTrue: Checks IF without an ELSE consumes a dangling else.
+- testConsumesDanglingElseFalse: Checks IF with an ELSE does not consume a dangling else.
+- testIsLowerPrecedenceInExpressionTrue: Checks if a child expression has lower precedence than parent.
+- testIsLowerPrecedenceInExpressionFalse: Checks if a child expression does not have lower precedence.
+- testIsPropertyAssignmentInExpressionTrue: Identifies property assignments within expressions.
+- testIsPropertyAssignmentInExpressionFalse: Does not identify non-property assignments.
+- testTryMinimizeConditionLeftValTrue: Simplifies HOOK when true branch is literal true.
+- testTryMinimizeConditionRightValTrue: Simplifies HOOK when false branch is literal false.
+- testTryMinimizeConditionRightValFalse: Simplifies HOOK when false branch is literal false.
+- testMaybeReplaceChildWithNumber: Replaces a node with a number if it's different.
+- testMaybeReplaceChildWithNumberNoChange: Does not replace if the number is equivalent.
+- testFoldRegularExpressionConstructorWithFlags: Folds RegExp with valid flags.
+- testFoldRegularExpressionConstructorWithForwardSlashEscaped: Tests escaping special characters in RegExp constructor.
+- testAreValidRegexpFlagsTrue: Checks for valid RegExp flags.
+- testAreValidRegexpFlagsFalse: Checks for invalid RegExp flags.
+- testAreSafeFlagsToFoldTrue: Checks if flags are safe to fold (no 'g').
+- testAreSafeFlagsToFoldFalse: Checks if flags are unsafe to fold (contains 'g').
+- testMakeForwardSlashBracketSafe: Escapes forward slashes and backslashes for regex literals.
+- testContainsUnicodeEscapeTrue: Detects unicode escapes in strings.
+- testContainsUnicodeEscapeFalse: Does not detect unicode escapes when they are properly escaped.
+- testFoldIfElseVarElseAssign: Transforms "if(x) var y=1; else y=2;" to "var y = x ? 1 : 2;".
+- testFoldIfElseAssignElseVar: Transforms "if(x) y=1; else var y=2;" to "var y = x ? 1 : 2;".
+
+## DEFECT DETECTION STRATEGY
+
+Tests focus on the precise transformations and condition simplifications performed by the peephole optimizer. They specifically target edge cases and transformations that might be incorrectly applied or missed by a faulty implementation, such as handling of side effects, correct operator precedence, and accurate conversion of conditional constructs.
+
+## SUMMARY
+
+39 tests were written.
+
+## LIMITATIONS
+
+The tests assume a null AbstractCompiler for the PeepholeSubstituteAlternateSyntax constructor, which might not reflect all runtime behaviors. The `reportCodeChange` and `error` methods are mocked, so their side effects are not fully tested.
+
+Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

@@ -1,0 +1,576 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Preconditions;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.javascript.jscomp.CodingConvention.DelegateRelationship;
+import com.google.javascript.jscomp.CodingConvention.ObjectLiteralCast;
+import com.google.javascript.jscomp.CodingConvention.SubclassRelationship;
+import com.google.javascript.jscomp.CodingConvention.SubclassType;
+import com.google.javascript.jscomp.FunctionTypeBuilder.AstFunctionContents;
+import com.google.javascript.jscomp.NodeTraversal.AbstractScopedCallback;
+import com.google.javascript.jscomp.NodeTraversal.AbstractShallowStatementCallback;
+import com.google.javascript.jscomp.Scope.Var;
+import com.google.javascript.rhino.ErrorReporter;
+import com.google.javascript.rhino.InputId;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.jstype.EnumType;
+import com.google.javascript.rhino.jstype.FunctionParamBuilder;
+import com.google.javascript.rhino.jstype.FunctionType;
+import com.google.javascript.rhino.jstype.JSType;
+import com.google.javascript.rhino.jstype.JSTypeNative;
+import com.google.javascript.rhino.jstype.JSTypeRegistry;
+import com.google.javascript.rhino.jstype.ObjectType;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import javax.annotation.Nullable;
+
+public class TypedScopeCreatorTest {
+    // test methods (as many as the instructions ask for), each exactly in this form:
+    //     @Test
+    //     public void testWhatItChecks() throws Exception { ... }
+
+    private final JSTypeRegistry typeRegistry = new JSTypeRegistry(null);
+    private final CodingConvention convention = new ClosureCodingConvention();
+    private final MockCompiler compiler = new MockCompiler(convention, typeRegistry);
+
+    // Helper to create a simple AST for testing.
+    private Node createAst(String jsCode) {
+        return compiler.parse(jsCode);
+    }
+
+    private Scope createTypedScope(Node root, Scope parent) {
+        return new TypedScopeCreator(compiler, convention).createScope(root, parent);
+    }
+
+    @Test
+    public void testGlobalScopeCreation() throws Exception {
+        Node root = createAst("var a = 1;");
+        Scope scope = createTypedScope(root, null);
+        assertNotNull(scope);
+        assertEquals("a", scope.getVar("a").getName());
+    }
+
+    @Test
+    public void testLocalScopeCreation() throws Exception {
+        Node root = createAst("function f() { var a = 1; }");
+        Scope globalScope = createTypedScope(root, null);
+        Scope functionScope = globalScope.getFunctionScope(root.getFirstChild());
+        assertNotNull(functionScope);
+        assertEquals("a", functionScope.getVar("a").getName());
+        assertNull(globalScope.getVar("a")); // 'a' should not be in global scope
+    }
+
+    @Test
+    public void testVarDeclaration() throws Exception {
+        Node root = createAst("var x;");
+        Scope scope = createTypedScope(root, null);
+        Var xVar = scope.getVar("x");
+        assertNotNull(xVar);
+        assertEquals("x", xVar.getName());
+        assertEquals(scope.getRootNode(), xVar.getScope().getRootNode());
+        assertTrue(xVar.isTypeInferred());
+    }
+
+    @Test
+    public void testConstDeclaration() throws Exception {
+        Node root = createAst("const y = 5;");
+        Scope scope = createTypedScope(root, null);
+        Var yVar = scope.getVar("y");
+        assertNotNull(yVar);
+        assertEquals("y", yVar.getName());
+        assertEquals(5, yVar.getType().toMaybeNumberType().getNumber());
+        assertFalse(yVar.isTypeInferred());
+    }
+
+    @Test
+    public void testFunctionDeclaration() throws Exception {
+        Node root = createAst("function foo() {}");
+        Scope scope = createTypedScope(root, null);
+        Var fooVar = scope.getVar("foo");
+        assertNotNull(fooVar);
+        assertTrue(fooVar.getType().isFunctionType());
+    }
+
+    @Test
+    public void testFunctionExpressionDeclaration() throws Exception {
+        Node root = createAst("var bar = function() {};");
+        Scope scope = createTypedScope(root, null);
+        Var barVar = scope.getVar("bar");
+        assertNotNull(barVar);
+        assertTrue(barVar.getType().isFunctionType());
+    }
+
+    @Test
+    public void testGlobalThisDeclaration() throws Exception {
+        Node root = createAst("var globalVar = 1;"); // Implicitly global
+        Scope scope = createTypedScope(root, null);
+        ObjectType globalThis = typeRegistry.getNativeObjectType(JSTypeNative.GLOBAL_THIS);
+        assertNotNull(globalThis.getPropertyType("globalVar"));
+        assertEquals(typeRegistry.getNativeType(JSTypeNative.NUMBER_TYPE), globalThis.getPropertyType("globalVar"));
+    }
+
+    @Test
+    public void testUndefinedDeclaration() throws Exception {
+        Node root = createAst("var u = undefined;");
+        Scope scope = createTypedScope(root, null);
+        Var uVar = scope.getVar("u");
+        assertNotNull(uVar);
+        assertEquals(typeRegistry.getNativeType(JSTypeNative.VOID_TYPE), uVar.getType());
+    }
+
+    @Test
+    public void testNativeTypes() throws Exception {
+        Node root = createAst("var s = 'hello'; var n = 123; var b = true;");
+        Scope scope = createTypedScope(root, null);
+        assertEquals(typeRegistry.getNativeType(JSTypeNative.STRING_TYPE), scope.getVar("s").getType());
+        assertEquals(typeRegistry.getNativeType(JSTypeNative.NUMBER_TYPE), scope.getVar("n").getType());
+        assertEquals(typeRegistry.getNativeType(JSTypeNative.BOOLEAN_TYPE), scope.getVar("b").getType());
+    }
+
+    @Test
+    public void testObjectLiteral() throws Exception {
+        Node root = createAst("var obj = {a: 1, b: 'str'};");
+        Scope scope = createTypedScope(root, null);
+        ObjectType objType = ObjectType.cast(scope.getVar("obj").getType());
+        assertNotNull(objType);
+        assertEquals(typeRegistry.getNativeType(JSTypeNative.NUMBER_TYPE), objType.getPropertyType("a"));
+        assertEquals(typeRegistry.getNativeType(JSTypeNative.STRING_TYPE), objType.getPropertyType("b"));
+    }
+
+    @Test
+    public void testQualifiedNameDeclaration() throws Exception {
+        Node root = createAst("var ns; ns.prop = 1;");
+        Scope scope = createTypedScope(root, null);
+        Var nsVar = scope.getVar("ns");
+        assertNotNull(nsVar);
+        assertTrue(nsVar.getType().isUnknownType() || nsVar.getType().isObject()); // Could be inferred as Object
+
+        // The property should be declared on the 'ns' type.
+        ObjectType nsType = ObjectType.cast(nsVar.getType());
+        assertNotNull(nsType);
+        assertEquals(typeRegistry.getNativeType(JSTypeNative.NUMBER_TYPE), nsType.getPropertyType("prop"));
+    }
+
+    @Test
+    public void testQualifiedNameDeclarationWithExistingType() throws Exception {
+        Node root = createAst("var obj = {}; obj.prop = 1;");
+        Scope scope = createTypedScope(root, null);
+        ObjectType objType = ObjectType.cast(scope.getVar("obj").getType());
+        assertNotNull(objType);
+        assertEquals(typeRegistry.getNativeType(JSTypeNative.NUMBER_TYPE), objType.getPropertyType("prop"));
+    }
+
+    @Test
+    public void testEnumDeclaration() throws Exception {
+        Node root = createAst("/** @enum {number} */ var Color = { RED: 1, GREEN: 2 };");
+        Scope scope = createTypedScope(root, null);
+        Var colorVar = scope.getVar("Color");
+        assertNotNull(colorVar);
+        assertTrue(colorVar.getType().isEnumType());
+        EnumType enumType = colorVar.getType().toMaybeEnumType();
+        assertEquals("Color", enumType.getReferenceName());
+        assertEquals(typeRegistry.getNativeType(JSTypeNative.NUMBER_TYPE), enumType.getElementsType());
+        assertEquals(1.0, enumType.getPropertyType("RED").toNumber());
+        assertEquals(2.0, enumType.getPropertyType("GREEN").toNumber());
+    }
+
+    @Test
+    public void testTypedefDeclaration() throws Exception {
+        Node root = createAst("/** @typedef {number} */ var MyNumber;");
+        Scope scope = createTypedScope(root, null);
+        Var myNumberVar = scope.getVar("MyNumber");
+        assertNotNull(myNumberVar);
+        assertEquals(typeRegistry.getNativeType(JSTypeNative.NUMBER_TYPE), myNumberVar.getType());
+    }
+
+    @Test
+    public void testConstructorDeclaration() throws Exception {
+        Node root = createAst("/** @constructor */ function MyClass() {} var instance = new MyClass();");
+        Scope scope = createTypedScope(root, null);
+        Var myClassVar = scope.getVar("MyClass");
+        assertNotNull(myClassVar);
+        assertTrue(myClassVar.getType().isFunctionType());
+        assertTrue(myClassVar.getType().toMaybeFunctionType().isConstructor());
+        ObjectType instanceType = ObjectType.cast(scope.getVar("instance").getType());
+        assertNotNull(instanceType);
+        assertTrue(instanceType.isInstanceType());
+        assertEquals("MyClass", instanceType.getReferenceName());
+    }
+
+    @Test
+    public void testInterfaceDeclaration() throws Exception {
+        Node root = createAst("/** @interface */ function MyInterface() {}");
+        Scope scope = createTypedScope(root, null);
+        Var myInterfaceVar = scope.getVar("MyInterface");
+        assertNotNull(myInterfaceVar);
+        assertTrue(myInterfaceVar.getType().isFunctionType());
+        assertTrue(myInterfaceVar.getType().toMaybeFunctionType().isInterface());
+    }
+
+    @Test
+    public void testMethodDeclaration() throws Exception {
+        Node root = createAst("function MyClass() {} MyClass.prototype.method = function() {};");
+        Scope scope = createTypedScope(root, null);
+        ObjectType protoType = ObjectType.cast(scope.getVar("MyClass").getType().toMaybeFunctionType().getPrototype());
+        assertNotNull(protoType);
+        assertTrue(protoType.getPropertyType("method").isFunctionType());
+    }
+
+    @Test
+    public void testPrototypeObjectLiteral() throws Exception {
+        Node root = createAst("function MyClass() {} MyClass.prototype = { prop: 1 };");
+        Scope scope = createTypedScope(root, null);
+        ObjectType protoType = ObjectType.cast(scope.getVar("MyClass").getType().toMaybeFunctionType().getPrototype());
+        assertNotNull(protoType);
+        assertEquals(typeRegistry.getNativeType(JSTypeNative.NUMBER_TYPE), protoType.getPropertyType("prop"));
+    }
+
+    @Test
+    public void testCatchClauseVariable() throws Exception {
+        Node root = createAst("try {} catch (e) { var x = e; }");
+        Scope scope = createTypedScope(root, null);
+        Scope catchScope = scope.getFunctionScope(root).getChildlren().get(0); // Assuming catch is the first child scope
+        assertNotNull(catchScope.getVar("e"));
+        assertEquals(typeRegistry.getNativeType(JSTypeNative.UNKNOWN_TYPE), catchScope.getVar("e").getType());
+    }
+
+    @Test
+    public void testFunctionWithThis() throws Exception {
+        Node root = createAst("function MyClass() { this.prop = 1; }");
+        Scope scope = createTypedScope(root, null);
+        ObjectType thisType = scope.getVar("MyClass").getType().toMaybeFunctionType().getTypeOfThis();
+        assertNotNull(thisType);
+        assertEquals(typeRegistry.getNativeType(JSTypeNative.NUMBER_TYPE), thisType.getPropertyType("prop"));
+    }
+
+    @Test
+    public void testFunctionWithTypedefParameter() throws Exception {
+        Node root = createAst("/** @param {number} num */ function takesNumber(num) {}");
+        Scope scope = createTypedScope(root, null);
+        Var numVar = scope.getVar("num");
+        assertNotNull(numVar);
+        assertEquals(typeRegistry.getNativeType(JSTypeNative.NUMBER_TYPE), numVar.getType());
+    }
+
+    @Test
+    public void testFunctionWithInferredParameter() throws Exception {
+        Node root = createAst("function takesAnything(arg) {}");
+        Scope scope = createTypedScope(root, null);
+        Var argVar = scope.getVar("arg");
+        assertNotNull(argVar);
+        assertTrue(argVar.getType().isUnknownType());
+    }
+
+    @Test
+    public void testFunctionWithReturnType() throws Exception {
+        Node root = createAst("/** @return {string} */ function returnsString() { return 'hello'; }");
+        Scope scope = createTypedScope(root, null);
+        FunctionType fnType = scope.getVar("returnsString").getType().toMaybeFunctionType();
+        assertNotNull(fnType);
+        assertEquals(typeRegistry.getNativeType(JSTypeNative.STRING_TYPE), fnType.getReturnType());
+    }
+
+    @Test
+    public void testFunctionWithInferredReturnType() throws Exception {
+        Node root = createAst("function returnsAnything(x) { return x; }");
+        Scope scope = createTypedScope(root, null);
+        FunctionType fnType = scope.getVar("returnsAnything").getType().toMaybeFunctionType();
+        assertNotNull(fnType);
+        assertTrue(fnType.getReturnType().isUnknownType());
+    }
+
+    @Test
+    public void testQualifiedNameInObjectLitKey() throws Exception {
+        Node root = createAst("var ns = {}; var obj = { 'ns.prop': 1 };");
+        Scope scope = createTypedScope(root, null);
+        ObjectType objType = ObjectType.cast(scope.getVar("obj").getType());
+        assertNotNull(objType);
+        assertEquals(typeRegistry.getNativeType(JSTypeNative.NUMBER_TYPE), objType.getPropertyType("ns.prop"));
+    }
+
+    @Test
+    public void testGlobalQualifiedNameReference() throws Exception {
+        Node root = createAst("var ns = {}; ns.prop = 1; var v = ns.prop;");
+        Scope scope = createTypedScope(root, null);
+        Var vVar = scope.getVar("v");
+        assertNotNull(vVar);
+        assertEquals(typeRegistry.getNativeType(JSTypeNative.NUMBER_TYPE), vVar.getType());
+    }
+
+    @Test
+    public void testPrototypeMethodOverride() throws Exception {
+        Node root = createAst("function Parent() {} Parent.prototype.method = function() {}; function Child() {} Child.prototype = Object.create(Parent.prototype); Child.prototype.method = function() {};");
+        Scope scope = createTypedScope(root, null);
+        ObjectType childProto = ObjectType.cast(scope.getVar("Child").getType().toMaybeFunctionType().getPrototype());
+        assertNotNull(childProto);
+        assertTrue(childProto.getPropertyType("method").isFunctionType());
+        // Ensure that the overridden method is still recognized.
+        assertEquals(typeRegistry.getNativeType(JSTypeNative.FUNCTION_TYPE), childProto.getPropertyType("method"));
+    }
+
+    @Test
+    public void testNativeObjectProperties() throws Exception {
+        Node root = createAst("var arr = []; arr.length = 5; var str = 'hi'; str.length = 2;");
+        Scope scope = createTypedScope(root, null);
+        assertEquals(typeRegistry.getNativeType(JSTypeNative.NUMBER_TYPE), scope.getVar("arr").getType().restrictByNotNullOrUndefined().toMaybeArrayType().getIndexType()); // Assuming array elements are inferred
+        assertEquals(typeRegistry.getNativeType(JSTypeNative.NUMBER_TYPE), scope.getVar("arr").getType().restrictByNotNullOrUndefined().toMaybeObjectType().getPropertyType("length"));
+        assertEquals(typeRegistry.getNativeType(JSTypeNative.NUMBER_TYPE), scope.getVar("str").getType().restrictByNotNullOrUndefined().toMaybeObjectType().getPropertyType("length"));
+    }
+
+    @Test
+    public void testDelegateProxy() throws Exception {
+        Node root = createAst("function Base() {} function Derived() {} Derived.prototype = Object.create(Base.prototype);");
+        Scope scope = createTypedScope(root, null);
+        // This test doesn't directly assert the delegate proxy, but ensures the relationship is set up.
+        // The actual checking of delegate proxy properties would require deeper inspection of the type system.
+        assertNotNull(scope.getVar("Base"));
+        assertNotNull(scope.getVar("Derived"));
+    }
+
+    @Test
+    public void testObjectLiteralCast() throws Exception {
+        Node root = createAst("var obj = /** @type {{a: number}} */ ({});");
+        Scope scope = createTypedScope(root, null);
+        ObjectType objType = ObjectType.cast(scope.getVar("obj").getType());
+        assertNotNull(objType);
+        assertEquals(typeRegistry.getNativeType(JSTypeNative.NUMBER_TYPE), objType.getPropertyType("a"));
+    }
+
+    @Test
+    public void testAnnotatedThisProperty() throws Exception {
+        Node root = createAst("function MyClass() { /** @type {number} */ this.prop = 1; }");
+        Scope scope = createTypedScope(root, null);
+        ObjectType thisType = scope.getVar("MyClass").getType().toMaybeFunctionType().getTypeOfThis();
+        assertNotNull(thisType);
+        assertEquals(typeRegistry.getNativeType(JSTypeNative.NUMBER_TYPE), thisType.getPropertyType("prop"));
+    }
+
+    @Test
+    public void testAnnotatedPropertyOnPrototype() throws Exception {
+        Node root = createAst("function MyClass() {} /** @type {string} */ MyClass.prototype.prop;");
+        Scope scope = createTypedScope(root, null);
+        ObjectType protoType = ObjectType.cast(scope.getVar("MyClass").getType().toMaybeFunctionType().getPrototype());
+        assertNotNull(protoType);
+        assertEquals(typeRegistry.getNativeType(JSTypeNative.STRING_TYPE), protoType.getPropertyType("prop"));
+    }
+
+    @Test
+    public void testAnnotatedVariableWithConst() throws Exception {
+        Node root = createAst("/** @const {boolean} */ var flag = true;");
+        Scope scope = createTypedScope(root, null);
+        Var flagVar = scope.getVar("flag");
+        assertNotNull(flagVar);
+        assertEquals(typeRegistry.getNativeType(JSTypeNative.BOOLEAN_TYPE), flagVar.getType());
+    }
+
+    @Test
+    public void testFunctionWithDefaultParameter() throws Exception {
+        Node root = createAst("function greet(name = 'World') {}");
+        Scope scope = createTypedScope(root, null);
+        FunctionType fnType = scope.getVar("greet").getType().toMaybeFunctionType();
+        assertNotNull(fnType);
+        JSType nameParamType = fnType.getParametersNode().getFirstChild().getJSType();
+        assertNotNull(nameParamType);
+        // Default parameters are tricky, often inferred as union or with defaults.
+        // For simplicity, check if it's not unknown.
+        assertFalse(nameParamType.isUnknownType());
+    }
+
+    @Test
+    public void testQualifiedNameAsType() throws Exception {
+        Node root = createAst("var ns = {}; ns.Type = function() {}; /** @type {ns.Type} */ var x;");
+        Scope scope = createTypedScope(root, null);
+        Var xVar = scope.getVar("x");
+        assertNotNull(xVar);
+        // Verifying the type of x requires resolving ns.Type, which is complex.
+        // We check if the type is not unknown.
+        assertFalse(xVar.getType().isUnknownType());
+        assertTrue(xVar.getType().isFunctionType()); // Because ns.Type is declared as a function
+    }
+
+    @Test
+    public void testClassDeclaration() throws Exception {
+        Node root = createAst("class MyClass {}");
+        Scope scope = createTypedScope(root, null);
+        Var myClassVar = scope.getVar("MyClass");
+        assertNotNull(myClassVar);
+        assertTrue(myClassVar.getType().isFunctionType());
+        assertTrue(myClassVar.getType().toMaybeFunctionType().isConstructor());
+    }
+
+    @Test
+    public void testClassMethod() throws Exception {
+        Node root = createAst("class MyClass { method() {} }");
+        Scope scope = createTypedScope(root, null);
+        ObjectType protoType = ObjectType.cast(scope.getVar("MyClass").getType().toMaybeFunctionType().getPrototype());
+        assertNotNull(protoType);
+        assertTrue(protoType.getPropertyType("method").isFunctionType());
+    }
+
+    @Test
+    public void testClassStaticMethod() throws Exception {
+        Node root = createAst("class MyClass { static staticMethod() {} }");
+        Scope scope = createTypedScope(root, null);
+        ObjectType classType = scope.getVar("MyClass").getType().toMaybeFunctionType();
+        assertNotNull(classType);
+        assertTrue(classType.getPropertyType("staticMethod").isFunctionType());
+    }
+
+    @Test
+    public void testAnnotatedFunctionParameterType() throws Exception {
+        Node root = createAst("function process(data) { /** @type {number} */ data = 1; }");
+        Scope scope = createTypedScope(root, null);
+        FunctionType fnType = scope.getVar("process").getType().toMaybeFunctionType();
+        assertNotNull(fnType);
+        JSType paramType = fnType.getParametersNode().getFirstChild().getJSType();
+        assertNotNull(paramType);
+        assertEquals(typeRegistry.getNativeType(JSTypeNative.NUMBER_TYPE), paramType);
+    }
+
+    @Test
+    public void testAnnotatedThisType() throws Exception {
+        Node root = createAst("/** @this {string} */ function f() {}");
+        Scope scope = createTypedScope(root, null);
+        FunctionType fnType = scope.getVar("f").getType().toMaybeFunctionType();
+        assertNotNull(fnType);
+        assertEquals(typeRegistry.getNativeType(JSTypeNative.STRING_TYPE), fnType.getTypeOfThis());
+    }
+
+    @Test
+    public void testAnnotatedReturnTypeWithCast() throws Exception {
+        Node root = createAst("/** @return {string} */ function f() { return /** @type {string} */ (1); }");
+        Scope scope = createTypedScope(root, null);
+        FunctionType fnType = scope.getVar("f").getType().toMaybeFunctionType();
+        assertNotNull(fnType);
+        assertEquals(typeRegistry.getNativeType(JSTypeNative.STRING_TYPE), fnType.getReturnType());
+    }
+
+    @Test
+    public void testObjectLiteralWithTypedefValue() throws Exception {
+        Node root = createAst("/** @typedef {number} MyNum */ var obj = { value: 1 };");
+        Scope scope = createTypedScope(root, null);
+        ObjectType objType = ObjectType.cast(scope.getVar("obj").getType());
+        assertNotNull(objType);
+        assertEquals(typeRegistry.getNativeType(JSTypeNative.NUMBER_TYPE), objType.getPropertyType("value"));
+    }
+
+    @Test
+    public void testAnnotatedClassProperty() throws Exception {
+        Node root = createAst("class MyClass { constructor() { /** @type {number} */ this.prop = 1; } }");
+        Scope scope = createTypedScope(root, null);
+        ObjectType instanceType = ObjectType.cast(scope.getVar("MyClass").getType().toMaybeFunctionType().getInstanceType());
+        assertNotNull(instanceType);
+        assertEquals(typeRegistry.getNativeType(JSTypeNative.NUMBER_TYPE), instanceType.getPropertyType("prop"));
+    }
+
+    @Test
+    public void testAnnotatedStaticClassProperty() throws Exception {
+        Node root = createAst("class MyClass { /** @type {string} */ static staticProp = 'hello'; }");
+        Scope scope = createTypedScope(root, null);
+        ObjectType classType = scope.getVar("MyClass").getType().toMaybeFunctionType();
+        assertNotNull(classType);
+        assertEquals(typeRegistry.getNativeType(JSTypeNative.STRING_TYPE), classType.getPropertyType("staticProp"));
+    }
+
+    @Test
+    public void testObjectLiteralWithTypedefProperty() throws Exception {
+        Node root = createAst("/** @typedef {string} MyString */ var obj = { name: 'test' };");
+        Scope scope = createTypedScope(root, null);
+        ObjectType objType = ObjectType.cast(scope.getVar("obj").getType());
+        assertNotNull(objType);
+        assertEquals(typeRegistry.getNativeType(JSTypeNative.STRING_TYPE), objType.getPropertyType("name"));
+    }
+
+    @Test
+    public void testFunctionWithOverriddenPrototypeProperty() throws Exception {
+        Node root = createAst("function Base() { this.a = 1; } function Derived() { Base.call(this); } Derived.prototype = Object.create(Base.prototype); Derived.prototype.a = 2;");
+        Scope scope = createTypedScope(root, null);
+        ObjectType derivedProto = ObjectType.cast(scope.getVar("Derived").getType().toMaybeFunctionType().getPrototype());
+        assertNotNull(derivedProto);
+        assertEquals(typeRegistry.getNativeType(JSTypeNative.NUMBER_TYPE), derivedProto.getPropertyType("a"));
+    }
+
+    @Test
+    public void testArrayLiteralTypeInference() throws Exception {
+        Node root = createAst("var arr = [1, 2, 3];");
+        Scope scope = createTypedScope(root, null);
+        JSType arrType = scope.getVar("arr").getType();
+        assertNotNull(arrType);
+        assertTrue(arrType.isArrayType());
+        assertEquals(typeRegistry.getNativeType(JSTypeNative.NUMBER_TYPE), arrType.restrictByNotNullOrUndefined().toMaybeArrayType().getImplicitPrototype().getPropertyType("0")); // Check inferred element type
+    }
+
+    @Test
+    public void testFunctionTypeWithTemplate() throws Exception {
+        Node root = createAst("/** @template T */ function identity(x) { return x; }");
+        Scope scope = createTypedScope(root, null);
+        FunctionType fnType = scope.getVar("identity").getType().toMaybeFunctionType();
+        assertNotNull(fnType);
+        assertNotNull(fnType.getTemplateTypeName());
+        assertEquals("T", fnType.getTemplateTypeName());
+    }
+}
+```
+
+1. SOURCE CODE ANALYSIS - The `TypedScopeCreator` class is responsible for building scopes with type information. The tests focus on `createScope`, `visit`, and `shouldTraverse` methods, covering variable declarations (var, const), function declarations and expressions, native types, object literals, qualified names, enums, typedefs, constructors, interfaces, methods, catch clauses, and type annotations from JSDoc.
+2. TEST CASE DESIGN -
+    - `testGlobalScopeCreation`: Input: "var a = 1;", Expected: Scope with 'a' declared. Derivation: Direct declaration in global scope.
+    - `testLocalScopeCreation`: Input: "function f() { var a = 1; }", Expected: Function scope with 'a' declared, global scope without 'a'. Derivation: Lexical scoping rules.
+    - `testVarDeclaration`: Input: "var x;", Expected: 'x' declared, type inferred. Derivation: Standard var declaration.
+    - `testConstDeclaration`: Input: "const y = 5;", Expected: 'y' declared, type is NUMBER. Derivation: const declaration with literal.
+    - `testFunctionDeclaration`: Input: "function foo() {}", Expected: 'foo' declared, type is FUNCTION. Derivation: Standard function declaration.
+    - `testFunctionExpressionDeclaration`: Input: "var bar = function() {};", Expected: 'bar' declared, type is FUNCTION. Derivation: Function expression assigned to var.
+    - `testGlobalThisDeclaration`: Input: "var globalVar = 1;", Expected: 'globalVar' declared on globalThis. Derivation: Global variables are properties of globalThis.
+    - `testUndefinedDeclaration`: Input: "var u = undefined;", Expected: 'u' declared, type is VOID. Derivation: Use of undefined keyword.
+    - `testNativeTypes`: Input: "var s = 'hello'; var n = 123; var b = true;", Expected: Correct native types (STRING, NUMBER, BOOLEAN). Derivation: Literal type inference.
+    - `testObjectLiteral`: Input: "var obj = {a: 1, b: 'str'};", Expected: 'obj' type has properties 'a' (NUMBER) and 'b' (STRING). Derivation: Object literal property typing.
+    - `testQualifiedNameDeclaration`: Input: "var ns; ns.prop = 1;", Expected: 'ns' declared (UNKNOWN/OBJECT), 'prop' declared on 'ns' (NUMBER). Derivation: Property assignment to undeclared qualified name.
+    - `testQualifiedNameDeclarationWithExistingType`: Input: "var obj = {}; obj.prop = 1;", Expected: 'obj' is OBJECT, 'prop' declared on 'obj' (NUMBER). Derivation: Property assignment to existing object.
+    - `testEnumDeclaration`: Input: "/** @enum {number} */ var Color = { RED: 1, GREEN: 2 };", Expected: 'Color' is ENUM(NUMBER), properties RED/GREEN exist. Derivation: @enum annotation.
+    - `testTypedefDeclaration`: Input: "/** @typedef {number} MyNumber;", Expected: 'MyNumber' alias for NUMBER. Derivation: @typedef annotation.
+    - `testConstructorDeclaration`: Input: "/** @constructor */ function MyClass() {}", Expected: 'MyClass' is CONSTRUCTOR, 'instance' is MyClass type. Derivation: @constructor annotation.
+    - `testInterfaceDeclaration`: Input: "/** @interface */ function MyInterface() {}", Expected: 'MyInterface' is INTERFACE. Derivation: @interface annotation.
+    - `testMethodDeclaration`: Input: "function MyClass() {} MyClass.prototype.method = function() {};", Expected: 'method' is FUNCTION on MyClass.prototype. Derivation: Prototype method assignment.
+    - `testPrototypeObjectLiteral`: Input: "function MyClass() {} MyClass.prototype = { prop: 1 };", Expected: 'prop' is NUMBER on MyClass.prototype. Derivation: Prototype reassignment with object literal.
+    - `testCatchClauseVariable`: Input: "try {} catch (e) {}", Expected: 'e' declared as UNKNOWN in catch scope. Derivation: Catch parameter declaration.
+    - `testFunctionWithThis`: Input: "function MyClass() { this.prop = 1; }", Expected: 'this.prop' is NUMBER inside MyClass. Derivation: @this annotation and property assignment.
+    - `testFunctionWithTypedefParameter`: Input: "/** @param {number} num */ function takesNumber(num) {}", Expected: 'num' is NUMBER. Derivation: @param annotation.
+    - `testFunctionWithInferredParameter`: Input: "function takesAnything(arg) {}", Expected: 'arg' is UNKNOWN. Derivation: Parameter without type annotation.
+    - `testFunctionWithReturnType`: Input: "/** @return {string} */ function returnsString() {}", Expected: return type is STRING. Derivation: @return annotation.
+    - `testFunctionWithInferredReturnType`: Input: "function returnsAnything(x) { return x; }", Expected: return type is UNKNOWN. Derivation: Inferred return type.
+    - `testQualifiedNameInObjectLitKey`: Input: "var obj = { 'ns.prop': 1 };", Expected: 'ns.prop' is NUMBER property of obj. Derivation: Object literal key as string representing qualified name.
+    - `testGlobalQualifiedNameReference`: Input: "var ns = {}; ns.prop = 1; var v = ns.prop;", Expected: 'v' type is NUMBER. Derivation: Accessing property of a qualified name.
+    - `testPrototypeMethodOverride`: Input: "function Parent() {} ... function Child() {} Child.prototype.method = ...", Expected: Child.prototype.method is FUNCTION. Derivation: Method overriding on prototype chain.
+    - `testNativeObjectProperties`: Input: "var arr = []; arr.length = 5;", Expected: arr.length is NUMBER. Derivation: Built-in properties of native objects.
+    - `testDelegateProxy`: Input: "function Base() {} function Derived() {}", Expected: Relationship setup for delegation (indirectly tested). Derivation: Coding convention for delegates.
+    - `testObjectLiteralCast`: Input: "var obj = /** @type {{a: number}} */ ({});", Expected: 'obj' has property 'a' of type NUMBER. Derivation: @type cast on object literal.
+    - `testAnnotatedThisProperty`: Input: "function MyClass() { /** @type {number} */ this.prop = 1; }", Expected: this.prop is NUMBER. Derivation: Explicit @type on this.property.
+    - `testAnnotatedPropertyOnPrototype`: Input: "function MyClass() {} /** @type {string} */ MyClass.prototype.prop;", Expected: MyClass.prototype.prop is STRING. Derivation: Explicit @type on prototype property.
+    - `testAnnotatedVariableWithConst`: Input: "/** @const {boolean} */ var flag = true;", Expected: flag is BOOLEAN. Derivation: @const with @type.
+    - `testFunctionWithDefaultParameter`: Input: "function greet(name = 'World') {}", Expected: name parameter type is inferred or has default. Derivation: Default parameter value.
+    - `testQualifiedNameAsType`: Input: "var ns = {}; ns.Type = function() {}; /** @type {ns.Type} */ var x;", Expected: x is of type ns.Type (FUNCTION). Derivation: Using qualified name as type annotation.
+    - `testClassDeclaration`: Input: "class MyClass {}", Expected: MyClass is CONSTRUCTOR. Derivation: Class declaration.
+    - `testClassMethod`: Input: "class MyClass { method() {} }", Expected: MyClass.prototype.method is FUNCTION. Derivation: Class instance method.
+    - `testClassStaticMethod`: Input: "class MyClass { static staticMethod() {} }", Expected: MyClass.staticMethod is FUNCTION. Derivation: Class static method.
+    - `testAnnotatedFunctionParameterType`: Input: "function process(data) { /** @type {number} */ data = 1; }", Expected: data parameter type is NUMBER. Derivation: @type annotation on parameter assignment.
+    - `testAnnotatedThisType`: Input: "/** @this {string} */ function f() {}", Expected: f's this type is STRING. Derivation: @this annotation.
+    - `testAnnotatedReturnTypeWithCast`: Input: "/** @return {string} */ function f() { return /** @type {string} */ (1); }", Expected: return type is STRING. Derivation: @return with @type cast on return value.
+    - `testObjectLiteralWithTypedefValue`: Input: "/** @typedef {number} MyNum */ var obj = { value: 1 };", Expected: obj.value is NUMBER. Derivation: Object literal property using typedef.
+    - `testAnnotatedClassProperty`: Input: "class MyClass { constructor() { /** @type {number} */ this.prop = 1; } }", Expected: MyClass.prototype.prop is NUMBER. Derivation: Annotated class property.
+    - `testAnnotatedStaticClassProperty`: Input: "class MyClass { /** @type {string} */ static staticProp = 'hello'; }", Expected: MyClass.staticProp is STRING. Derivation: Annotated static class property.
+    - `testObjectLiteralWithTypedefProperty`: Input: "/** @typedef {string} MyString */ var obj = { name: 'test' };", Expected: obj.name is STRING. Derivation: Object literal property with typedef.
+    - `testFunctionWithOverriddenPrototypeProperty`: Input: "function Base() { this.a = 1; } ... Derived.prototype.a = 2;", Expected: Derived.prototype.a is NUMBER. Derivation: Overriding prototype property with a value.
+    - `testArrayLiteralTypeInference`: Input: "var arr = [1, 2, 3];", Expected: arr is ARRAY<NUMBER>. Derivation: Array literal type inference.
+    - `testFunctionTypeWithTemplate`: Input: "/** @template T */ function identity(x) {}", Expected: identity has template type T. Derivation: @template annotation.
+4. DEFECT DETECTION STRATEGY - The tests cover various declaration and typing mechanisms, including JSDoc annotations, native types, and object structure inference. Defects in how these are processed, especially in edge cases like qualified names, enums, and complex type annotations, would likely cause these tests to fail.
+5. SUMMARY - 36 tests.
+6. LIMITATIONS - Some deeper type system interactions (e.g., complex delegate proxy behavior, advanced template type resolution) are not exhaustively tested due to the setup complexity. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

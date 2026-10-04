@@ -1,0 +1,92 @@
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Preconditions;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.common.collect.Sets;
+import com.google.javascript.jscomp.NodeTraversal.AbstractPostOrderCallback;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+public class ProcessClosurePrimitivesTest {
+    @Test
+    public void testDeclarationIsPresent() throws Exception {
+        assertNotNull(ProcessClosurePrimitives.class);
+    }
+
+    @Test
+    public void testDiagnosticForNullArgumentIsDefined() throws Exception {
+        assertEquals("JSC_NULL_ARGUMENT_ERROR",
+                ProcessClosurePrimitives.NULL_ARGUMENT_ERROR.key);
+    }
+
+    @Test
+    public void testDiagnosticForInvalidArgumentIsDefined() throws Exception {
+        assertEquals("JSC_INVALID_ARGUMENT_ERROR",
+                ProcessClosurePrimitives.INVALID_ARGUMENT_ERROR.key);
+    }
+
+    @Test
+    public void testDiagnosticForTooManyArgumentsIsDefined() throws Exception {
+        assertEquals("JSC_TOO_MANY_ARGUMENTS_ERROR",
+                ProcessClosurePrimitives.TOO_MANY_ARGUMENTS_ERROR.key);
+    }
+
+    @Test
+    public void testDiagnosticForDuplicateNamespaceIsDefined() throws Exception {
+        assertEquals("JSC_DUPLICATE_NAMESPACE_ERROR",
+                ProcessClosurePrimitives.DUPLICATE_NAMESPACE_ERROR.key);
+    }
+
+    @Test
+    public void testDiagnosticForFunctionNamespaceIsDefined() throws Exception {
+        assertEquals("JSC_FUNCTION_NAMESPACE_ERROR",
+                ProcessClosurePrimitives.FUNCTION_NAMESPACE_ERROR.key);
+    }
+
+    @Test
+    public void testDiagnosticForMissingProvideIsDefined() throws Exception {
+        assertEquals("JSC_MISSING_PROVIDE_ERROR",
+                ProcessClosurePrimitives.MISSING_PROVIDE_ERROR.key);
+    }
+
+    @Test
+    public void testDiagnosticForLateProvideIsDefined() throws Exception {
+        assertEquals("JSC_LATE_PROVIDE_ERROR",
+                ProcessClosurePrimitives.LATE_PROVIDE_ERROR.key);
+    }
+
+    @Test
+    public void testDiagnosticForInvalidProvideIsDefined() throws Exception {
+        assertEquals("JSC_INVALID_PROVIDE_ERROR",
+                ProcessClosurePrimitives.INVALID_PROVIDE_ERROR.key);
+    }
+
+    @Test
+    public void testDiagnosticForCrossModuleRequireIsDefined() throws Exception {
+        assertEquals("JSC_XMODULE_REQUIRE_ERROR",
+                ProcessClosurePrimitives.XMODULE_REQUIRE_ERROR.key);
+    }
+
+    @Test
+    public void testDiagnosticForCssMappingIsDefined() throws Exception {
+        assertEquals("JSC_NON_STRING_PASSED_TO_SET_CSS_NAME_MAPPING_ERROR",
+                ProcessClosurePrimitives.NON_STRING_PASSED_TO_SET_CSS_NAME_MAPPING_ERROR.key);
+    }
+
+    @Test
+    public void testDiagnosticForBaseClassIsDefined() throws Exception {
+        assertEquals("JSC_BASE_CLASS_ERROR",
+                ProcessClosurePrimitives.BASE_CLASS_ERROR.key);
+    }
+
+    @Test
+    public void testGoogNamespaceIsDefined() throws Exception {
+        assertEquals("goog", ProcessClosurePrimitives.GOOG);
+    }
+}

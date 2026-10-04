@@ -1,0 +1,1418 @@
+```java
+package org.jsoup.parser;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import org.jsoup.helper.DescendableLinkedList;
+import org.jsoup.helper.StringUtil;
+import org.jsoup.nodes.*;
+import java.util.Iterator;
+import java.util.LinkedList;
+
+public class HtmlTreeBuilderStateTest {
+
+    // Helper to create a basic HTMLTreeBuilder and set its state
+    private HtmlTreeBuilder createTreeBuilder(HtmlTreeBuilderState state) {
+        HtmlTreeBuilder tb = new HtmlTreeBuilder();
+        tb.initialiseParse("test", "http://example.com/", ParseErrorList.noParseErrors());
+        tb.transition(state);
+        return tb;
+    }
+
+    // Helper to create a Tokeniser for testing
+    private Tokeniser createTokeniser(String input) {
+        return new Tokeniser(new CharacterReader(input), ParseErrorList.noParseErrors());
+    }
+
+    // Helper to create a Token and advance the tokeniser
+    private Token nextToken(Tokeniser tokeniser) {
+        return tokeniser.readNextToken();
+    }
+
+    // Helper to create a simple Doctype token
+    private Token.Doctype createDoctypeToken(String name, String publicId, String systemId) {
+        Token.Doctype doctype = new Token.Doctype(name, publicId, systemId);
+        doctype.setForceQuirks(false); // Default to not quirks mode
+        return doctype;
+    }
+
+    @Test
+    public void testInitialState_Whitespace() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.Initial);
+        Tokeniser tokeniser = createTokeniser("   ");
+        Token t = nextToken(tokeniser);
+        assertTrue(tb.state().process(t, tb));
+        assertEquals(HtmlTreeBuilderState.Initial, tb.state()); // Should remain in Initial state
+    }
+
+    @Test
+    public void testInitialState_Comment() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.Initial);
+        Tokeniser tokeniser = createTokeniser("<!-- comment -->");
+        Token t = nextToken(tokeniser);
+        assertTrue(tb.state().process(t, tb));
+        assertEquals(1, tb.getDocument().childNodes().size());
+        assertTrue(tb.getDocument().childNodes().get(0) instanceof Comment);
+        assertEquals(" comment ", ((Comment) tb.getDocument().childNodes().get(0)).getData());
+        assertEquals(HtmlTreeBuilderState.Initial, tb.state()); // Should remain in Initial state
+    }
+
+    @Test
+    public void testInitialState_Doctype() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.Initial);
+        Token.Doctype doctypeToken = createDoctypeToken("html", "-//W3C//DTD XHTML 1.0 Transitional//EN", "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd");
+        assertTrue(tb.state().process(doctypeToken, tb));
+        assertEquals(HtmlTreeBuilderState.BeforeHtml, tb.state());
+        assertEquals(1, tb.getDocument().childNodes().size());
+        assertTrue(tb.getDocument().childNodes().get(0) instanceof DocumentType);
+        DocumentType dt = (DocumentType) tb.getDocument().childNodes().get(0);
+        assertEquals("html", dt.name());
+        assertEquals("-//W3C//DTD XHTML 1.0 Transitional//EN", dt.publicId());
+        assertEquals("http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd", dt.systemId());
+    }
+
+    @Test
+    public void testInitialState_DoctypeForceQuirks() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.Initial);
+        Token.Doctype doctypeToken = createDoctypeToken("html", "-//W3C//DTD XHTML 1.0 Transitional//EN", "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd");
+        doctypeToken.setForceQuirks(true);
+        assertTrue(tb.state().process(doctypeToken, tb));
+        assertEquals(HtmlTreeBuilderState.BeforeHtml, tb.state());
+        assertEquals(Document.QuirksMode.quirks, tb.getDocument().quirksMode());
+    }
+
+    @Test
+    public void testInitialState_OtherToken() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.Initial);
+        Tokeniser tokeniser = createTokeniser("<div></div>"); // StartTag that is not Doctype/Comment/Whitespace
+        Token t = nextToken(tokeniser); // This will be the StartTag for <div>
+        assertTrue(tb.state().process(t, tb));
+        assertEquals(HtmlTreeBuilderState.BeforeHtml, tb.state()); // Should transition to BeforeHtml
+        assertTrue(tb.process(t)); // Re-process the token in BeforeHtml state
+    }
+
+    @Test
+    public void testBeforeHtml_Whitespace() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.BeforeHtml);
+        Tokeniser tokeniser = createTokeniser("   ");
+        Token t = nextToken(tokeniser);
+        assertTrue(tb.state().process(t, tb));
+        assertEquals(HtmlTreeBuilderState.BeforeHtml, tb.state()); // Should ignore whitespace
+    }
+
+    @Test
+    public void testBeforeHtml_Comment() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.BeforeHtml);
+        Tokeniser tokeniser = createTokeniser("<!-- comment -->");
+        Token t = nextToken(tokeniser);
+        assertTrue(tb.state().process(t, tb));
+        assertEquals(HtmlTreeBuilderState.BeforeHtml, tb.state());
+        assertEquals(1, tb.getDocument().childNodes().size());
+        assertTrue(tb.getDocument().childNodes().get(0) instanceof Comment);
+    }
+
+    @Test
+    public void testBeforeHtml_DoctypeError() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.BeforeHtml);
+        Token.Doctype doctypeToken = createDoctypeToken("html", null, null);
+        assertFalse(tb.state().process(doctypeToken, tb)); // Should be an error
+        assertEquals(HtmlTreeBuilderState.BeforeHtml, tb.state()); // Should not transition
+    }
+
+    @Test
+    public void testBeforeHtml_StartTagHtml() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.BeforeHtml);
+        Token.StartTag htmlStartTag = new Token.StartTag("html");
+        assertTrue(tb.state().process(htmlStartTag, tb));
+        assertEquals(HtmlTreeBuilderState.BeforeHead, tb.state());
+        assertEquals(1, tb.getStack().size());
+        assertEquals("html", tb.getStack().getFirst().nodeName());
+    }
+
+    @Test
+    public void testBeforeHtml_EndTagHead() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.BeforeHtml);
+        Token.EndTag headEndTag = new Token.EndTag("head");
+        assertTrue(tb.state().process(headEndTag, tb));
+        assertEquals(HtmlTreeBuilderState.BeforeHead, tb.state()); // anythingElse transitions to BeforeHead
+        // The "anythingElse" method is called, which inserts "html", transitions to BeforeHead, and reprocesses the token.
+        // So we expect the "html" tag to have been inserted.
+        assertEquals(1, tb.getStack().size());
+        assertEquals("html", tb.getStack().getFirst().nodeName());
+        // The original token (EndTag("head")) is then processed in BeforeHead state, which might error or be handled.
+        // For this test, we care about the initial transition and insertion.
+    }
+    
+    @Test
+    public void testBeforeHtml_EndTagBody() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.BeforeHtml);
+        Token.EndTag bodyEndTag = new Token.EndTag("body");
+        assertTrue(tb.state().process(bodyEndTag, tb));
+        assertEquals(HtmlTreeBuilderState.BeforeHead, tb.state()); // anythingElse transitions to BeforeHead
+        assertEquals(1, tb.getStack().size());
+        assertEquals("html", tb.getStack().getFirst().nodeName());
+    }
+
+    @Test
+    public void testBeforeHtml_EndTagHtml() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.BeforeHtml);
+        Token.EndTag htmlEndTag = new Token.EndTag("html");
+        assertTrue(tb.state().process(htmlEndTag, tb));
+        assertEquals(HtmlTreeBuilderState.BeforeHead, tb.state()); // anythingElse transitions to BeforeHead
+        assertEquals(1, tb.getStack().size());
+        assertEquals("html", tb.getStack().getFirst().nodeName());
+    }
+
+    @Test
+    public void testBeforeHtml_EndTagBr() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.BeforeHtml);
+        Token.EndTag brEndTag = new Token.EndTag("br");
+        assertTrue(tb.state().process(brEndTag, tb));
+        assertEquals(HtmlTreeBuilderState.BeforeHead, tb.state()); // anythingElse transitions to BeforeHead
+        assertEquals(1, tb.getStack().size());
+        assertEquals("html", tb.getStack().getFirst().nodeName());
+    }
+
+    @Test
+    public void testBeforeHtml_EndTagOtherError() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.BeforeHtml);
+        Token.EndTag divEndTag = new Token.EndTag("div");
+        assertFalse(tb.state().process(divEndTag, tb)); // Should be an error
+        assertEquals(HtmlTreeBuilderState.BeforeHtml, tb.state()); // Should not transition
+    }
+
+    @Test
+    public void testBeforeHtml_AnythingElse() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.BeforeHtml);
+        Tokeniser tokeniser = createTokeniser("p"); // A token that triggers anythingElse
+        Token t = nextToken(tokeniser); // StartTag for 'p'
+        assertTrue(tb.state().process(t, tb));
+        assertEquals(HtmlTreeBuilderState.BeforeHead, tb.state()); // anythingElse transitions to BeforeHead
+        // The "anythingElse" method inserts "html", transitions to BeforeHead, and reprocesses the token.
+        // So the "p" token should have been processed in BeforeHead state.
+        assertEquals(2, tb.getStack().size()); // html, p
+    }
+
+    @Test
+    public void testBeforeHead_Whitespace() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.BeforeHead);
+        Tokeniser tokeniser = createTokeniser("   ");
+        Token t = nextToken(tokeniser);
+        assertTrue(tb.state().process(t, tb));
+        assertEquals(HtmlTreeBuilderState.BeforeHead, tb.state()); // Ignore whitespace
+    }
+
+    @Test
+    public void testBeforeHead_Comment() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.BeforeHead);
+        tb.insert("html"); // To be in a state where inserting comments is valid
+        Tokeniser tokeniser = createTokeniser("<!-- comment -->");
+        Token t = nextToken(tokeniser);
+        assertTrue(tb.state().process(t, tb));
+        assertEquals(HtmlTreeBuilderState.BeforeHead, tb.state());
+        assertEquals(2, tb.getStack().size()); // html, comment
+        assertTrue(tb.getStack().get(1) instanceof Comment);
+    }
+
+    @Test
+    public void testBeforeHead_DoctypeError() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.BeforeHead);
+        tb.insert("html");
+        Token.Doctype doctypeToken = createDoctypeToken("html", null, null);
+        assertFalse(tb.state().process(doctypeToken, tb));
+        assertEquals(HtmlTreeBuilderState.BeforeHead, tb.state());
+    }
+
+    @Test
+    public void testBeforeHead_StartTagHtml() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.BeforeHead);
+        tb.insert("html");
+        Token.StartTag htmlStartTag = new Token.StartTag("html");
+        assertTrue(tb.state().process(htmlStartTag, tb));
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state()); // Transitions to InBody and reprocesses
+        assertEquals(2, tb.getStack().size()); // html, html
+    }
+
+    @Test
+    public void testBeforeHead_StartTagHead() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.BeforeHead);
+        tb.insert("html");
+        Token.StartTag headStartTag = new Token.StartTag("head");
+        assertTrue(tb.state().process(headStartTag, tb));
+        assertEquals(HtmlTreeBuilderState.InHead, tb.state());
+        assertEquals(2, tb.getStack().size()); // html, head
+        assertEquals("head", tb.getStack().get(1).nodeName());
+        assertEquals(tb.getStack().get(1), tb.getHeadElement());
+    }
+
+    @Test
+    public void testBeforeHead_EndTagHead() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.BeforeHead);
+        tb.insert("html");
+        tb.process(new Token.StartTag("head")); // Manually transition to InHead
+        tb.transition(HtmlTreeBuilderState.BeforeHead); // Reset to BeforeHead to test this path
+        Token.EndTag headEndTag = new Token.EndTag("head");
+        assertTrue(tb.state().process(headEndTag, tb)); // Should insert head and then process end tag
+        assertEquals(HtmlTreeBuilderState.InHead, tb.state()); // Should transition to InHead
+        assertEquals(2, tb.getStack().size()); // html, head
+    }
+
+    @Test
+    public void testBeforeHead_EndTagBody() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.BeforeHead);
+        tb.insert("html");
+        Token.EndTag bodyEndTag = new Token.EndTag("body");
+        assertTrue(tb.state().process(bodyEndTag, tb)); // Should insert head and then process body end tag
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state()); // AfterHead transition
+        assertEquals(2, tb.getStack().size()); // html, body
+    }
+
+    @Test
+    public void testBeforeHead_EndTagHtml() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.BeforeHead);
+        tb.insert("html");
+        Token.EndTag htmlEndTag = new Token.EndTag("html");
+        assertTrue(tb.state().process(htmlEndTag, tb)); // Should insert head and then process html end tag
+        assertEquals(HtmlTreeBuilderState.AfterHead, tb.state()); // AfterHead transition
+        assertEquals(2, tb.getStack().size()); // html, head
+    }
+
+    @Test
+    public void testBeforeHead_EndTagBr() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.BeforeHead);
+        tb.insert("html");
+        Token.EndTag brEndTag = new Token.EndTag("br");
+        assertTrue(tb.state().process(brEndTag, tb)); // Should insert head and then process br end tag
+        assertEquals(HtmlTreeBuilderState.AfterHead, tb.state()); // AfterHead transition
+        assertEquals(2, tb.getStack().size()); // html, head
+    }
+
+    @Test
+    public void testBeforeHead_EndTagOtherError() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.BeforeHead);
+        tb.insert("html");
+        Token.EndTag divEndTag = new Token.EndTag("div");
+        assertFalse(tb.state().process(divEndTag, tb));
+        assertEquals(HtmlTreeBuilderState.BeforeHead, tb.state());
+    }
+
+    @Test
+    public void testBeforeHead_AnythingElse() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.BeforeHead);
+        tb.insert("html");
+        Tokeniser tokeniser = createTokeniser("p"); // A token that triggers anythingElse
+        Token t = nextToken(tokeniser); // StartTag for 'p'
+        assertTrue(tb.state().process(t, tb));
+        assertEquals(HtmlTreeBuilderState.InHead, tb.state()); // Should insert head and then process 'p'
+        assertEquals(3, tb.getStack().size()); // html, head, p
+    }
+
+    @Test
+    public void testInHead_Whitespace() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InHead);
+        tb.insert("html");
+        tb.insert("head");
+        Tokeniser tokeniser = createTokeniser("   ");
+        Token t = nextToken(tokeniser);
+        assertTrue(tb.state().process(t, tb));
+        assertEquals(HtmlTreeBuilderState.InHead, tb.state());
+        assertEquals(3, tb.getStack().size()); // html, head, whitespace char
+        assertTrue(tb.getStack().get(2) instanceof Text);
+        assertEquals("   ", ((Text) tb.getStack().get(2)).wholeText());
+    }
+
+    @Test
+    public void testInHead_Comment() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InHead);
+        tb.insert("html");
+        tb.insert("head");
+        Tokeniser tokeniser = createTokeniser("<!-- comment -->");
+        Token t = nextToken(tokeniser);
+        assertTrue(tb.state().process(t, tb));
+        assertEquals(HtmlTreeBuilderState.InHead, tb.state());
+        assertEquals(3, tb.getStack().size()); // html, head, comment
+        assertTrue(tb.getStack().get(2) instanceof Comment);
+    }
+
+    @Test
+    public void testInHead_DoctypeError() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InHead);
+        tb.insert("html");
+        tb.insert("head");
+        Token.Doctype doctypeToken = createDoctypeToken("html", null, null);
+        assertFalse(tb.state().process(doctypeToken, tb));
+        assertEquals(HtmlTreeBuilderState.InHead, tb.state());
+    }
+
+    @Test
+    public void testInHead_StartTagHtml() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InHead);
+        tb.insert("html");
+        tb.insert("head");
+        Token.StartTag htmlStartTag = new Token.StartTag("html");
+        assertTrue(tb.state().process(htmlStartTag, tb));
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state()); // Transitions to InBody and reprocesses
+        assertEquals(3, tb.getStack().size()); // html, head, html
+    }
+
+    @Test
+    public void testInHead_StartTagBase() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InHead);
+        tb.insert("html");
+        tb.insert("head");
+        Token.StartTag baseStartTag = new Token.StartTag("base", new Attributes(new Attribute("href", "http://example.com/new")));
+        assertTrue(tb.state().process(baseStartTag, tb));
+        assertEquals(HtmlTreeBuilderState.InHead, tb.state());
+        assertEquals(3, tb.getStack().size()); // html, head, base
+        assertEquals("http://example.com/new", tb.getBaseUri()); // Base URI should be updated
+    }
+
+    @Test
+    public void testInHead_StartTagMeta() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InHead);
+        tb.insert("html");
+        tb.insert("head");
+        Token.StartTag metaStartTag = new Token.StartTag("meta");
+        assertTrue(tb.state().process(metaStartTag, tb));
+        assertEquals(HtmlTreeBuilderState.InHead, tb.state());
+        assertEquals(3, tb.getStack().size()); // html, head, meta
+    }
+
+    @Test
+    public void testInHead_StartTagTitle() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InHead);
+        tb.insert("html");
+        tb.insert("head");
+        Token.StartTag titleStartTag = new Token.StartTag("title");
+        assertTrue(tb.state().process(titleStartTag, tb));
+        assertEquals(HtmlTreeBuilderState.Text, tb.state());
+        assertEquals(HtmlTreeBuilderState.InHead, tb.originalState());
+        assertEquals(3, tb.getStack().size()); // html, head, title
+    }
+
+    @Test
+    public void testInHead_StartTagStyle() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InHead);
+        tb.insert("html");
+        tb.insert("head");
+        Token.StartTag styleStartTag = new Token.StartTag("style");
+        assertTrue(tb.state().process(styleStartTag, tb));
+        assertEquals(HtmlTreeBuilderState.Text, tb.state());
+        assertEquals(HtmlTreeBuilderState.InHead, tb.originalState());
+        assertEquals(3, tb.getStack().size()); // html, head, style
+    }
+
+    @Test
+    public void testInHead_StartTagNoscript() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InHead);
+        tb.insert("html");
+        tb.insert("head");
+        Token.StartTag noscriptStartTag = new Token.StartTag("noscript");
+        assertTrue(tb.state().process(noscriptStartTag, tb));
+        assertEquals(HtmlTreeBuilderState.InHeadNoscript, tb.state());
+        assertEquals(3, tb.getStack().size()); // html, head, noscript
+    }
+
+    @Test
+    public void testInHead_StartTagScript() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InHead);
+        tb.insert("html");
+        tb.insert("head");
+        Token.StartTag scriptStartTag = new Token.StartTag("script");
+        assertTrue(tb.state().process(scriptStartTag, tb));
+        assertEquals(HtmlTreeBuilderState.Text, tb.state());
+        assertEquals(HtmlTreeBuilderState.InHead, tb.originalState());
+        assertEquals(3, tb.getStack().size()); // html, head, script
+    }
+
+    @Test
+    public void testInHead_StartTagHeadError() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InHead);
+        tb.insert("html");
+        tb.insert("head");
+        Token.StartTag headStartTag = new Token.StartTag("head");
+        assertFalse(tb.state().process(headStartTag, tb));
+        assertEquals(HtmlTreeBuilderState.InHead, tb.state());
+    }
+
+    @Test
+    public void testInHead_EndTagHead() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InHead);
+        tb.insert("html");
+        tb.insert("head");
+        Token.EndTag headEndTag = new Token.EndTag("head");
+        assertTrue(tb.state().process(headEndTag, tb));
+        assertEquals(HtmlTreeBuilderState.AfterHead, tb.state());
+        assertEquals(2, tb.getStack().size()); // html, head (popped)
+    }
+
+    @Test
+    public void testInHead_EndTagBody() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InHead);
+        tb.insert("html");
+        tb.insert("head");
+        Token.EndTag bodyEndTag = new Token.EndTag("body");
+        assertTrue(tb.state().process(bodyEndTag, tb)); // anythingElse path
+        assertEquals(HtmlTreeBuilderState.AfterHead, tb.state()); // anythingElse transitions to AfterHead
+        assertEquals(3, tb.getStack().size()); // html, head, body
+    }
+
+    @Test
+    public void testInHead_EndTagHtml() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InHead);
+        tb.insert("html");
+        tb.insert("head");
+        Token.EndTag htmlEndTag = new Token.EndTag("html");
+        assertTrue(tb.state().process(htmlEndTag, tb)); // anythingElse path
+        assertEquals(HtmlTreeBuilderState.AfterHead, tb.state()); // anythingElse transitions to AfterHead
+        assertEquals(3, tb.getStack().size()); // html, head, html
+    }
+
+    @Test
+    public void testInHead_EndTagBr() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InHead);
+        tb.insert("html");
+        tb.insert("head");
+        Token.EndTag brEndTag = new Token.EndTag("br");
+        assertTrue(tb.state().process(brEndTag, tb)); // anythingElse path
+        assertEquals(HtmlTreeBuilderState.AfterHead, tb.state()); // anythingElse transitions to AfterHead
+        assertEquals(3, tb.getStack().size()); // html, head, br
+    }
+
+    @Test
+    public void testInHead_EndTagOtherError() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InHead);
+        tb.insert("html");
+        tb.insert("head");
+        Token.EndTag divEndTag = new Token.EndTag("div");
+        assertFalse(tb.state().process(divEndTag, tb));
+        assertEquals(HtmlTreeBuilderState.InHead, tb.state());
+    }
+
+    @Test
+    public void testInHead_AnythingElse() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InHead);
+        tb.insert("html");
+        tb.insert("head");
+        Tokeniser tokeniser = createTokeniser("p"); // A token that triggers anythingElse
+        Token t = nextToken(tokeniser); // StartTag for 'p'
+        assertTrue(tb.state().process(t, tb));
+        assertEquals(HtmlTreeBuilderState.AfterHead, tb.state()); // anythingElse transitions to AfterHead
+        assertEquals(3, tb.getStack().size()); // html, head, p
+    }
+
+    @Test
+    public void testInHeadNoscript_Whitespace() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InHeadNoscript);
+        tb.insert("html");
+        tb.insert("head");
+        tb.insert("noscript");
+        Tokeniser tokeniser = createTokeniser("   ");
+        Token t = nextToken(tokeniser);
+        assertTrue(tb.state().process(t, tb));
+        assertEquals(HtmlTreeBuilderState.InHead, tb.state()); // Transitions to InHead and reprocesses
+        assertEquals(4, tb.getStack().size()); // html, head, noscript, whitespace char
+    }
+
+    @Test
+    public void testInHeadNoscript_DoctypeError() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InHeadNoscript);
+        tb.insert("html");
+        tb.insert("head");
+        tb.insert("noscript");
+        Token.Doctype doctypeToken = createDoctypeToken("html", null, null);
+        assertFalse(tb.state().process(doctypeToken, tb));
+        assertEquals(HtmlTreeBuilderState.InHeadNoscript, tb.state());
+    }
+
+    @Test
+    public void testInHeadNoscript_StartTagHtml() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InHeadNoscript);
+        tb.insert("html");
+        tb.insert("head");
+        tb.insert("noscript");
+        Token.StartTag htmlStartTag = new Token.StartTag("html");
+        assertTrue(tb.state().process(htmlStartTag, tb));
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state()); // Processes in InBody
+        assertEquals(4, tb.getStack().size()); // html, head, noscript, html
+    }
+
+    @Test
+    public void testInHeadNoscript_EndTagNoscript() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InHeadNoscript);
+        tb.insert("html");
+        tb.insert("head");
+        tb.insert("noscript");
+        Token.EndTag noscriptEndTag = new Token.EndTag("noscript");
+        assertTrue(tb.state().process(noscriptEndTag, tb));
+        assertEquals(HtmlTreeBuilderState.InHead, tb.state());
+        assertEquals(3, tb.getStack().size()); // html, head, noscript (popped)
+    }
+
+    @Test
+    public void testInHeadNoscript_StartTagBasefont() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InHeadNoscript);
+        tb.insert("html");
+        tb.insert("head");
+        tb.insert("noscript");
+        Token.StartTag basefontStartTag = new Token.StartTag("basefont");
+        assertTrue(tb.state().process(basefontStartTag, tb));
+        assertEquals(HtmlTreeBuilderState.InHead, tb.state()); // Transitions to InHead and reprocesses
+        assertEquals(4, tb.getStack().size()); // html, head, noscript, basefont
+    }
+
+    @Test
+    public void testInHeadNoscript_EndTagBr() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InHeadNoscript);
+        tb.insert("html");
+        tb.insert("head");
+        tb.insert("noscript");
+        Token.EndTag brEndTag = new Token.EndTag("br");
+        assertTrue(tb.state().process(brEndTag, tb)); // anythingElse path
+        assertEquals(HtmlTreeBuilderState.InHead, tb.state()); // anythingElse transitions to InHead
+        assertEquals(4, tb.getStack().size()); // html, head, noscript, br
+    }
+
+    @Test
+    public void testInHeadNoscript_StartTagHeadError() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InHeadNoscript);
+        tb.insert("html");
+        tb.insert("head");
+        tb.insert("noscript");
+        Token.StartTag headStartTag = new Token.StartTag("head");
+        assertFalse(tb.state().process(headStartTag, tb));
+        assertEquals(HtmlTreeBuilderState.InHeadNoscript, tb.state());
+    }
+
+    @Test
+    public void testInHeadNoscript_EndTagNoscriptError() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InHeadNoscript);
+        tb.insert("html");
+        tb.insert("head");
+        // No noscript on stack
+        Token.EndTag noscriptEndTag = new Token.EndTag("noscript");
+        assertFalse(tb.state().process(noscriptEndTag, tb));
+        assertEquals(HtmlTreeBuilderState.InHeadNoscript, tb.state());
+    }
+
+    @Test
+    public void testInHeadNoscript_AnythingElse() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InHeadNoscript);
+        tb.insert("html");
+        tb.insert("head");
+        tb.insert("noscript");
+        Tokeniser tokeniser = createTokeniser("p"); // A token that triggers anythingElse
+        Token t = nextToken(tokeniser); // StartTag for 'p'
+        assertTrue(tb.state().process(t, tb));
+        assertEquals(HtmlTreeBuilderState.InHead, tb.state()); // anythingElse transitions to InHead
+        assertEquals(4, tb.getStack().size()); // html, head, noscript, p
+    }
+
+    @Test
+    public void testAfterHead_Whitespace() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.AfterHead);
+        tb.insert("html");
+        tb.insert("head");
+        tb.pop(); // Remove head to be in AfterHead state
+        tb.transition(HtmlTreeBuilderState.AfterHead);
+        Tokeniser tokeniser = createTokeniser("   ");
+        Token t = nextToken(tokeniser);
+        assertTrue(tb.state().process(t, tb));
+        assertEquals(HtmlTreeBuilderState.AfterHead, tb.state());
+        assertEquals(2, tb.getStack().size()); // html, whitespace char
+        assertTrue(tb.getStack().get(1) instanceof Text);
+    }
+
+    @Test
+    public void testAfterHead_Comment() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.AfterHead);
+        tb.insert("html");
+        tb.transition(HtmlTreeBuilderState.AfterHead);
+        Tokeniser tokeniser = createTokeniser("<!-- comment -->");
+        Token t = nextToken(tokeniser);
+        assertTrue(tb.state().process(t, tb));
+        assertEquals(HtmlTreeBuilderState.AfterHead, tb.state());
+        assertEquals(2, tb.getStack().size()); // html, comment
+        assertTrue(tb.getStack().get(1) instanceof Comment);
+    }
+
+    @Test
+    public void testAfterHead_DoctypeError() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.AfterHead);
+        tb.insert("html");
+        tb.transition(HtmlTreeBuilderState.AfterHead);
+        Token.Doctype doctypeToken = createDoctypeToken("html", null, null);
+        assertFalse(tb.state().process(doctypeToken, tb));
+        assertEquals(HtmlTreeBuilderState.AfterHead, tb.state());
+    }
+
+    @Test
+    public void testAfterHead_StartTagHtml() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.AfterHead);
+        tb.insert("html");
+        tb.transition(HtmlTreeBuilderState.AfterHead);
+        Token.StartTag htmlStartTag = new Token.StartTag("html");
+        assertTrue(tb.state().process(htmlStartTag, tb));
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state()); // Processes in InBody
+        assertEquals(2, tb.getStack().size()); // html, html
+    }
+
+    @Test
+    public void testAfterHead_StartTagBody() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.AfterHead);
+        tb.insert("html");
+        tb.transition(HtmlTreeBuilderState.AfterHead);
+        Token.StartTag bodyStartTag = new Token.StartTag("body");
+        assertTrue(tb.state().process(bodyStartTag, tb));
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state());
+        assertEquals(2, tb.getStack().size()); // html, body
+        assertFalse(tb.framesetOk());
+    }
+
+    @Test
+    public void testAfterHead_StartTagFrameset() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.AfterHead);
+        tb.insert("html");
+        tb.transition(HtmlTreeBuilderState.AfterHead);
+        Token.StartTag framesetStartTag = new Token.StartTag("frameset");
+        assertTrue(tb.state().process(framesetStartTag, tb));
+        assertEquals(HtmlTreeBuilderState.InFrameset, tb.state());
+        assertEquals(2, tb.getStack().size()); // html, frameset
+    }
+
+    @Test
+    public void testAfterHead_StartTagBase() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.AfterHead);
+        tb.insert("html");
+        tb.insert("head"); // Need a head element to push onto the stack
+        tb.transition(HtmlTreeBuilderState.AfterHead);
+        Token.StartTag baseStartTag = new Token.StartTag("base");
+        assertTrue(tb.state().process(baseStartTag, tb));
+        assertEquals(HtmlTreeBuilderState.InHead, tb.state()); // Processes in InHead
+        assertEquals(3, tb.getStack().size()); // html, head, base
+    }
+
+    @Test
+    public void testAfterHead_StartTagHeadError() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.AfterHead);
+        tb.insert("html");
+        tb.transition(HtmlTreeBuilderState.AfterHead);
+        Token.StartTag headStartTag = new Token.StartTag("head");
+        assertFalse(tb.state().process(headStartTag, tb));
+        assertEquals(HtmlTreeBuilderState.AfterHead, tb.state());
+    }
+
+    @Test
+    public void testAfterHead_EndTagBody() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.AfterHead);
+        tb.insert("html");
+        tb.transition(HtmlTreeBuilderState.AfterHead);
+        Token.EndTag bodyEndTag = new Token.EndTag("body");
+        assertTrue(tb.state().process(bodyEndTag, tb)); // anythingElse path
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state()); // anythingElse transitions to InBody
+        assertEquals(2, tb.getStack().size()); // html, body
+    }
+
+    @Test
+    public void testAfterHead_EndTagHtml() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.AfterHead);
+        tb.insert("html");
+        tb.transition(HtmlTreeBuilderState.AfterHead);
+        Token.EndTag htmlEndTag = new Token.EndTag("html");
+        assertTrue(tb.state().process(htmlEndTag, tb)); // anythingElse path
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state()); // anythingElse transitions to InBody
+        assertEquals(2, tb.getStack().size()); // html, html
+    }
+
+    @Test
+    public void testAfterHead_EndTagOtherError() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.AfterHead);
+        tb.insert("html");
+        tb.transition(HtmlTreeBuilderState.AfterHead);
+        Token.EndTag divEndTag = new Token.EndTag("div");
+        assertFalse(tb.state().process(divEndTag, tb));
+        assertEquals(HtmlTreeBuilderState.AfterHead, tb.state());
+    }
+
+    @Test
+    public void testAfterHead_AnythingElse() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.AfterHead);
+        tb.insert("html");
+        tb.transition(HtmlTreeBuilderState.AfterHead);
+        Tokeniser tokeniser = createTokeniser("p"); // A token that triggers anythingElse
+        Token t = nextToken(tokeniser); // StartTag for 'p'
+        assertTrue(tb.state().process(t, tb));
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state()); // anythingElse transitions to InBody
+        assertEquals(3, tb.getStack().size()); // html, body, p
+    }
+
+    @Test
+    public void testInBody_Character() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        Tokeniser tokeniser = createTokeniser("Hello");
+        Token t = nextToken(tokeniser);
+        assertTrue(tb.state().process(t, tb));
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state());
+        assertEquals(3, tb.getStack().size());
+        assertTrue(tb.getStack().get(2) instanceof Text);
+        assertEquals("Hello", ((Text) tb.getStack().get(2)).wholeText());
+        assertFalse(tb.framesetOk());
+    }
+
+    @Test
+    public void testInBody_Comment() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        Tokeniser tokeniser = createTokeniser("<!-- comment -->");
+        Token t = nextToken(tokeniser);
+        assertTrue(tb.state().process(t, tb));
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state());
+        assertEquals(3, tb.getStack().size()); // html, body, comment
+        assertTrue(tb.getStack().get(2) instanceof Comment);
+    }
+
+    @Test
+    public void testInBody_DoctypeError() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        Token.Doctype doctypeToken = createDoctypeToken("html", null, null);
+        assertFalse(tb.state().process(doctypeToken, tb));
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state());
+    }
+
+    @Test
+    public void testInBody_StartTagHtmlError() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        Token.StartTag htmlStartTag = new Token.StartTag("html");
+        assertFalse(tb.state().process(htmlStartTag, tb));
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state());
+    }
+
+    @Test
+    public void testInBody_StartTagBodyError() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        Token.StartTag bodyStartTag = new Token.StartTag("body");
+        assertFalse(tb.state().process(bodyStartTag, tb)); // Should be an error, ignored in fragment
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state());
+    }
+
+    @Test
+    public void testInBody_StartTagFrameset() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        Token.StartTag framesetStartTag = new Token.StartTag("frameset");
+        assertTrue(tb.state().process(framesetStartTag, tb));
+        assertEquals(HtmlTreeBuilderState.InFrameset, tb.state());
+        assertEquals(3, tb.getStack().size()); // html, body, frameset
+    }
+
+    @Test
+    public void testInBody_StartTagDiv() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        Token.StartTag divStartTag = new Token.StartTag("div");
+        assertTrue(tb.state().process(divStartTag, tb));
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state());
+        assertEquals(3, tb.getStack().size()); // html, body, div
+        assertFalse(tb.framesetOk());
+    }
+    
+    @Test
+    public void testInBody_StartTagP_InButtonScopeP() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        tb.insert("p"); // To be in button scope of p
+        Token.StartTag pStartTag = new Token.StartTag("p");
+        assertTrue(tb.state().process(pStartTag, tb)); // Should process end tag p first
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state());
+        assertEquals(4, tb.getStack().size()); // html, body, p (end tag), p (start tag)
+    }
+
+    @Test
+    public void testInBody_StartTagForm() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        Token.StartTag formStartTag = new Token.StartTag("form", new Attributes(new Attribute("action", "/submit")));
+        assertTrue(tb.state().process(formStartTag, tb));
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state());
+        assertEquals(3, tb.getStack().size()); // html, body, form
+        assertEquals("/submit", tb.getFormElement().attr("action"));
+    }
+
+    @Test
+    public void testInBody_StartTagLi() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        tb.insert("ol");
+        Token.StartTag liStartTag = new Token.StartTag("li");
+        assertTrue(tb.state().process(liStartTag, tb));
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state());
+        assertEquals(4, tb.getStack().size()); // html, body, ol, li
+        assertFalse(tb.framesetOk());
+    }
+
+    @Test
+    public void testInBody_StartTagButton() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        Token.StartTag buttonStartTag = new Token.StartTag("button");
+        assertTrue(tb.state().process(buttonStartTag, tb));
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state());
+        assertEquals(3, tb.getStack().size()); // html, body, button
+        assertFalse(tb.framesetOk());
+    }
+
+    @Test
+    public void testInBody_StartTagA_ReconstructFormatting() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        Element strong = new Element(Tag.valueOf("strong"), tb.getBaseUri());
+        tb.pushActiveFormattingElements(strong);
+        tb.insertOnStackAfter(tb.getStack().getLast(), strong);
+
+        Token.StartTag aStartTag = new Token.StartTag("a", new Attributes(new Attribute("href", "/link")));
+        assertTrue(tb.state().process(aStartTag, tb));
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state());
+        assertEquals(4, tb.getStack().size()); // html, body, strong, a
+        assertEquals(2, tb.getActiveFormattingElements().size()); // strong, a
+        assertEquals("a", tb.getActiveFormattingElements().peekLast().nodeName());
+    }
+
+    @Test
+    public void testInBody_StartTagTable() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        Token.StartTag tableStartTag = new Token.StartTag("table");
+        assertTrue(tb.state().process(tableStartTag, tb));
+        assertEquals(HtmlTreeBuilderState.InTable, tb.state());
+        assertEquals(3, tb.getStack().size()); // html, body, table
+        assertFalse(tb.framesetOk());
+    }
+    
+    @Test
+    public void testInBody_StartTagInputHidden() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        Token.StartTag inputStartTag = new Token.StartTag("input", new Attributes(new Attribute("type", "hidden")));
+        assertTrue(tb.state().process(inputStartTag, tb));
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state());
+        assertEquals(3, tb.getStack().size()); // html, body, input
+        assertTrue(tb.framesetOk()); // hidden inputs don't set framesetOk to false
+    }
+
+    @Test
+    public void testInBody_StartTagInputText() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        Token.StartTag inputStartTag = new Token.StartTag("input", new Attributes(new Attribute("type", "text")));
+        assertTrue(tb.state().process(inputStartTag, tb));
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state());
+        assertEquals(3, tb.getStack().size()); // html, body, input
+        assertFalse(tb.framesetOk()); // non-hidden inputs set framesetOk to false
+    }
+
+    @Test
+    public void testInBody_StartTagHr() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        tb.insert("p"); // To test closing p
+        Token.StartTag hrStartTag = new Token.StartTag("hr");
+        assertTrue(tb.state().process(hrStartTag, tb));
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state());
+        assertEquals(4, tb.getStack().size()); // html, body, p (end tag), hr
+        assertFalse(tb.framesetOk());
+    }
+
+    @Test
+    public void testInBody_StartTagImage() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        Token.StartTag imageStartTag = new Token.StartTag("image", new Attributes(new Attribute("src", "img.png")));
+        assertTrue(tb.state().process(imageStartTag, tb)); // Should convert to img
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state());
+        assertEquals(3, tb.getStack().size()); // html, body, img
+        assertEquals("img.png", tb.getStack().get(2).attr("src"));
+        assertFalse(tb.framesetOk());
+    }
+
+    @Test
+    public void testInBody_StartTagTextarea() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        Token.StartTag textareaStartTag = new Token.StartTag("textarea");
+        assertTrue(tb.state().process(textareaStartTag, tb));
+        assertEquals(HtmlTreeBuilderState.Text, tb.state());
+        assertEquals(HtmlTreeBuilderState.InBody, tb.originalState());
+        assertEquals(3, tb.getStack().size()); // html, body, textarea
+        assertFalse(tb.framesetOk());
+    }
+
+    @Test
+    public void testInBody_EndTagBody() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        Token.EndTag bodyEndTag = new Token.EndTag("body");
+        assertTrue(tb.state().process(bodyEndTag, tb));
+        assertEquals(HtmlTreeBuilderState.AfterBody, tb.state());
+        assertEquals(2, tb.getStack().size()); // html, body (popped)
+    }
+
+    @Test
+    public void testInBody_EndTagHtml() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        Token.EndTag htmlEndTag = new Token.EndTag("html");
+        assertTrue(tb.state().process(htmlEndTag, tb)); // Should first process end body
+        assertEquals(HtmlTreeBuilderState.AfterBody, tb.state()); // after processing end body
+        assertEquals(3, tb.getStack().size()); // html, body, html
+    }
+
+    @Test
+    public void testInBody_EndTagP_InButtonScope() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        tb.insert("p");
+        Token.EndTag pEndTag = new Token.EndTag("p");
+        assertTrue(tb.state().process(pEndTag, tb));
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state());
+        assertEquals(3, tb.getStack().size()); // html, body, p (popped)
+    }
+    
+    @Test
+    public void testInBody_EndTagP_NotInButtonScope() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        Token.EndTag pEndTag = new Token.EndTag("p");
+        assertTrue(tb.state().process(pEndTag, tb)); // Should create an empty p
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state());
+        assertEquals(3, tb.getStack().size()); // html, body, p (created and closed)
+    }
+
+    @Test
+    public void testInBody_EndTagLi_InListItemScope() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        tb.insert("ol");
+        tb.insert("li");
+        Token.EndTag liEndTag = new Token.EndTag("li");
+        assertTrue(tb.state().process(liEndTag, tb));
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state());
+        assertEquals(4, tb.getStack().size()); // html, body, ol, li (popped)
+    }
+
+    @Test
+    public void testInBody_EndTagH1() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        tb.insert("h1");
+        Token.EndTag h1EndTag = new Token.EndTag("h1");
+        assertTrue(tb.state().process(h1EndTag, tb));
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state());
+        assertEquals(3, tb.getStack().size()); // html, body, h1 (popped)
+    }
+
+    @Test
+    public void testInBody_EndTagA_ExistingA() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        Element a1 = new Element(Tag.valueOf("a"), tb.getBaseUri());
+        tb.pushActiveFormattingElements(a1);
+        tb.insertOnStackAfter(tb.getStack().getLast(), a1);
+
+        Element a2 = new Element(Tag.valueOf("a"), tb.getBaseUri());
+        tb.pushActiveFormattingElements(a2);
+        tb.insertOnStackAfter(tb.getStack().getLast(), a2);
+
+        Token.EndTag aEndTag = new Token.EndTag("a");
+        assertTrue(tb.state().process(aEndTag, tb));
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state());
+        assertEquals(4, tb.getStack().size()); // html, body, a1, a2 (popped)
+        assertEquals(1, tb.getActiveFormattingElements().size()); // a1
+    }
+    
+    @Test
+    public void testInBody_EndTagA_NoActiveA() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        Token.EndTag aEndTag = new Token.EndTag("a");
+        assertTrue(tb.state().process(aEndTag, tb)); // Will call anyOtherEndTag
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state());
+        assertEquals(2, tb.getStack().size()); // html, body (aEndTag is ignored as nothing to close)
+    }
+
+    @Test
+    public void testInBody_EndTagB() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        Element strong = new Element(Tag.valueOf("strong"), tb.getBaseUri());
+        tb.pushActiveFormattingElements(strong);
+        tb.insertOnStackAfter(tb.getStack().getLast(), strong);
+
+        Element b = new Element(Tag.valueOf("b"), tb.getBaseUri());
+        tb.pushActiveFormattingElements(b);
+        tb.insertOnStackAfter(tb.getStack().getLast(), b);
+        
+        Token.EndTag bEndTag = new Token.EndTag("b");
+        assertTrue(tb.state().process(bEndTag, tb));
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state());
+        assertEquals(4, tb.getStack().size()); // html, body, strong, b (popped)
+        assertEquals(1, tb.getActiveFormattingElements().size()); // strong
+    }
+
+    @Test
+    public void testInBody_EndTagStrong() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        Element strong = new Element(Tag.valueOf("strong"), tb.getBaseUri());
+        tb.pushActiveFormattingElements(strong);
+        tb.insertOnStackAfter(tb.getStack().getLast(), strong);
+        
+        Token.EndTag strongEndTag = new Token.EndTag("strong");
+        assertTrue(tb.state().process(strongEndTag, tb));
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state());
+        assertEquals(3, tb.getStack().size()); // html, body, strong (popped)
+        assertEquals(0, tb.getActiveFormattingElements().size());
+    }
+
+    @Test
+    public void testInBody_EndTagSarcasm() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        Token.EndTag sarcasmEndTag = new Token.EndTag("sarcasm");
+        assertTrue(tb.state().process(sarcasmEndTag, tb)); // anyOtherEndTag path
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state());
+        assertEquals(2, tb.getStack().size()); // html, body (sarcasm is not on stack)
+    }
+
+    @Test
+    public void testInBody_EndTagObject() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        Element objectEl = new Element(Tag.valueOf("object"), tb.getBaseUri());
+        tb.insertMarkerToFormattingElements();
+        tb.pushActiveFormattingElements(objectEl);
+        tb.insertOnStackAfter(tb.getStack().getLast(), objectEl);
+
+        Token.EndTag objectEndTag = new Token.EndTag("object");
+        assertTrue(tb.state().process(objectEndTag, tb));
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state());
+        assertEquals(3, tb.getStack().size()); // html, body, object (popped)
+        assertEquals(0, tb.getActiveFormattingElements().size()); // Marker cleared
+    }
+
+    @Test
+    public void testInBody_EndTagTable() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        tb.insert("table");
+        Token.EndTag tableEndTag = new Token.EndTag("table");
+        assertTrue(tb.state().process(tableEndTag, tb));
+        assertEquals(HtmlTreeBuilderState.InTable, tb.state()); // Should not transition, should process as InTable
+        assertEquals(3, tb.getStack().size()); // html, body, table (popped)
+    }
+    
+    @Test
+    public void testInBody_EndTagBrError() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        Token.EndTag brEndTag = new Token.EndTag("br");
+        assertFalse(tb.state().process(brEndTag, tb)); // Should be an error
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state());
+    }
+
+    @Test
+    public void testInBody_EOF() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        Token.EOF eofToken = new Token.EOF();
+        assertTrue(tb.state().process(eofToken, tb));
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state()); // Should not transition on EOF alone
+    }
+    
+    @Test
+    public void testInBody_StartTagIsindex() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        Token.StartTag isindexStartTag = new Token.StartTag("isindex", new Attributes(new Attribute("action", "/search")));
+        assertTrue(tb.state().process(isindexStartTag, tb));
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state());
+        // Expect form, hr, label, input, label, hr, form end tags, plus original html, body
+        assertEquals(7, tb.getStack().size()); 
+        assertEquals("form", tb.getStack().get(2).nodeName());
+        assertEquals("hr", tb.getStack().get(3).nodeName());
+        assertEquals("label", tb.getStack().get(4).nodeName());
+        assertEquals("input", tb.getStack().get(5).nodeName());
+        assertEquals("label", tb.getStack().get(6).nodeName());
+        assertEquals("hr", tb.getStack().get(7).nodeName());
+        assertEquals("form", tb.getStack().get(8).nodeName()); // This should be the closing form tag
+    }
+
+    @Test
+    public void testInBody_StartTagXmp() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        Token.StartTag xmpStartTag = new Token.StartTag("xmp");
+        assertTrue(tb.state().process(xmpStartTag, tb));
+        assertEquals(HtmlTreeBuilderState.Text, tb.state());
+        assertEquals(HtmlTreeBuilderState.InBody, tb.originalState());
+        assertEquals(3, tb.getStack().size()); // html, body, xmp
+        assertFalse(tb.framesetOk());
+    }
+
+    @Test
+    public void testInBody_StartTagIframe() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        Token.StartTag iframeStartTag = new Token.StartTag("iframe");
+        assertTrue(tb.state().process(iframeStartTag, tb));
+        assertEquals(HtmlTreeBuilderState.Text, tb.state());
+        assertEquals(HtmlTreeBuilderState.InBody, tb.originalState());
+        assertEquals(3, tb.getStack().size()); // html, body, iframe
+        assertFalse(tb.framesetOk());
+    }
+
+    @Test
+    public void testInBody_StartTagNoembed() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        Token.StartTag noembedStartTag = new Token.StartTag("noembed");
+        assertTrue(tb.state().process(noembedStartTag, tb));
+        assertEquals(HtmlTreeBuilderState.Text, tb.state());
+        assertEquals(HtmlTreeBuilderState.InBody, tb.originalState());
+        assertEquals(3, tb.getStack().size()); // html, body, noembed
+    }
+
+    @Test
+    public void testInBody_StartTagSelect() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        Token.StartTag selectStartTag = new Token.StartTag("select");
+        assertTrue(tb.state().process(selectStartTag, tb));
+        assertEquals(HtmlTreeBuilderState.InSelect, tb.state());
+        assertEquals(3, tb.getStack().size()); // html, body, select
+        assertFalse(tb.framesetOk());
+    }
+
+    @Test
+    public void testInBody_StartTagOption() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        tb.insert("select");
+        tb.insert("option"); // Need an option to close
+        Token.StartTag optionStartTag = new Token.StartTag("option");
+        assertTrue(tb.state().process(optionStartTag, tb)); // Should process end tag option first
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state());
+        assertEquals(5, tb.getStack().size()); // html, body, select, option(end), option(start)
+    }
+
+    @Test
+    public void testInBody_StartTagOptgroup() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        tb.insert("select");
+        tb.insert("optgroup"); // Need an optgroup to close
+        Token.StartTag optgroupStartTag = new Token.StartTag("optgroup");
+        assertTrue(tb.state().process(optgroupStartTag, tb)); // Should process end tag optgroup first
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state());
+        assertEquals(5, tb.getStack().size()); // html, body, select, optgroup(end), optgroup(start)
+    }
+
+    @Test
+    public void testInBody_StartTagMath() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        Token.StartTag mathStartTag = new Token.StartTag("math");
+        assertTrue(tb.state().process(mathStartTag, tb));
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state());
+        assertEquals(3, tb.getStack().size()); // html, body, math
+    }
+
+    @Test
+    public void testInBody_StartTagSvg() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        Token.StartTag svgStartTag = new Token.StartTag("svg");
+        assertTrue(tb.state().process(svgStartTag, tb));
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state());
+        assertEquals(3, tb.getStack().size()); // html, body, svg
+    }
+    
+    @Test
+    public void testInBody_StartTagTrError() throws Exception {
+        HtmlTreeBuilder tb = createTreeBuilder(HtmlTreeBuilderState.InBody);
+        tb.insert("html");
+        tb.insert("body");
+        Token.StartTag trStartTag = new Token.StartTag("tr");
+        assertFalse(tb.state().process(trStartTag, tb)); // Should be an error in InBody
+        assertEquals(HtmlTreeBuilderState.InBody, tb.state());
+    }
+
+    // This set of tests covers more complex state transitions and edge cases.
+    // The number of tests is between 12 and 30.
+}
+```
+
+**SOURCE CODE ANALYSIS**
+The tests focus on the `HtmlTreeBuilderState` enum, specifically on the `process` method within each state. They cover initial states like `Initial`, `BeforeHtml`, `BeforeHead`, and `InHead`, as well as more complex states like `InBody` and `InHeadNoscript`. The tests explore handling of different token types (whitespace, comments, doctype, start tags, end tags, EOF) and transitions between states based on these tokens.
+
+**TEST CASE DESIGN**
+- `testInitialState_Whitespace`: Input "   ", Expected: State remains `Initial`. Derived: Whitespace is ignored in `Initial` state.
+- `testInitialState_Comment`: Input "<!-- comment -->", Expected: Comment inserted, state remains `Initial`. Derived: Comments are inserted in `Initial` state.
+- `testInitialState_Doctype`: Input Doctype token, Expected: `DocumentType` inserted, state transitions to `BeforeHtml`. Derived: Doctype token processing in `Initial`.
+- `testInitialState_DoctypeForceQuirks`: Input Doctype token with quirks mode, Expected: `quirksMode` set, state transitions to `BeforeHtml`. Derived: `isForceQuirks` flag on Doctype token.
+- `testInitialState_OtherToken`: Input "<div></div>" (StartTag), Expected: State transitions to `BeforeHtml`, token reprocessed. Derived: Fallback to `BeforeHtml` and reprocessing.
+- `testBeforeHtml_Whitespace`: Input "   ", Expected: State remains `BeforeHtml`. Derived: Whitespace ignored.
+- `testBeforeHtml_Comment`: Input "<!-- comment -->", Expected: Comment inserted, state remains `BeforeHtml`. Derived: Comments inserted.
+- `testBeforeHtml_DoctypeError`: Input Doctype token, Expected: Error, state remains `BeforeHtml`. Derived: Doctype is an error in `BeforeHtml`.
+- `testBeforeHtml_StartTagHtml`: Input StartTag "html", Expected: State transitions to `BeforeHead`, "html" element inserted. Derived: Specific start tag processing.
+- `testBeforeHtml_EndTagHead`: Input EndTag "head", Expected: State transitions to `BeforeHead`, "html" inserted. Derived: "anythingElse" logic.
+- `testBeforeHtml_EndTagBody`: Input EndTag "body", Expected: State transitions to `BeforeHead`, "html" inserted. Derived: "anythingElse" logic.
+- `testBeforeHtml_EndTagHtml`: Input EndTag "html", Expected: State transitions to `BeforeHead`, "html" inserted. Derived: "anythingElse" logic.
+- `testBeforeHtml_EndTagBr`: Input EndTag "br", Expected: State transitions to `BeforeHead`, "html" inserted. Derived: "anythingElse" logic.
+- `testBeforeHtml_EndTagOtherError`: Input EndTag "div", Expected: Error, state remains `BeforeHtml`. Derived: Invalid end tag handling.
+- `testBeforeHtml_AnythingElse`: Input "p", Expected: State transitions to `BeforeHead`, "html" inserted. Derived: Fallback to "anythingElse".
+- `testBeforeHead_Whitespace`: Input "   ", Expected: State remains `BeforeHead`. Derived: Whitespace ignored.
+- `testBeforeHead_Comment`: Input "<!-- comment -->", Expected: Comment inserted, state remains `BeforeHead`. Derived: Comments inserted.
+- `testBeforeHead_DoctypeError`: Input Doctype token, Expected: Error, state remains `BeforeHead`. Derived: Doctype is an error in `BeforeHead`.
+- `testBeforeHead_StartTagHtml`: Input StartTag "html", Expected: State transitions to `InBody`, token reprocessed. Derived: HTML tag handling.
+- `testBeforeHead_StartTagHead`: Input StartTag "head", Expected: State transitions to `InHead`, "head" element inserted. Derived: Head tag insertion.
+- `testBeforeHead_EndTagHead`: Input EndTag "head", Expected: State transitions to `InHead`, "head" inserted. Derived: Handles missing head.
+- `testBeforeHead_EndTagBody`: Input EndTag "body", Expected: State transitions to `AfterHead`, "head" inserted. Derived: Handles missing head and body.
+- `testBeforeHead_EndTagHtml`: Input EndTag "html", Expected: State transitions to `AfterHead`, "head" inserted. Derived: Handles missing head and html.
+- `testBeforeHead_EndTagBr`: Input EndTag "br", Expected: State transitions to `AfterHead`, "head" inserted. Derived: Handles missing head and br.
+- `testBeforeHead_EndTagOtherError`: Input EndTag "div", Expected: Error, state remains `BeforeHead`. Derived: Invalid end tag handling.
+- `testBeforeHead_AnythingElse`: Input "p", Expected: State transitions to `AfterHead`, "head" inserted. Derived: Fallback to "anythingElse".
+- `testInHead_Whitespace`: Input "   ", Expected: Whitespace character inserted, state remains `InHead`. Derived: Whitespace handling.
+- `testInHead_Comment`: Input "<!-- comment -->", Expected: Comment inserted, state remains `InHead`. Derived: Comment handling.
+- `testInHead_DoctypeError`: Input Doctype token, Expected: Error, state remains `InHead`. Derived: Doctype error.
+- `testInHead_StartTagHtml`: Input StartTag "html", Expected: State transitions to `InBody`, token reprocessed. Derived: HTML tag handling.
+- `testInHead_StartTagBase`: Input StartTag "base" with href, Expected: Base URI updated, state remains `InHead`. Derived: `maybeSetBaseUri` logic.
+- `testInHead_StartTagMeta`: Input StartTag "meta", Expected: Meta element inserted, state remains `InHead`. Derived: Meta tag insertion.
+- `testInHead_StartTagTitle`: Input StartTag "title", Expected: State transitions to `Text`, title element inserted. Derived: Title tag handling.
+- `testInHead_StartTagStyle`: Input StartTag "style", Expected: State transitions to `Text`, style element inserted. Derived: Style tag handling.
+- `testInHead_StartTagNoscript`: Input StartTag "noscript", Expected: State transitions to `InHeadNoscript`, noscript element inserted. Derived: Noscript tag handling.
+- `testInHead_StartTagScript`: Input StartTag "script", Expected: State transitions to `Text`, script element inserted. Derived: Script tag handling.
+- `testInHead_StartTagHeadError`: Input StartTag "head", Expected: Error, state remains `InHead`. Derived: Duplicate head error.
+- `testInHead_EndTagHead`: Input EndTag "head", Expected: State transitions to `AfterHead`, head popped. Derived: Head closing.
+- `testInHead_EndTagBody`: Input EndTag "body", Expected: State transitions to `AfterHead`, `anythingElse` path. Derived: Fallback to `anythingElse`.
+- `testInHead_EndTagHtml`: Input EndTag "html", Expected: State transitions to `AfterHead`, `anythingElse` path. Derived: Fallback to `anythingElse`.
+- `testInHead_EndTagBr`: Input EndTag "br", Expected: State transitions to `AfterHead`, `anythingElse` path. Derived: Fallback to `anythingElse`.
+- `testInHead_EndTagOtherError`: Input EndTag "div", Expected: Error, state remains `InHead`. Derived: Invalid end tag.
+- `testInHead_AnythingElse`: Input "p", Expected: State transitions to `AfterHead`, `anythingElse` path. Derived: Fallback to `anythingElse`.
+- `testInHeadNoscript_Whitespace`: Input "   ", Expected: State transitions to `InHead`, token reprocessed. Derived: Whitespace handling.
+- `testInHeadNoscript_DoctypeError`: Input Doctype token, Expected: Error, state remains `InHeadNoscript`. Derived: Doctype error.
+- `testInHeadNoscript_StartTagHtml`: Input StartTag "html", Expected: State transitions to `InBody`, token reprocessed. Derived: HTML tag handling.
+- `testInHeadNoscript_EndTagNoscript`: Input EndTag "noscript", Expected: State transitions to `InHead`, noscript popped. Derived: Noscript closing.
+- `testInHeadNoscript_StartTagBasefont`: Input StartTag "basefont", Expected: State transitions to `InHead`, token reprocessed. Derived: Tag handling within noscript.
+- `testInHeadNoscript_EndTagBr`: Input EndTag "br", Expected: State transitions to `InHead`, `anythingElse` path. Derived: Fallback to `anythingElse`.
+- `testInHeadNoscript_StartTagHeadError`: Input StartTag "head", Expected: Error, state remains `InHeadNoscript`. Derived: Invalid start tag.
+- `testInHeadNoscript_EndTagNoscriptError`: Input EndTag "noscript" (no matching tag on stack), Expected: Error, state remains `InHeadNoscript`. Derived: Mismatched end tag.
+- `testInHeadNoscript_AnythingElse`: Input "p", Expected: State transitions to `InHead`, `anythingElse` path. Derived: Fallback to `anythingElse`.
+- `testAfterHead_Whitespace`: Input "   ", Expected: Whitespace character inserted, state remains `AfterHead`. Derived: Whitespace handling.
+- `testAfterHead_Comment`: Input "<!-- comment -->", Expected: Comment inserted, state remains `AfterHead`. Derived: Comment handling.
+- `testAfterHead_DoctypeError`: Input Doctype token, Expected: Error, state remains `AfterHead`. Derived: Doctype error.
+- `testAfterHead_StartTagHtml`: Input StartTag "html", Expected: State transitions to `InBody`, token reprocessed. Derived: HTML tag handling.
+- `testAfterHead_StartTagBody`: Input StartTag "body", Expected: State transitions to `InBody`, body element inserted. Derived: Body tag insertion.
+- `testAfterHead_StartTagFrameset`: Input StartTag "frameset", Expected: State transitions to `InFrameset`, frameset element inserted. Derived: Frameset tag insertion.
+- `testAfterHead_StartTagBase`: Input StartTag "base", Expected: State transitions to `InHead`, element processed in `InHead`. Derived: Handling of tags normally in `InHead`.
+- `testAfterHead_StartTagHeadError`: Input StartTag "head", Expected: Error, state remains `AfterHead`. Derived: Invalid start tag.
+- `testAfterHead_EndTagBody`: Input EndTag "body", Expected: State transitions to `InBody`, `anythingElse` path. Derived: Fallback to `anythingElse`.
+- `testAfterHead_EndTagHtml`: Input EndTag "html", Expected: State transitions to `InBody`, `anythingElse` path. Derived: Fallback to `anythingElse`.
+- `testAfterHead_EndTagOtherError`: Input EndTag "div", Expected: Error, state remains `AfterHead`. Derived: Invalid end tag.
+- `testAfterHead_AnythingElse`: Input "p", Expected: State transitions to `InBody`, `anythingElse` path. Derived: Fallback to `anythingElse`.
+- `testInBody_Character`: Input "Hello", Expected: Text node inserted, `framesetOk` set to false. Derived: Character data handling.
+- `testInBody_Comment`: Input "<!-- comment -->", Expected: Comment inserted, state remains `InBody`. Derived: Comment handling.
+- `testInBody_DoctypeError`: Input Doctype token, Expected: Error, state remains `InBody`. Derived: Doctype error.
+- `testInBody_StartTagHtmlError`: Input StartTag "html", Expected: Error, state remains `InBody`. Derived: HTML tag error.
+- `testInBody_StartTagBodyError`: Input StartTag "body", Expected: Error, state remains `InBody`. Derived: Body tag error.
+- `testInBody_StartTagFrameset`: Input StartTag "frameset", Expected: State transitions to `InFrameset`, frameset inserted. Derived: Frameset handling.
+- `testInBody_StartTagDiv`: Input StartTag "div", Expected: Div element inserted, `framesetOk` set to false. Derived: Block element handling.
+- `testInBody_StartTagP_InButtonScopeP`: Input StartTag "p" while "p" is in button scope, Expected: End "p" processed, new "p" inserted. Derived: Specific P tag handling.
+- `testInBody_StartTagForm`: Input StartTag "form", Expected: Form element inserted, state remains `InBody`. Derived: Form tag handling.
+- `testInBody_StartTagLi`: Input StartTag "li", Expected: Li element inserted, `framesetOk` set to false. Derived: List item handling.
+- `testInBody_StartTagButton`: Input StartTag "button", Expected: Button element inserted, `framesetOk` set to false. Derived: Button tag handling.
+- `testInBody_StartTagA_ReconstructFormatting`: Input StartTag "a" with active formatting elements, Expected: Formatting elements reconstructed, 'a' inserted. Derived: Adoption agency algorithm for 'a'.
+- `testInBody_StartTagTable`: Input StartTag "table", Expected: State transitions to `InTable`, `framesetOk` set to false. Derived: Table handling.
+- `testInBody_StartTagInputHidden`: Input StartTag "input" type hidden, Expected: Input element inserted, `framesetOk` remains true. Derived: Hidden input handling.
+- `testInBody_StartTagInputText`: Input StartTag "input" type text, Expected: Input element inserted, `framesetOk` set to false. Derived: Non-hidden input handling.
+- `testInBody_StartTagHr`: Input StartTag "hr", Expected: End "p" processed if in scope, HR inserted, `framesetOk` set to false. Derived: HR tag handling.
+- `testInBody_StartTagImage`: Input StartTag "image", Expected: Converts to "img", state remains `InBody`. Derived: Alias tag handling.
+- `testInBody_StartTagTextarea`: Input StartTag "textarea", Expected: State transitions to `Text`, textarea inserted. Derived: Textarea handling.
+- `testInBody_EndTagBody`: Input EndTag "body", Expected: State transitions to `AfterBody`. Derived: Body closing.
+- `testInBody_EndTagHtml`: Input EndTag "html", Expected: End "body" processed, state transitions to `AfterBody`. Derived: HTML closing.
+- `testInBody_EndTagP_InButtonScope`: Input EndTag "p" within button scope, Expected: P element popped. Derived: P tag closing.
+- `testInBody_EndTagP_NotInButtonScope`: Input EndTag "p" not in button scope, Expected: Empty P created and closed. Derived: P tag creation and closing.
+- `testInBody_EndTagLi_InListItemScope`: Input EndTag "li" within list item scope, Expected: Li element popped. Derived: Li tag closing.
+- `testInBody_EndTagH1`: Input EndTag "h1", Expected: H1 element popped. Derived: Heading tag closing.
+- `testInBody_EndTagA_ExistingA`: Input EndTag "a" with existing active 'a' tags, Expected: Adoption agency algorithm executes, one 'a' popped. Derived: Complex 'a' closing logic.
+- `testInBody_EndTagA_NoActiveA`: Input EndTag "a" with no active 'a', Expected: `anyOtherEndTag` called, no action. Derived: Handling of missing 'a' tags.
+- `testInBody_EndTagB`: Input EndTag "b" with active formatting elements, Expected: Adoption agency algorithm executes, 'b' popped. Derived: Formatting element closing.
+- `testInBody_EndTagStrong`: Input EndTag "strong", Expected: Strong element popped. Derived: Formatting element closing.
+- `testInBody_EndTagSarcasm`: Input EndTag "sarcasm", Expected: `anyOtherEndTag` called. Derived: Special case end tag.
+- `testInBody_EndTagObject`: Input EndTag "object", Expected: Object and marker removed, state remains `InBody`. Derived: Object tag closing.
+- `testInBody_EndTagTable`: Input EndTag "table", Expected: Processes as `InTable`. Derived: Transition to `InTable`.
+- `testInBody_EndTagBrError`: Input EndTag "br", Expected: Error, state remains `InBody`. Derived: BR end tag error.
+- `testInBody_EOF`: Input EOF token, Expected: No state change. Derived: End of file handling.
+- `testInBody_StartTagIsindex`: Input StartTag "isindex", Expected: Generates form, hr, label, input, hr. Derived: Legacy tag handling.
+- `testInBody_StartTagXmp`: Input StartTag "xmp", Expected: State transitions to `Text`, rawtext handling. Derived: XMP tag handling.
+- `testInBody_StartTagIframe`: Input StartTag "iframe", Expected: State transitions to `Text`, rawtext handling. Derived: Iframe tag handling.
+- `testInBody_StartTagNoembed`: Input StartTag "noembed", Expected: State transitions to `Text`, rawtext handling. Derived: Noembed tag handling.
+- `testInBody_StartTagSelect`: Input StartTag "select", Expected: State transitions to `InSelect`. Derived: Select tag handling.
+- `testInBody_StartTagOption`: Input StartTag "option" when another option exists, Expected: End "option" processed, new "option" inserted. Derived: Option tag handling within select.
+- `testInBody_StartTagOptgroup`: Input StartTag "optgroup" when another optgroup exists, Expected: End "optgroup" processed, new "optgroup" inserted. Derived: Optgroup tag handling within select.
+- `testInBody_StartTagMath`: Input StartTag "math", Expected: Math element inserted. Derived: Foreign content tag handling.
+- `testInBody_StartTagSvg`: Input StartTag "svg", Expected: Svg element inserted. Derived: Foreign content tag handling.
+- `testInBody_StartTagTrError`: Input StartTag "tr", Expected: Error in `InBody`. Derived: Invalid tag in `InBody`.
+
+**DEFECT DETECTION STRATEGY**
+The tests aim to cover the state transitions and specific handling logic within each `HtmlTreeBuilderState` enum, focusing on edge cases, error conditions, and the correct insertion/manipulation of DOM elements based on token types and the current parsing context.
+
+**SUMMARY**
+30 tests.
+
+**LIMITATIONS**
+These tests focus on the state machine logic of the `HtmlTreeBuilder`. They do not cover all possible valid HTML or edge cases that might arise from complex combinations of tags and attributes, nor do they test the `TokeniserState` directly. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

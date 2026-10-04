@@ -1,0 +1,185 @@
+```java
+package com.fasterxml.jackson.databind.deser.std;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.io.IOException;
+import java.util.*;
+import com.fasterxml.jackson.annotation.JsonFormat;
+import com.fasterxml.jackson.core.*;
+import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.annotation.JacksonStdImpl;
+import com.fasterxml.jackson.databind.deser.ContextualDeserializer;
+import com.fasterxml.jackson.databind.deser.UnresolvedForwardReference;
+import com.fasterxml.jackson.databind.deser.ValueInstantiator;
+import com.fasterxml.jackson.databind.deser.impl.ReadableObjectId.Referring;
+import com.fasterxml.jackson.databind.deser.std.ContainerDeserializerBase;
+import com.fasterxml.jackson.databind.jsontype.TypeDeserializer;
+
+public class CollectionDeserializerTest {
+    @Test
+    public void testAccumulatorAddsWithoutPendingReference() throws Exception {
+        List<Object> result = new ArrayList<Object>();
+        CollectionDeserializer.CollectionReferringAccumulator accumulator =
+                new CollectionDeserializer.CollectionReferringAccumulator(String.class, result);
+        accumulator.add("a");
+        assertEquals(Arrays.<Object>asList("a"), result);
+    }
+
+    @Test
+    public void testAccumulatorAddsAfterPendingReference() throws Exception {
+        List<Object> result = new ArrayList<Object>();
+        CollectionDeserializer.CollectionReferringAccumulator accumulator =
+                new CollectionDeserializer.CollectionReferringAccumulator(String.class, result);
+        UnresolvedForwardReference reference = new UnresolvedForwardReference("pending");
+        accumulator.handleUnresolvedReference(reference);
+        accumulator.add("later");
+        assertTrue(result.isEmpty());
+    }
+
+    @Test
+    public void testResolveFirstReferencePreservesOrder() throws Exception {
+        List<Object> result = new ArrayList<Object>();
+        CollectionDeserializer.CollectionReferringAccumulator accumulator =
+                new CollectionDeserializer.CollectionReferringAccumulator(String.class, result);
+        UnresolvedForwardReference reference = new UnresolvedForwardReference("pending");
+        accumulator.handleUnresolvedReference(reference);
+        accumulator.add("later");
+        accumulator.resolveForwardReference("id", "resolved");
+        assertEquals(Arrays.<Object>asList("resolved", "later"), result);
+    }
+
+    @Test
+    public void testResolveSecondReferenceKeepsEarlierPendingSegment() throws Exception {
+        List<Object> result = new ArrayList<Object>();
+        CollectionDeserializer.CollectionReferringAccumulator accumulator =
+                new CollectionDeserializer.CollectionReferringAccumulator(String.class, result);
+        accumulator.handleUnresolvedReference(new UnresolvedForwardReference("first"));
+        accumulator.add("middle");
+        accumulator.handleUnresolvedReference(new UnresolvedForwardReference("second"));
+        accumulator.add("last");
+        accumulator.resolveForwardReference("second-id", "second-value");
+        assertEquals(Arrays.<Object>asList("middle", "second-value", "last"), result);
+    }
+
+    @Test
+    public void testResolveUnknownReferenceThrows() throws Exception {
+        CollectionDeserializer.CollectionReferringAccumulator accumulator =
+                new CollectionDeserializer.CollectionReferringAccumulator(String.class, new ArrayList<Object>());
+        try {
+            accumulator.resolveForwardReference("missing", "value");
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) {
+            assertEquals(IllegalArgumentException.class, expected.getClass());
+        }
+    }
+
+    @Test
+    public void testResolveFirstOfTwoPendingReferences() throws Exception {
+        List<Object> result = new ArrayList<Object>();
+        CollectionDeserializer.CollectionReferringAccumulator accumulator =
+                new CollectionDeserializer.CollectionReferringAccumulator(String.class, result);
+        accumulator.handleUnresolvedReference(new UnresolvedForwardReference("first"));
+        accumulator.add("between");
+        accumulator.handleUnresolvedReference(new UnresolvedForwardReference("second"));
+        accumulator.add("after");
+        accumulator.resolveForwardReference("first-id", "first-value");
+        assertEquals(Arrays.<Object>asList("first-value", "between"), result);
+    }
+
+    @Test
+    public void testAccumulatorCanResolveRemainingPendingReference() throws Exception {
+        List<Object> result = new ArrayList<Object>();
+        CollectionDeserializer.CollectionReferringAccumulator accumulator =
+                new CollectionDeserializer.CollectionReferringAccumulator(String.class, result);
+        accumulator.handleUnresolvedReference(new UnresolvedForwardReference("first"));
+        accumulator.add("between");
+        accumulator.handleUnresolvedReference(new UnresolvedForwardReference("second"));
+        accumulator.add("after");
+        accumulator.resolveForwardReference("first-id", "first-value");
+        accumulator.resolveForwardReference("second-id", "second-value");
+        assertEquals(Arrays.<Object>asList("first-value", "between", "second-value", "after"), result);
+    }
+
+    @Test
+    public void testAccumulatorAcceptsNullValue() throws Exception {
+        List<Object> result = new ArrayList<Object>();
+        CollectionDeserializer.CollectionReferringAccumulator accumulator =
+                new CollectionDeserializer.CollectionReferringAccumulator(String.class, result);
+        accumulator.add(null);
+        assertEquals(1, result.size());
+        assertNull(result.get(0));
+    }
+
+    @Test
+    public void testAccumulatorResolutionWithEmptyFollowingSegment() throws Exception {
+        List<Object> result = new ArrayList<Object>();
+        CollectionDeserializer.CollectionReferringAccumulator accumulator =
+                new CollectionDeserializer.CollectionReferringAccumulator(String.class, result);
+        accumulator.handleUnresolvedReference(new UnresolvedForwardReference("pending"));
+        accumulator.resolveForwardReference("id", "value");
+        assertEquals(Arrays.<Object>asList("value"), result);
+    }
+
+    @Test
+    public void testAccumulatorAddsAfterResolution() throws Exception {
+        List<Object> result = new ArrayList<Object>();
+        CollectionDeserializer.CollectionReferringAccumulator accumulator =
+                new CollectionDeserializer.CollectionReferringAccumulator(String.class, result);
+        accumulator.handleUnresolvedReference(new UnresolvedForwardReference("pending"));
+        accumulator.resolveForwardReference("id", "value");
+        accumulator.add("after");
+        assertEquals(Arrays.<Object>asList("value", "after"), result);
+    }
+
+    @Test
+    public void testAccumulatorResolutionUsesEqualIdentifier() throws Exception {
+        List<Object> result = new ArrayList<Object>();
+        CollectionDeserializer.CollectionReferringAccumulator accumulator =
+                new CollectionDeserializer.CollectionReferringAccumulator(String.class, result);
+        accumulator.handleUnresolvedReference(new UnresolvedForwardReference("pending"));
+        accumulator.resolveForwardReference(new String("id"), "value");
+        assertEquals(Arrays.<Object>asList("value"), result);
+    }
+
+    @Test
+    public void testAccumulatorCanResolvePendingReferenceAfterAddingValues() throws Exception {
+        List<Object> result = new ArrayList<Object>();
+        CollectionDeserializer.CollectionReferringAccumulator accumulator =
+                new CollectionDeserializer.CollectionReferringAccumulator(String.class, result);
+        accumulator.add("before");
+        accumulator.handleUnresolvedReference(new UnresolvedForwardReference("pending"));
+        accumulator.add("after");
+        accumulator.resolveForwardReference("id", "resolved");
+        assertEquals(Arrays.<Object>asList("before", "resolved", "after"), result);
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+The target method is unspecified, so method selection is exploratory. I tested the public `CollectionReferringAccumulator` logic: appending values, recording unresolved references, resolving references, preserving order, and rejecting unknown identifiers.
+
+The other listed public methods require a configured deserializer and Jackson parser/context behavior not constructible using only the visible declarations.
+
+### 2. TEST CASE DESIGN
+- `testAccumulatorAddsWithoutPendingReference`: add `"a"` with no pending reference; it is appended to the result.
+- `testAccumulatorAddsAfterPendingReference`: add after a pending reference; the result remains empty until resolution.
+- `testResolveFirstReferencePreservesOrder`: resolve a pending reference followed by `"later"`; resolution places the value before the following segment.
+- `testResolveSecondReferenceKeepsEarlierPendingSegment`: resolve the second of two references; its value and following item appear in the result.
+- `testResolveUnknownReferenceThrows`: resolve an unseen identifier; the source throws `IllegalArgumentException`.
+- `testResolveFirstOfTwoPendingReferences`: resolve the first pending reference; its value and intervening item are appended.
+- `testAccumulatorCanResolveRemainingPendingReference`: resolve both pending identifiers in turn; values and following segments are appended in order.
+- `testAccumulatorAcceptsNullValue`: add null without pending references; the result has size one and contains null.
+- `testAccumulatorResolutionWithEmptyFollowingSegment`: resolve a pending reference with no following values; only the resolved value is appended.
+- `testAccumulatorAddsAfterResolution`: resolve, then add; both values are present in order.
+- `testAccumulatorResolutionUsesEqualIdentifier`: resolve using an equal string identifier; the matching reference is found.
+- `testAccumulatorCanResolvePendingReferenceAfterAddingValues`: append a value before recording a pending reference, then add after it; resolution preserves the resulting order.
+
+### 4. DEFECT DETECTION STRATEGY
+The tests pin the accumulator’s ordering and collection updates across pending-reference states, including resolution of multiple references and unknown identifiers. They do not establish detection of any particular defect.
+
+### 5. SUMMARY
+12 tests.
+
+### 6. LIMITATIONS
+Deserializer construction and parser-driven behavior are not exercised; the accumulator tests use only public APIs visible in the supplied source. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

@@ -1,0 +1,352 @@
+package com.fasterxml.jackson.databind.type;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.util.*;
+import com.fasterxml.jackson.databind.JavaType;
+import com.fasterxml.jackson.databind.type.TypeBindings;
+import com.fasterxml.jackson.databind.type.TypeFactory; // Added import for TypeFactory
+
+public class SimpleTypeTest {
+
+    // Test for constructUnsafe with a basic class
+    @Test
+    public void testConstructUnsafeBasic() throws Exception {
+        SimpleType type = SimpleType.constructUnsafe(String.class);
+        assertNotNull(type);
+        assertEquals(String.class, type.getRawClass());
+        // _bindings should be null for constructUnsafe as per source comment
+        assertNull(type.getBindings());
+    }
+
+    // Test for constructUnsafe with a class that has superclasses and interfaces
+    @Test
+    public void testConstructUnsafeComplex() throws Exception {
+        SimpleType type = SimpleType.constructUnsafe(ArrayList.class);
+        assertNotNull(type);
+        assertEquals(ArrayList.class, type.getRawClass());
+        assertNull(type.getBindings());
+    }
+
+    // Test for construct with a basic class
+    @Test
+    public void testConstructBasic() throws Exception {
+        SimpleType type = SimpleType.construct(String.class);
+        assertNotNull(type);
+        assertEquals(String.class, type.getRawClass());
+        assertFalse(type.getBindings().isEmpty()); // Should have default bindings
+    }
+
+    // Test for construct with a class that has a superclass
+    @Test
+    public void testConstructWithSuperClass() throws Exception {
+        SimpleType type = SimpleType.construct(ArrayList.class);
+        assertNotNull(type);
+        assertEquals(ArrayList.class, type.getRawClass());
+        assertNotNull(type.getSuperClass());
+        assertEquals(AbstractList.class, type.getSuperClass().getRawClass());
+    }
+
+    // Test for construct with a class that implements interfaces
+    @Test
+    public void testConstructWithInterfaces() throws Exception {
+        SimpleType type = SimpleType.construct(ArrayList.class);
+        assertNotNull(type);
+        assertEquals(ArrayList.class, type.getRawClass());
+        List<JavaType> interfaces = type.getInterfaces();
+        assertTrue(interfaces.stream().anyMatch(iface -> iface.getRawClass().equals(List.class)));
+        assertTrue(interfaces.stream().anyMatch(iface -> iface.getRawClass().equals(Collection.class)));
+    }
+
+    // Test for construct with Object.class
+    @Test
+    public void testConstructWithObjectClass() throws Exception {
+        SimpleType type = SimpleType.construct(Object.class);
+        assertNotNull(type);
+        assertEquals(Object.class, type.getRawClass());
+        JavaType superClass = type.getSuperClass();
+        assertNotNull(superClass);
+        // _buildSuperClass returns TypeFactory.unknownType() for Object.class.superclass
+        assertTrue(superClass.isTypeOrSubTypeOf(Object.class)); // A more robust check for unknownType
+    }
+
+    // Test for construct with a null class (should throw IllegalArgumentException)
+    @Test
+    public void testConstructWithNullClass() throws Exception {
+        try {
+            SimpleType.construct(null);
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException e) {
+            // expected
+        }
+    }
+
+    // Test for construct with Map.class (should throw IllegalArgumentException)
+    @Test
+    public void testConstructWithMapClass() throws Exception {
+        try {
+            SimpleType.construct(Map.class);
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException e) {
+            // expected
+        }
+    }
+
+    // Test for construct with Collection.class (should throw IllegalArgumentException)
+    @Test
+    public void testConstructWithCollectionClass() throws Exception {
+        try {
+            SimpleType.construct(Collection.class);
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException e) {
+            // expected
+        }
+    }
+
+    // Test for construct with an array class (should throw IllegalArgumentException)
+    @Test
+    public void testConstructWithArrayClass() throws Exception {
+        try {
+            SimpleType.construct(String[].class);
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException e) {
+            // expected
+        }
+    }
+
+    // Test withContentType method (should throw IllegalArgumentException)
+    @Test
+    public void testWithContentType() throws Exception {
+        SimpleType type = SimpleType.construct(String.class);
+        try {
+            type.withContentType(SimpleType.construct(Integer.class));
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException e) {
+            // expected
+        }
+    }
+
+    // Test withTypeHandler with a new handler
+    @Test
+    public void testWithTypeHandlerNew() throws Exception {
+        SimpleType type = SimpleType.construct(String.class);
+        Object handler = new Object();
+        SimpleType newType = type.withTypeHandler(handler);
+        assertNotNull(newType);
+        assertNotSame(type, newType);
+        assertEquals(handler, newType.getTypeHandler());
+    }
+
+    // Test withTypeHandler with the same handler
+    @Test
+    public void testWithTypeHandlerSame() throws Exception {
+        SimpleType type = SimpleType.construct(String.class).withTypeHandler(new Object());
+        Object handler = type.getTypeHandler();
+        SimpleType newType = type.withTypeHandler(handler);
+        assertNotNull(newType);
+        assertSame(type, newType); // Should return the same instance if handler is the same
+    }
+
+    // Test withContentTypeHandler method (should throw IllegalArgumentException)
+    @Test
+    public void testWithContentTypeHandler() throws Exception {
+        SimpleType type = SimpleType.construct(String.class);
+        try {
+            type.withContentTypeHandler(new Object());
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException e) {
+            // expected
+        }
+    }
+
+    // Test withValueHandler with a new handler
+    @Test
+    public void testWithValueHandlerNew() throws Exception {
+        SimpleType type = SimpleType.construct(String.class);
+        Object handler = new Object();
+        SimpleType newType = type.withValueHandler(handler);
+        assertNotNull(newType);
+        assertNotSame(type, newType);
+        assertEquals(handler, newType.getValueHandler());
+    }
+
+    // Test withValueHandler with the same handler
+    @Test
+    public void testWithValueHandlerSame() throws Exception {
+        SimpleType type = SimpleType.construct(String.class).withValueHandler(new Object());
+        Object handler = type.getValueHandler();
+        SimpleType newType = type.withValueHandler(handler);
+        assertNotNull(newType);
+        assertSame(type, newType); // Should return the same instance if handler is the same
+    }
+
+    // Test withContentValueHandler method (should throw IllegalArgumentException)
+    @Test
+    public void testWithContentValueHandler() throws Exception {
+        SimpleType type = SimpleType.construct(String.class);
+        try {
+            type.withContentValueHandler(new Object());
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException e) {
+            // expected
+        }
+    }
+
+    // Test withStaticTyping when not static
+
+    // Test withStaticTyping when already static
+    @Test
+    public void testWithStaticTypingAlreadyStatic() throws Exception {
+        SimpleType type = SimpleType.construct(String.class).withStaticTyping();
+        SimpleType newType = type.withStaticTyping();
+        assertNotNull(newType);
+        assertSame(type, newType); // Should return the same instance if already static
+    }
+
+    // Test refine when not a parameterized type
+    @Test
+    public void testRefineNotParameterized() throws Exception {
+        SimpleType type = SimpleType.construct(String.class);
+        JavaType refined = type.refine(String.class, TypeBindings.emptyBindings(), null, null);
+        assertNull(refined); // SimpleType should return null for refine if not applicable
+    }
+
+    // Test isContainerType (should always be false for SimpleType)
+    @Test
+    public void testIsContainerType() throws Exception {
+        SimpleType type = SimpleType.construct(String.class);
+        assertFalse(type.isContainerType());
+    }
+
+    // Test getErasedSignature for a simple class
+    @Test
+    public void testGetErasedSignatureBasic() throws Exception {
+        SimpleType type = SimpleType.construct(String.class);
+        StringBuilder sb = new StringBuilder();
+        type.getErasedSignature(sb);
+        assertEquals("Ljava.lang.String;", sb.toString());
+    }
+
+    // Test getErasedSignature for a class with superclass hierarchy
+    @Test
+    public void testGetErasedSignatureComplex() throws Exception {
+        SimpleType type = SimpleType.construct(ArrayList.class);
+        StringBuilder sb = new StringBuilder();
+        type.getErasedSignature(sb);
+        assertEquals("Ljava.util.ArrayList;", sb.toString());
+    }
+
+    // Test getGenericSignature for a simple class
+    @Test
+    public void testGetGenericSignatureBasic() throws Exception {
+        SimpleType type = SimpleType.construct(String.class);
+        StringBuilder sb = new StringBuilder();
+        type.getGenericSignature(sb);
+        assertEquals("Ljava.lang.String;", sb.toString());
+    }
+
+    // Test getGenericSignature for a class with bindings
+    @Test
+    public void testGetGenericSignatureWithBindings() throws Exception {
+        // To properly test generic signature, we need a type that has type parameters.
+        // SimpleType itself does not have generic type parameters in its direct construction.
+        // However, the method _classSignature is called.
+        // We can construct a JavaType that has bindings and pass it to getGenericSignature.
+        // For simplicity, let's use a TypeFactory to create a generic type.
+        JavaType listStringType = TypeFactory.defaultInstance().constructType(List.class, String.class);
+        StringBuilder sb = new StringBuilder();
+        listStringType.getGenericSignature(sb);
+        // Expected signature for List<String> is Ljava.util.List<Ljava.lang.String;>;
+        assertEquals("Ljava.util.List<Ljava.lang.String;>;", sb.toString());
+    }
+
+    // Test toString for a basic type
+    @Test
+    public void testToStringBasic() throws Exception {
+        SimpleType type = SimpleType.construct(String.class);
+        assertEquals("[simple type, class java.lang.String]", type.toString());
+    }
+
+    // Test toString for a complex type
+    @Test
+    public void testToStringComplex() throws Exception {
+        SimpleType type = SimpleType.construct(ArrayList.class);
+        assertEquals("[simple type, class java.util.ArrayList]", type.toString());
+    }
+
+    // Test equals for identical objects
+    @Test
+    public void testEqualsSameObject() throws Exception {
+        SimpleType type = SimpleType.construct(String.class);
+        assertTrue(type.equals(type));
+    }
+
+    // Test equals for different types with same raw class
+    @Test
+    public void testEqualsDifferentObjectSameClass() throws Exception {
+        SimpleType type1 = SimpleType.construct(String.class);
+        SimpleType type2 = SimpleType.construct(String.class);
+        assertTrue(type1.equals(type2));
+    }
+
+    // Test equals for different raw classes
+    @Test
+    public void testEqualsDifferentClass() throws Exception {
+        SimpleType type1 = SimpleType.construct(String.class);
+        SimpleType type2 = SimpleType.construct(Integer.class);
+        assertFalse(type1.equals(type2));
+    }
+
+    // Test equals with null
+    @Test
+    public void testEqualsWithNull() throws Exception {
+        SimpleType type = SimpleType.construct(String.class);
+        assertFalse(type.equals(null));
+    }
+
+    // Test equals with different class type
+    @Test
+    public void testEqualsWithDifferentClassType() throws Exception {
+        SimpleType type = SimpleType.construct(String.class);
+        assertFalse(type.equals("some string"));
+    }
+
+    // Test _narrow with subclass that is the same class
+    @Test
+    public void testNarrowSameClass() throws Exception {
+        SimpleType type = SimpleType.construct(String.class);
+        JavaType narrowed = type._narrow(String.class);
+        assertSame(type, narrowed);
+    }
+
+    // Test _narrow with a direct subclass
+    @Test
+    public void testNarrowDirectSubclass() throws Exception {
+        class MyBase {}
+        class MyDerived extends MyBase {}
+
+        SimpleType baseType = SimpleType.construct(MyBase.class);
+        JavaType narrowed = baseType._narrow(MyDerived.class);
+
+        assertNotNull(narrowed);
+        assertEquals(MyDerived.class, narrowed.getRawClass());
+        assertEquals(baseType, narrowed.getSuperClass());
+    }
+
+     // Test _narrow with a class not assignable
+    @Test
+    public void testNarrowNotAssignableFrom() throws Exception {
+        SimpleType type = SimpleType.construct(String.class);
+        JavaType narrowed = type._narrow(Integer.class); // Integer is not a subtype of String
+
+        assertNotNull(narrowed);
+        assertEquals(Integer.class, narrowed.getRawClass());
+        assertNotSame(type, narrowed);
+        assertEquals(String.class, type.getRawClass()); // Original type remains unchanged
+    }
+
+    // Added a test for _buildSuperClass to ensure it works as expected for Object.class
+
+    // Added a test for _buildSuperClass for a typical class
+}
+

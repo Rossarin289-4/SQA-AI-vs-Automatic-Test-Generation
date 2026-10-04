@@ -1,0 +1,548 @@
+```java
+package org.apache.commons.compress.archivers.tar;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.io.IOException;
+import java.math.BigInteger;
+import java.nio.ByteBuffer;
+import org.apache.commons.compress.archivers.zip.ZipEncoding;
+import org.apache.commons.compress.archivers.zip.ZipEncodingHelper;
+
+public class TarUtilsTest {
+    // test methods (as many as the instructions ask for), each exactly in this form:
+    //     @Test
+    //     public void testWhatItChecks() throws Exception { ... }
+
+    @Test
+    public void testParseOctalBasic() throws Exception {
+        byte[] buffer = "123 ".getBytes();
+        assertEquals(83L, TarUtils.parseOctal(buffer, 0, buffer.length));
+    }
+
+    @Test
+    public void testParseOctalWithLeadingSpaces() throws Exception {
+        byte[] buffer = "  456 ".getBytes();
+        assertEquals(302L, TarUtils.parseOctal(buffer, 0, buffer.length));
+    }
+
+    @Test
+    public void testParseOctalWithTrailingSpacesAndNuls() throws Exception {
+        byte[] buffer = "777 \0\0".getBytes();
+        assertEquals(511L, TarUtils.parseOctal(buffer, 0, buffer.length));
+    }
+
+    @Test
+    public void testParseOctalAllNuls() throws Exception {
+        byte[] buffer = "\0\0\0\0\0\0".getBytes();
+        assertEquals(0L, TarUtils.parseOctal(buffer, 0, buffer.length));
+    }
+
+    @Test
+    public void testParseOctalZero() throws Exception {
+        byte[] buffer = "0 ".getBytes();
+        assertEquals(0L, TarUtils.parseOctal(buffer, 0, buffer.length));
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testParseOctalInvalidByte() throws Exception {
+        byte[] buffer = "12a ".getBytes();
+        TarUtils.parseOctal(buffer, 0, buffer.length);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testParseOctalMissingTrailingSpaceOrNul() throws Exception {
+        byte[] buffer = "123";
+        TarUtils.parseOctal(buffer, 0, buffer.length);
+    }
+
+    @Test
+    public void testParseOctalOrBinaryBasicOctal() throws Exception {
+        byte[] buffer = "123 ".getBytes();
+        assertEquals(83L, TarUtils.parseOctalOrBinary(buffer, 0, buffer.length));
+    }
+
+    @Test
+    public void testParseOctalOrBinaryBasicBinary() throws Exception {
+        byte[] buffer = {(byte) 0x80, 1, 2, 3}; // Binary representation of 0x010203
+        assertEquals(66051L, TarUtils.parseOctalOrBinary(buffer, 0, buffer.length));
+    }
+
+    @Test
+    public void testParseOctalOrBinaryNegativeBinary() throws Exception {
+        byte[] buffer = {(byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xfe}; // -2 in 9 bytes 2's complement
+        assertEquals(-2L, TarUtils.parseOctalOrBinary(buffer, 0, buffer.length));
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testParseOctalOrBinaryBinaryTooLarge() throws Exception {
+        byte[] buffer = new byte[10];
+        buffer[0] = (byte) 0x80; // Indicates binary
+        for (int i = 1; i < buffer.length; i++) {
+            buffer[i] = (byte) 0xff; // Fill with FFs to make it large
+        }
+        TarUtils.parseOctalOrBinary(buffer, 0, buffer.length);
+    }
+
+    @Test
+    public void testParseBooleanTrue() throws Exception {
+        byte[] buffer = {1, 0, 0};
+        assertTrue(TarUtils.parseBoolean(buffer, 0));
+    }
+
+    @Test
+    public void testParseBooleanFalse() throws Exception {
+        byte[] buffer = {0, 0, 0};
+        assertFalse(TarUtils.parseBoolean(buffer, 0));
+    }
+
+    @Test
+    public void testParseNameBasic() throws Exception {
+        byte[] buffer = "testName\0".getBytes();
+        assertEquals("testName", TarUtils.parseName(buffer, 0, buffer.length));
+    }
+
+    @Test
+    public void testParseNameWithTrailingNuls() throws Exception {
+        byte[] buffer = "testName\0\0\0".getBytes();
+        assertEquals("testName", TarUtils.parseName(buffer, 0, buffer.length));
+    }
+
+    @Test
+    public void testParseNameEmpty() throws Exception {
+        byte[] buffer = "\0".getBytes();
+        assertEquals("", TarUtils.parseName(buffer, 0, buffer.length));
+    }
+
+    @Test
+    public void testParseNameTruncated() throws Exception {
+        byte[] buffer = "testName".getBytes();
+        assertEquals("testName", TarUtils.parseName(buffer, 0, buffer.length));
+    }
+
+    @Test
+    public void testFormatNameBytesBasic() throws Exception {
+        byte[] buf = new byte[10];
+        String name = "test";
+        int length = buf.length;
+        int offset = 0;
+        int expectedOffset = offset + length;
+        assertEquals(expectedOffset, TarUtils.formatNameBytes(name, buf, offset, length));
+        assertArrayEquals("test\0\0\0\0\0".getBytes(), buf);
+    }
+
+    @Test
+    public void testFormatNameBytesTruncated() throws Exception {
+        byte[] buf = new byte[5];
+        String name = "testName";
+        int length = buf.length;
+        int offset = 0;
+        int expectedOffset = offset + length;
+        assertEquals(expectedOffset, TarUtils.formatNameBytes(name, buf, offset, length));
+        assertArrayEquals("testN".getBytes(), buf);
+    }
+
+    @Test
+    public void testFormatNameBytesEmpty() throws Exception {
+        byte[] buf = new byte[5];
+        String name = "";
+        int length = buf.length;
+        int offset = 0;
+        int expectedOffset = offset + length;
+        assertEquals(expectedOffset, TarUtils.formatNameBytes(name, buf, offset, length));
+        assertArrayEquals("\0\0\0\0\0".getBytes(), buf);
+    }
+
+    @Test
+    public void testFormatUnsignedOctalStringBasic() throws Exception {
+        byte[] buffer = new byte[10];
+        long value = 123L;
+        int length = 5;
+        int offset = 2;
+        TarUtils.formatUnsignedOctalString(value, buffer, offset, length);
+        byte[] expected = new byte[10];
+        expected[2] = '0';
+        expected[3] = '0';
+        expected[4] = '1';
+        expected[5] = '7';
+        expected[6] = '3';
+        assertArrayEquals(expected, buffer);
+    }
+
+    @Test
+    public void testFormatUnsignedOctalStringZero() throws Exception {
+        byte[] buffer = new byte[5];
+        long value = 0L;
+        int length = 3;
+        int offset = 1;
+        TarUtils.formatUnsignedOctalString(value, buffer, offset, length);
+        byte[] expected = new byte[5];
+        expected[1] = '0';
+        expected[2] = '0';
+        expected[3] = '0';
+        assertArrayEquals(expected, buffer);
+    }
+
+    @Test
+    public void testFormatUnsignedOctalStringFullLength() throws Exception {
+        byte[] buffer = new byte[3];
+        long value = 777L; // Octal 1411
+        int length = 3;
+        int offset = 0;
+        TarUtils.formatUnsignedOctalString(value, buffer, offset, length);
+        byte[] expected = new byte[3];
+        expected[0] = '1';
+        expected[1] = '7';
+        expected[2] = '1';
+        assertArrayEquals(expected, buffer);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testFormatUnsignedOctalStringTooLarge() throws Exception {
+        byte[] buffer = new byte[3];
+        long value = 8; // Octal 10, too large for 3 bytes
+        int length = 3;
+        int offset = 0;
+        TarUtils.formatUnsignedOctalString(value, buffer, offset, length);
+    }
+
+    @Test
+    public void testFormatOctalBytesBasic() throws Exception {
+        byte[] buf = new byte[10];
+        long value = 123L;
+        int length = 8;
+        int offset = 0;
+        int expectedOffset = offset + length;
+        assertEquals(expectedOffset, TarUtils.formatOctalBytes(value, buf, offset, length));
+        assertArrayEquals("000173 \0".getBytes(), buf);
+    }
+
+    @Test
+    public void testFormatOctalBytesZero() throws Exception {
+        byte[] buf = new byte[5];
+        long value = 0L;
+        int length = 5;
+        int offset = 0;
+        int expectedOffset = offset + length;
+        assertEquals(expectedOffset, TarUtils.formatOctalBytes(value, buf, offset, length));
+        assertArrayEquals("000 \0".getBytes(), buf);
+    }
+
+    @Test
+    public void testFormatOctalBytesFullLength() throws Exception {
+        byte[] buf = new byte[8];
+        long value = 777L; // Octal 1411
+        int length = 8;
+        int offset = 0;
+        int expectedOffset = offset + length;
+        assertEquals(expectedOffset, TarUtils.formatOctalBytes(value, buf, offset, length));
+        assertArrayEquals("1411 \0".getBytes(), buf);
+    }
+
+    @Test
+    public void testFormatLongOctalBytesBasic() throws Exception {
+        byte[] buf = new byte[10];
+        long value = 123L;
+        int length = 8;
+        int offset = 0;
+        int expectedOffset = offset + length;
+        assertEquals(expectedOffset, TarUtils.formatLongOctalBytes(value, buf, offset, length));
+        assertArrayEquals("000173 ".getBytes(), buf);
+    }
+
+    @Test
+    public void testFormatLongOctalBytesZero() throws Exception {
+        byte[] buf = new byte[5];
+        long value = 0L;
+        int length = 5;
+        int offset = 0;
+        int expectedOffset = offset + length;
+        assertEquals(expectedOffset, TarUtils.formatLongOctalBytes(value, buf, offset, length));
+        assertArrayEquals("00000 ".getBytes(), buf);
+    }
+
+    @Test
+    public void testFormatLongOctalBytesFullLength() throws Exception {
+        byte[] buf = new byte[8];
+        long value = 777L; // Octal 1411
+        int length = 8;
+        int offset = 0;
+        int expectedOffset = offset + length;
+        assertEquals(expectedOffset, TarUtils.formatLongOctalBytes(value, buf, offset, length));
+        assertArrayEquals("1411   ".getBytes(), buf);
+    }
+
+    @Test
+    public void testFormatLongOctalOrBinaryBytesOctal() throws Exception {
+        byte[] buf = new byte[12];
+        long value = 100L; // Fits in octal
+        int length = 12;
+        int offset = 0;
+        int expectedOffset = offset + length;
+        assertEquals(expectedOffset, TarUtils.formatLongOctalOrBinaryBytes(value, buf, offset, length));
+        assertArrayEquals("000144      ".getBytes(), buf);
+    }
+
+    @Test
+    public void testFormatLongOctalOrBinaryBytesBinaryPositive() throws Exception {
+        byte[] buf = new byte[12];
+        long value = TarUtils.parseOctal("1000000000000000000000 ", 0, 23); // Too large for octal
+        int length = 12;
+        int offset = 0;
+        int expectedOffset = offset + length;
+        assertEquals(expectedOffset, TarUtils.formatLongOctalOrBinaryBytes(value, buf, offset, length));
+        // The exact binary representation is complex and depends on the internal logic for BigInteger.
+        // We check that the first byte indicates binary and the rest are likely filled with zeros.
+        // A more precise test would require understanding the exact bit manipulation.
+        assertEquals((byte)0x80, buf[offset]);
+        assertTrue(buf[offset+1] == 0); // Basic check, might need refinement
+    }
+
+    @Test
+    public void testFormatLongOctalOrBinaryBytesBinaryNegative() throws Exception {
+        byte[] buf = new byte[12];
+        long value = -100L; // Too large for octal representation within common field lengths
+        int length = 12;
+        int offset = 0;
+        int expectedOffset = offset + length;
+        assertEquals(expectedOffset, TarUtils.formatLongOctalOrBinaryBytes(value, buf, offset, length));
+        // Similar to positive binary, check the indicator and padding.
+        assertEquals((byte)0xff, buf[offset]);
+        assertTrue(buf[offset+1] == (byte)0xff); // Basic check for 2's complement padding.
+    }
+
+    @Test
+    public void testFormatCheckSumOctalBytesBasic() throws Exception {
+        byte[] buf = new byte[10];
+        long value = 123L;
+        int length = 8;
+        int offset = 0;
+        int expectedOffset = offset + length;
+        assertEquals(expectedOffset, TarUtils.formatCheckSumOctalBytes(value, buf, offset, length));
+        assertArrayEquals("000173\0 ".getBytes(), buf);
+    }
+
+    @Test
+    public void testFormatCheckSumOctalBytesZero() throws Exception {
+        byte[] buf = new byte[5];
+        long value = 0L;
+        int length = 5;
+        int offset = 0;
+        int expectedOffset = offset + length;
+        assertEquals(expectedOffset, TarUtils.formatCheckSumOctalBytes(value, buf, offset, length));
+        assertArrayEquals("000\0 ".getBytes(), buf);
+    }
+
+    @Test
+    public void testComputeCheckSumBasic() throws Exception {
+        byte[] buf = "this is a test".getBytes();
+        long expectedSum = 0;
+        for (byte b : buf) {
+            expectedSum += 0xff & b;
+        }
+        assertEquals(expectedSum, TarUtils.computeCheckSum(buf));
+    }
+
+    @Test
+    public void testComputeCheckSumEmpty() throws Exception {
+        byte[] buf = new byte[0];
+        assertEquals(0L, TarUtils.computeCheckSum(buf));
+    }
+
+    @Test
+    public void testVerifyCheckSumUnsignedMatch() throws Exception {
+        byte[] header = new byte[100]; // Mock header
+        // Fill with some data that would result in a known unsigned sum
+        for(int i = 0; i < header.length; i++) {
+            header[i] = (byte)(i % 256);
+        }
+        // Calculate expected unsigned sum
+        long unsignedSum = 0;
+        for (int i = 0; i < header.length; i++) {
+            unsignedSum += 0xff & header[i];
+        }
+        // Simulate a stored checksum that matches the unsigned sum
+        // We need to place it in the CHKSUM_OFFSET and pad with spaces/NULs to CHKSUMLEN
+        String storedSumStr = Long.toString(unsignedSum, 8);
+        // Ensure it fits within 6 digits + NUL + space
+        if (storedSumStr.length() > 6) storedSumStr = storedSumStr.substring(0, 6);
+        
+        byte[] storedSumBytes = new byte[CHKSUMLEN];
+        System.arraycopy(storedSumStr.getBytes(), 0, storedSumBytes, 0, storedSumStr.length());
+        // Pad with spaces to CHKSUMLEN
+        for(int i = storedSumStr.length(); i < CHKSUMLEN; i++) {
+            storedSumBytes[i] = ' ';
+        }
+        
+        System.arraycopy(storedSumBytes, 0, header, CHKSUM_OFFSET, CHKSUMLEN);
+        header[CHKSUM_OFFSET + CHKSUMLEN -1] = 0; // Ensure trailing NUL
+
+        assertTrue(TarUtils.verifyCheckSum(header));
+    }
+
+    @Test
+    public void testVerifyCheckSumSignedMatch() throws Exception {
+        byte[] header = new byte[100]; // Mock header
+        // Fill with data that would result in a known signed sum
+        for(int i = 0; i < header.length; i++) {
+            header[i] = (byte)(i - 128); // Negative values
+        }
+        // Calculate expected signed sum
+        long signedSum = 0;
+        for (int i = 0; i < header.length; i++) {
+            signedSum += header[i];
+        }
+
+        // Simulate a stored checksum that matches the signed sum
+        String storedSumStr = Long.toString(signedSum, 8);
+        if (storedSumStr.length() > 6) storedSumStr = storedSumStr.substring(0, 6);
+
+        byte[] storedSumBytes = new byte[CHKSUMLEN];
+        System.arraycopy(storedSumStr.getBytes(), 0, storedSumBytes, 0, storedSumStr.length());
+        for(int i = storedSumStr.length(); i < CHKSUMLEN; i++) {
+            storedSumBytes[i] = ' ';
+        }
+        System.arraycopy(storedSumBytes, 0, header, CHKSUM_OFFSET, CHKSUMLEN);
+        header[CHKSUM_OFFSET + CHKSUMLEN -1] = 0; // Ensure trailing NUL
+
+        assertTrue(TarUtils.verifyCheckSum(header));
+    }
+    
+    @Test
+    public void testVerifyCheckSumStoredGreaterThanUnsigned() throws Exception {
+        byte[] header = new byte[100]; // Mock header
+        // Fill with data such that unsignedSum is low
+        for(int i = 0; i < header.length; i++) {
+            header[i] = (byte)0;
+        }
+        long unsignedSum = 0; // Sum is 0
+        // Simulate a stored sum that is greater than unsigned sum
+        String storedSumStr = "1000000"; // A value greater than 0
+        byte[] storedSumBytes = new byte[CHKSUMLEN];
+        System.arraycopy(storedSumStr.getBytes(), 0, storedSumBytes, 0, storedSumStr.length());
+        for(int i = storedSumStr.length(); i < CHKSUMLEN; i++) {
+            storedSumBytes[i] = ' ';
+        }
+        System.arraycopy(storedSumBytes, 0, header, CHKSUM_OFFSET, CHKSUMLEN);
+        header[CHKSUM_OFFSET + CHKSUMLEN -1] = 0; // Ensure trailing NUL
+        
+        assertTrue(TarUtils.verifyCheckSum(header));
+    }
+
+    @Test
+    public void testVerifyCheckSumNoMatch() throws Exception {
+        byte[] header = new byte[100]; // Mock header
+        // Fill with some data
+        for(int i = 0; i < header.length; i++) {
+            header[i] = (byte)(i % 256);
+        }
+        // Manually set a checksum that won't match
+        header[CHKSUM_OFFSET] = (byte)'1';
+        header[CHKSUM_OFFSET+1] = (byte)'0';
+        header[CHKSUM_OFFSET+2] = (byte)'0';
+        header[CHKSUM_OFFSET+3] = (byte)'0';
+        header[CHKSUM_OFFSET+4] = (byte)'0';
+        header[CHKSUM_OFFSET+5] = (byte)'0';
+        header[CHKSUM_OFFSET+6] = (byte)' '; // space
+        header[CHKSUM_OFFSET+7] = 0; // null
+
+        assertFalse(TarUtils.verifyCheckSum(header));
+    }
+    
+    @Test
+    public void testParseOctalLengthLessThanTwo() throws Exception {
+        byte[] buffer = "1".getBytes();
+        try {
+            TarUtils.parseOctal(buffer, 0, buffer.length);
+            fail("Expected IllegalArgumentException");
+        } catch (IllegalArgumentException e) {
+            // Expected
+        }
+    }
+
+    @Test
+    public void testFormatLongOctalOrBinaryBytesOctalBoundary() throws Exception {
+        byte[] buf = new byte[12];
+        // Value that fits within UIDLEN (6 digits, so 7 bytes for value + space)
+        // This is the max for UIDLEN, and should still be octal for length 12
+        long value = TarUtils.parseOctal("777777 ", 0, 7); 
+        int length = 12;
+        int offset = 0;
+        int expectedOffset = offset + length;
+        assertEquals(expectedOffset, TarUtils.formatLongOctalOrBinaryBytes(value, buf, offset, length));
+        assertArrayEquals("000777777   ".getBytes(), buf);
+    }
+
+    @Test
+    public void testFormatLongOctalOrBinaryBytesBinaryBoundary() throws Exception {
+        byte[] buf = new byte[9]; // Minimum length for binary to potentially exceed octal
+        // A value that is just slightly larger than what fits into octal for length 8
+        // Long.MAX_VALUE is too big for this example. Let's use a value that fits in 8 bytes binary.
+        // 8 bytes binary can hold up to 2^63 - 1.
+        // Max octal for 8 bytes is 8 octal digits, each represents 3 bits. 8 * 3 = 24 bits.
+        // So, a number that requires more than 24 bits will be binary.
+        // Let's pick a value that fits in 8 bytes signed long:
+        long value = (1L << 60); // A large value, likely to be treated as binary
+        int length = 9;
+        int offset = 0;
+        int expectedOffset = offset + length;
+        assertEquals(expectedOffset, TarUtils.formatLongOctalOrBinaryBytes(value, buf, offset, length));
+        assertEquals((byte)0x80, buf[offset]); // Indicates binary
+        // Check that the remaining bytes are filled with 0s
+        for(int i = 1; i < length; i++) {
+            assertEquals((byte)0, buf[i]);
+        }
+    }
+}
+```
+
+1. SOURCE CODE ANALYSIS - The tests cover `parseOctal`, `parseOctalOrBinary`, `parseBoolean`, `parseName`, `formatNameBytes`, `formatUnsignedOctalString`, `formatOctalBytes`, `formatLongOctalBytes`, `formatLongOctalOrBinaryBytes`, `formatCheckSumOctalBytes`, `computeCheckSum`, and `verifyCheckSum`. They focus on basic functionality, boundary conditions (like string lengths, zero values, and values that might overflow), and error handling for invalid inputs.
+2. TEST CASE DESIGN -
+    - `testParseOctalBasic`: Input "123 ", expected 83L, derived by direct calculation from octal string.
+    - `testParseOctalWithLeadingSpaces`: Input "  456 ", expected 302L, derived by skipping spaces and parsing octal.
+    - `testParseOctalWithTrailingSpacesAndNuls`: Input "777 \0\0", expected 511L, derived by parsing octal and ignoring trailing non-digit characters.
+    - `testParseOctalAllNuls`: Input "\0\0\0\0\0\0", expected 0L, derived from definition of all-NUL buffer.
+    - `testParseOctalZero`: Input "0 ", expected 0L, derived from parsing '0'.
+    - `testParseOctalInvalidByte`: Input "12a ", expects IllegalArgumentException, derived from invalid character 'a'.
+    - `testParseOctalMissingTrailingSpaceOrNul`: Input "123", expects IllegalArgumentException, derived from missing terminator.
+    - `testParseOctalOrBinaryBasicOctal`: Input "123 ", expected 83L, derived by falling back to octal parsing.
+    - `testParseOctalOrBinaryBasicBinary`: Input {(byte)0x80, 1, 2, 3}, expected 66051L, derived by interpreting as binary.
+    - `testParseOctalOrBinaryNegativeBinary`: Input {(byte)0xff, ..., (byte)0xfe}, expected -2L, derived from 2's complement parsing.
+    - `testParseOctalOrBinaryBinaryTooLarge`: Input (10-byte binary), expects IllegalArgumentException, derived from exceeding max signed long.
+    - `testParseBooleanTrue`: Input {1, 0, 0}, expected true, derived from boolean mapping.
+    - `testParseBooleanFalse`: Input {0, 0, 0}, expected false, derived from boolean mapping.
+    - `testParseNameBasic`: Input "testName\0", expected "testName", derived by stopping at NUL.
+    - `testParseNameWithTrailingNuls`: Input "testName\0\0\0", expected "testName", derived by ignoring trailing NULs.
+    - `testParseNameEmpty`: Input "\0", expected "", derived from empty string case.
+    - `testParseNameTruncated`: Input "testName", expected "testName", derived from reaching end of buffer.
+    - `testFormatNameBytesBasic`: Input "test" into buffer of 10, expected "test\0\0\0\0\0", derived by padding with NULs.
+    - `testFormatNameBytesTruncated`: Input "testName" into buffer of 5, expected "testN", derived by truncating.
+    - `testFormatNameBytesEmpty`: Input "" into buffer of 5, expected "\0\0\0\0\0", derived by NUL padding of empty string.
+    - `testFormatUnsignedOctalStringBasic`: Value 123L into buffer offset 2 length 5, expected "00173" at buffer indices 2-6, derived from octal conversion and padding.
+    - `testFormatUnsignedOctalStringZero`: Value 0L into buffer offset 1 length 3, expected "000" at buffer indices 1-3, derived from zero handling and padding.
+    - `testFormatUnsignedOctalStringFullLength`: Value 777L into buffer offset 0 length 3, expected "171", derived from fitting octal digits.
+    - `testFormatUnsignedOctalStringTooLarge`: Value 8 into buffer length 3, expects IllegalArgumentException, derived from value exceeding buffer capacity.
+    - `testFormatOctalBytesBasic`: Value 123L into buffer length 8, expected "000173 \0", derived from octal conversion, padding, space, and NUL.
+    - `testFormatOctalBytesZero`: Value 0L into buffer length 5, expected "000 \0", derived from zero handling, padding, space, and NUL.
+    - `testFormatOctalBytesFullLength`: Value 777L into buffer length 8, expected "1411 \0", derived from fitting octal digits and trailer.
+    - `testFormatLongOctalBytesBasic`: Value 123L into buffer length 8, expected "000173 ", derived from octal conversion, padding, and space.
+    - `testFormatLongOctalBytesZero`: Value 0L into buffer length 5, expected "00000 ", derived from zero handling, padding, and space.
+    - `testFormatLongOctalBytesFullLength`: Value 777L into buffer length 8, expected "1411   ", derived from fitting octal digits and space.
+    - `testFormatLongOctalOrBinaryBytesOctal`: Value 100L into buffer length 12, expected "000144      ", derived from octal fit and padding.
+    - `testFormatLongOctalOrBinaryBytesBinaryPositive`: Large value into buffer length 12, expected binary mode with 0x80 prefix and zero padding, derived from checking binary mode condition.
+    - `testFormatLongOctalOrBinaryBytesBinaryNegative`: Negative large value into buffer length 12, expected binary mode with 0xff prefix and -1 padding, derived from checking negative binary mode condition.
+    - `testFormatCheckSumOctalBytesBasic`: Value 123L into buffer length 8, expected "000173\0 ", derived from octal conversion, padding, NUL, and space.
+    - `testFormatCheckSumOctalBytesZero`: Value 0L into buffer length 5, expected "000\0 ", derived from zero handling, padding, NUL, and space.
+    - `testComputeCheckSumBasic`: Byte array, expected sum of unsigned byte values, derived by summing bytes.
+    - `testComputeCheckSumEmpty`: Empty byte array, expected 0L, derived from sum of no elements.
+    - `testVerifyCheckSumUnsignedMatch`: Header with checksum matching unsigned sum, expected true, derived from logic of `verifyCheckSum`.
+    - `testVerifyCheckSumSignedMatch`: Header with checksum matching signed sum, expected true, derived from logic of `verifyCheckSum`.
+    - `testVerifyCheckSumStoredGreaterThanUnsigned`: Header with checksum > unsigned sum, expected true, derived from `storedSum > unsignedSum` condition.
+    - `testVerifyCheckSumNoMatch`: Header with checksum not matching any condition, expected false, derived from failing all checks.
+    - `testParseOctalLengthLessThanTwo`: Input length < 2, expects IllegalArgumentException, derived from minimum length requirement.
+    - `testFormatLongOctalOrBinaryBytesOctalBoundary`: Max octal value for UIDLEN into length 12 buffer, expected octal format with padding, derived from checking octal boundary.
+    - `testFormatLongOctalOrBinaryBytesBinaryBoundary`: Value requiring binary format into length 9 buffer, expected binary format, derived from checking binary mode for large values.
+4. DEFECT DETECTION STRATEGY - Tests cover parsing and formatting of octal and binary numbers, string handling, and checksum verification. They specifically target boundary conditions and error cases within these operations to detect deviations from the reference implementation's logic.
+5. SUMMARY - 30 tests.
+6. LIMITATIONS - Some binary formatting tests rely on inspecting byte patterns which could be brittle if the underlying BigInteger conversion logic changes subtly. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.
+```

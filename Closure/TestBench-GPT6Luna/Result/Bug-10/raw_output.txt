@@ -1,0 +1,202 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Predicate;
+import com.google.common.base.Predicates;
+import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Maps;
+import com.google.javascript.rhino.IR;
+import com.google.javascript.rhino.InputId;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.TokenStream;
+import com.google.javascript.rhino.jstype.FunctionType;
+import com.google.javascript.rhino.jstype.JSType;
+import com.google.javascript.rhino.jstype.StaticSourceFile;
+import com.google.javascript.rhino.jstype.TernaryValue;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+import javax.annotation.Nullable;
+
+public class NodeUtilTest {
+    @Test
+    public void testWhitespaceBoundariesAndSpecialCharacters() throws Exception {
+        assertEquals(TernaryValue.TRUE, NodeUtil.isStrWhiteSpaceChar(' '));
+        assertEquals(TernaryValue.TRUE, NodeUtil.isStrWhiteSpaceChar(0xFEFF));
+        assertEquals(TernaryValue.UNKNOWN, NodeUtil.isStrWhiteSpaceChar('\u000B'));
+        assertEquals(TernaryValue.FALSE, NodeUtil.isStrWhiteSpaceChar(0x7f));
+    }
+
+    @Test
+    public void testNearestFunctionNameForFunctionNodeAndNonFunction() throws Exception {
+        assertNull(NodeUtil.getNearestFunctionName(IR.name("notFn")));
+        Node fn = IR.function(IR.name("named"), IR.paramList(), IR.block());
+        Node script = IR.script(fn);
+        assertEquals("named", NodeUtil.getNearestFunctionName(fn));
+        assertSame(fn, script.getFirstChild());
+    }
+
+    @Test
+    public void testNearestFunctionNameForNameAssignedFunction() throws Exception {
+        Node fn = IR.function(IR.name(""), IR.paramList(), IR.block());
+        Node name = IR.name("assigned");
+        name.addChildToBack(fn);
+        IR.var(name);
+        assertEquals("assigned", NodeUtil.getNearestFunctionName(fn));
+    }
+
+    @Test
+    public void testNearestFunctionNameForObjectKey() throws Exception {
+        Node fn = IR.function(IR.name(""), IR.paramList(), IR.block());
+        Node key = IR.stringKey("entry");
+        key.addChildToBack(fn);
+        IR.objectlit(key);
+        assertEquals("entry", NodeUtil.getNearestFunctionName(fn));
+    }
+
+    @Test
+    public void testPredicateApplyMatchesExpectedNodeType() throws Exception {
+        NodeUtil.MatchNodeType predicate = new NodeUtil.MatchNodeType(Token.NUMBER);
+        assertTrue(predicate.apply(IR.number(0)));
+        assertFalse(predicate.apply(IR.name("x")));
+    }
+
+    @Test
+    public void testLValueForVariableDeclaration() throws Exception {
+        Node name = IR.name("value");
+        IR.var(name);
+        assertTrue(NodeUtil.isLValue(name));
+    }
+
+    @Test
+    public void testLValueForAssignmentAndUnattachedName() throws Exception {
+        Node lhs = IR.name("value");
+        IR.assign(lhs, IR.number(1));
+        assertTrue(NodeUtil.isLValue(lhs));
+        assertFalse(NodeUtil.isLValue(IR.name("value")));
+    }
+
+    @Test
+    public void testQualifiedNameNodeAtRootAndProperty() throws Exception {
+        CodingConvention convention = new ClosureCodingConvention();
+        Node root = NodeUtil.newQualifiedNameNode(convention, "item");
+        Node qualified = NodeUtil.newQualifiedNameNode(convention, "item.part");
+        assertEquals("item", root.getQualifiedName());
+        assertEquals("item.part", qualified.getQualifiedName());
+    }
+
+    @Test
+    public void testQualifiedNameValidationEdges() throws Exception {
+        assertTrue(NodeUtil.isValidQualifiedName("alpha"));
+        assertTrue(NodeUtil.isValidQualifiedName("alpha.beta"));
+        assertFalse(NodeUtil.isValidQualifiedName(".alpha"));
+        assertFalse(NodeUtil.isValidQualifiedName("alpha."));
+        assertFalse(NodeUtil.isValidQualifiedName("alpha..beta"));
+    }
+
+    @Test
+    public void testQualifiedNameRejectsKeywordAndInvalidIdentifier() throws Exception {
+        assertFalse(NodeUtil.isValidQualifiedName("class"));
+        assertFalse(NodeUtil.isValidQualifiedName("9name"));
+        assertFalse(NodeUtil.isValidQualifiedName("with-hyphen"));
+    }
+
+    @Test
+    public void testFunctionParametersReturnsParameterList() throws Exception {
+        Node param = IR.name("arg");
+        Node fn = IR.function(IR.name("f"), IR.paramList(param), IR.block());
+        assertSame(param, NodeUtil.getFunctionParameters(fn).getFirstChild());
+        assertEquals(1, NodeUtil.getFunctionParameters(fn).getChildCount());
+    }
+
+    @Test
+    public void testFunctionParametersEmptyList() throws Exception {
+        Node fn = IR.function(IR.name("f"), IR.paramList(), IR.block());
+        assertEquals(0, NodeUtil.getFunctionParameters(fn).getChildCount());
+    }
+
+    @Test
+    public void testFunctionJsDocInfoDirectlyAbsent() throws Exception {
+        Node fn = IR.function(IR.name("f"), IR.paramList(), IR.block());
+        assertNull(NodeUtil.getFunctionJSDocInfo(fn));
+    }
+
+    @Test
+    public void testSourceNameWithoutAnnotation() throws Exception {
+        assertNull(NodeUtil.getSourceName(IR.name("x")));
+    }
+
+    @Test
+    public void testSourceNameOnAncestor() throws Exception {
+        Node script = IR.script(IR.name("x"));
+        script.putProp(Node.SOURCENAME_PROP, "source.js");
+        assertEquals("source.js", NodeUtil.getSourceName(script.getFirstChild()));
+    }
+
+    @Test
+    public void testSourceFileWithoutAnnotation() throws Exception {
+        assertNull(NodeUtil.getSourceFile(IR.name("x")));
+    }
+
+    @Test
+    public void testInputIdWithoutScriptAncestor() throws Exception {
+        assertNull(NodeUtil.getInputId(IR.name("x")));
+    }
+
+    @Test
+    public void testInputIdFromScriptAncestor() throws Exception {
+        Node script = IR.script(IR.name("x"));
+        InputId id = new InputId("input.js");
+        script.setInputId(id);
+        assertSame(id, NodeUtil.getInputId(script.getFirstChild()));
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+
+The listed methods with logic include whitespace classification, function-name selection, qualified-name validation/building, L-value detection, and function-parameter lookup.  
+The tests also exercise predicate application and source-name, source-file, input-ID, and JSDoc lookup behavior.
+
+### 2. TEST CASE DESIGN
+
+- `testWhitespaceBoundariesAndSpecialCharacters`: ASCII space, BOM, vertical tab, and DEL; expected classifications follow the whitespace switch and fallback character-type check.
+- `testNearestFunctionNameForFunctionNodeAndNonFunction`: non-function returns null; a named function at script scope returns its own name.
+- `testNearestFunctionNameForNameAssignedFunction`: function parented by a variable name returns the variable name.
+- `testNearestFunctionNameForObjectKey`: anonymous function under a string key returns the key.
+- `testPredicateApplyMatchesExpectedNodeType`: number matches `Token.NUMBER`; name does not.
+- `testLValueForVariableDeclaration`: a name parented by `VAR` is an L-value.
+- `testLValueForAssignmentAndUnattachedName`: assignment LHS is an L-value; unattached name has no parent and is not.
+- `testQualifiedNameNodeAtRootAndProperty`: simple and dotted names preserve their qualified-name strings.
+- `testQualifiedNameValidationEdges`: valid simple and dotted names pass; leading/trailing dots and empty component fail.
+- `testQualifiedNameRejectsKeywordAndInvalidIdentifier`: keywords, leading digits, and punctuation are invalid identifier forms.
+- `testFunctionParametersReturnsParameterList`: returns the function’s parameter-list node containing its one argument.
+- `testFunctionParametersEmptyList`: empty parameter list has zero children.
+- `testFunctionJsDocInfoDirectlyAbsent`: no attached or parent-level documentation yields null.
+- `testSourceNameWithoutAnnotation`: no source-name annotation in the ancestry yields null.
+- `testSourceNameOnAncestor`: source name on the script is inherited by its child.
+- `testSourceFileWithoutAnnotation`: no source-file annotation yields null.
+- `testInputIdWithoutScriptAncestor`: no script ancestor yields null.
+- `testInputIdFromScriptAncestor`: returns the script’s assigned input ID.
+
+### 4. DEFECT DETECTION STRATEGY
+
+The tests pin both successful and rejected name forms, whitespace edge classifications, and AST-parent-dependent lookups.  
+They also check exact parameter-list and source/input metadata behavior rather than relying only on non-null assertions.
+
+### 5. SUMMARY
+
+18 tests.
+
+### 6. LIMITATIONS
+
+The provided outline does not expose a source-file setter or a practical JSDoc construction route, so those lookup cases are tested only in their absent state.  
+Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

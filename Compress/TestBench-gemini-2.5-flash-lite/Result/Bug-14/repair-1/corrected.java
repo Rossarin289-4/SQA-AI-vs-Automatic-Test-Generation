@@ -1,0 +1,467 @@
+package org.apache.commons.compress.archivers.tar;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.nio.charset.StandardCharsets;
+
+public class TarUtilsTest {
+
+    @Test
+    public void testParseOctalBasic() throws Exception {
+        byte[] buffer = "123 ".getBytes(StandardCharsets.US_ASCII);
+        assertEquals(83, TarUtils.parseOctal(buffer, 0, buffer.length));
+    }
+
+    @Test
+    public void testParseOctalWithTrailingNul() throws Exception {
+        byte[] buffer = "456\0".getBytes(StandardCharsets.US_ASCII);
+        assertEquals(302, TarUtils.parseOctal(buffer, 0, buffer.length));
+    }
+
+    @Test
+    public void testParseOctalWithLeadingSpaces() throws Exception {
+        byte[] buffer = "  789 ".getBytes(StandardCharsets.US_ASCII);
+        assertEquals(505, TarUtils.parseOctal(buffer, 0, buffer.length));
+    }
+
+    @Test
+    public void testParseOctalAllZeros() throws Exception {
+        byte[] buffer = "0000".getBytes(StandardCharsets.US_ASCII);
+        assertEquals(0L, TarUtils.parseOctal(buffer, 0, buffer.length));
+    }
+
+    @Test
+    public void testParseOctalWithNulAndSpaceTrailer() throws Exception {
+        byte[] buffer = "123\0 ".getBytes(StandardCharsets.US_ASCII);
+        assertEquals(83, TarUtils.parseOctal(buffer, 0, buffer.length));
+    }
+
+    @Test
+    public void testParseOctalEmptyBufferContent() throws Exception {
+        // This test case covers the scenario where the buffer contains only spaces and NULs
+        byte[] buffer = "   \0 ".getBytes(StandardCharsets.US_ASCII);
+        assertEquals(0L, TarUtils.parseOctal(buffer, 0, buffer.length));
+    }
+    
+    @Test
+    public void testParseOctalLengthLessThanTwo() throws Exception {
+        try {
+            byte[] buffer = "1".getBytes(StandardCharsets.US_ASCII);
+            TarUtils.parseOctal(buffer, 0, 1);
+            fail("Expected IllegalArgumentException for length less than 2");
+        } catch (IllegalArgumentException e) {
+            assertTrue(e.getMessage().contains("Length 1 must be at least 2"));
+        }
+    }
+
+    @Test
+    public void testParseOctalInvalidByte() throws Exception {
+        byte[] buffer = "12A ".getBytes(StandardCharsets.US_ASCII);
+        try {
+            TarUtils.parseOctal(buffer, 0, buffer.length);
+            fail("Expected IllegalArgumentException for invalid byte");
+        } catch (IllegalArgumentException e) {
+            assertTrue(e.getMessage().contains("Invalid byte 65 at offset 2 in '12A ' len=4"));
+        }
+    }
+
+    @Test
+    public void testParseOctalMissingTrailingSpaceOrNul() throws Exception {
+        byte[] buffer = "123".getBytes(StandardCharsets.US_ASCII);
+        try {
+            TarUtils.parseOctal(buffer, 0, buffer.length);
+            fail("Expected IllegalArgumentException for missing trailer");
+        } catch (IllegalArgumentException e) {
+            assertTrue(e.getMessage().contains("Invalid byte 51 at offset 2 in '123' len=3"));
+        }
+    }
+
+    @Test
+    public void testParseOctalOrBinaryBasicOctal() throws Exception {
+        byte[] buffer = "123 ".getBytes(StandardCharsets.US_ASCII);
+        assertEquals(83, TarUtils.parseOctalOrBinary(buffer, 0, buffer.length));
+    }
+
+    @Test
+    public void testParseOctalOrBinaryBasicBinary() throws Exception {
+        // Represents 257 (0x0101)
+        byte[] buffer = {(byte) 0x81, 0x01}; 
+        assertEquals(257, TarUtils.parseOctalOrBinary(buffer, 0, buffer.length));
+    }
+
+    @Test
+    public void testParseOctalOrBinaryBinaryWithMoreBytes() throws Exception {
+        // Represents 65537 (0x010001)
+        byte[] buffer = {(byte) 0x81, 0x00, 0x01}; 
+        assertEquals(65537, TarUtils.parseOctalOrBinary(buffer, 0, buffer.length));
+    }
+    
+    @Test
+    public void testParseOctalOrBinaryBinaryLargeValue() throws Exception {
+        // Represents a large binary value that fits in long
+        byte[] buffer = {(byte) 0x80, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF};
+        long expected = (1L << 63) - 1; // Maximum positive signed long
+        assertEquals(expected, TarUtils.parseOctalOrBinary(buffer, 0, buffer.length));
+    }
+    
+    @Test
+    public void testParseOctalOrBinaryBinaryExceedsLong() throws Exception {
+        // Value that exceeds maximum signed long when interpreted as binary
+        byte[] buffer = {(byte) 0x81, (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00};
+        try {
+            TarUtils.parseOctalOrBinary(buffer, 0, buffer.length);
+            fail("Expected IllegalArgumentException for binary number exceeding long");
+        } catch (IllegalArgumentException e) {
+            assertTrue(e.getMessage().contains("exceeds maximum signed long value"));
+        }
+    }
+
+    @Test
+    public void testParseBooleanTrue() throws Exception {
+        byte[] buffer = {1, 'a'};
+        assertTrue(TarUtils.parseBoolean(buffer, 0));
+    }
+
+    @Test
+    public void testParseBooleanFalse() throws Exception {
+        byte[] buffer = {0, 'b'};
+        assertFalse(TarUtils.parseBoolean(buffer, 0));
+    }
+    
+    @Test
+    public void testParseBooleanWithLeadingSpaces() throws Exception {
+        byte[] buffer = {' ', ' ', 1, 'c'};
+        assertTrue(TarUtils.parseBoolean(buffer, 2));
+    }
+
+    @Test
+    public void testParseBooleanWithTrailingSpaces() throws Exception {
+        byte[] buffer = {1, ' ', ' '};
+        assertTrue(TarUtils.parseBoolean(buffer, 0));
+    }
+
+    @Test
+    public void testParseBooleanWithNul() throws Exception {
+        byte[] buffer = {1, 0};
+        assertTrue(TarUtils.parseBoolean(buffer, 0));
+    }
+
+    @Test
+    public void testParseBooleanInvalidByte() throws Exception {
+        byte[] buffer = {2, 'd'};
+        // The implementation returns false for anything not 1.
+        assertFalse(TarUtils.parseBoolean(buffer, 0)); 
+    }
+
+    @Test
+    public void testParseNameBasic() throws Exception {
+        byte[] buffer = "filename".getBytes(StandardCharsets.US_ASCII);
+        assertEquals("filename", TarUtils.parseName(buffer, 0, buffer.length));
+    }
+
+    @Test
+    public void testParseNameWithTrailingNul() throws Exception {
+        byte[] buffer = "filename\0".getBytes(StandardCharsets.US_ASCII);
+        assertEquals("filename", TarUtils.parseName(buffer, 0, buffer.length));
+    }
+
+    @Test
+    public void testParseNameWithNulInMiddle() throws Exception {
+        byte[] buffer = "file\0name".getBytes(StandardCharsets.US_ASCII);
+        assertEquals("file", TarUtils.parseName(buffer, 0, buffer.length));
+    }
+
+    @Test
+    public void testParseNameEmpty() throws Exception {
+        byte[] buffer = "".getBytes(StandardCharsets.US_ASCII);
+        assertEquals("", TarUtils.parseName(buffer, 0, buffer.length));
+    }
+
+    @Test
+    public void testParseNameFullBuffer() throws Exception {
+        byte[] buffer = "longfilename".getBytes(StandardCharsets.US_ASCII);
+        assertEquals("longfilename", TarUtils.parseName(buffer, 0, buffer.length));
+    }
+
+    @Test
+    public void testParseNameTruncated() throws Exception {
+        byte[] buffer = "verylongfilename".getBytes(StandardCharsets.US_ASCII);
+        assertEquals("verylong", TarUtils.parseName(buffer, 0, 8));
+    }
+    
+    @Test
+    public void testParseNameWithOffset() throws Exception {
+        byte[] buffer = "prefix_filename\0".getBytes(StandardCharsets.US_ASCII);
+        assertEquals("filename", TarUtils.parseName(buffer, 7, buffer.length - 7));
+    }
+
+    @Test
+    public void testFormatNameBytesBasic() throws Exception {
+        byte[] buf = new byte[10];
+        String name = "test";
+        int expectedOffset = 10;
+        assertEquals(expectedOffset, TarUtils.formatNameBytes(name, buf, 0, 10));
+        assertArrayEquals("test\0\0\0\0\0".getBytes(StandardCharsets.US_ASCII), buf);
+    }
+
+    @Test
+    public void testFormatNameBytesTruncated() throws Exception {
+        byte[] buf = new byte[5];
+        String name = "longtestname";
+        int expectedOffset = 5;
+        assertEquals(expectedOffset, TarUtils.formatNameBytes(name, buf, 0, 5));
+        assertArrayEquals("longt".getBytes(StandardCharsets.US_ASCII), buf);
+    }
+
+    @Test
+    public void testFormatNameBytesEmptyName() throws Exception {
+        byte[] buf = new byte[5];
+        String name = "";
+        int expectedOffset = 5;
+        assertEquals(expectedOffset, TarUtils.formatNameBytes(name, buf, 0, 5));
+        assertArrayEquals(new byte[]{0, 0, 0, 0, 0}, buf);
+    }
+    
+    @Test
+    public void testFormatNameBytesWithOffset() throws Exception {
+        byte[] buf = new byte[15];
+        String name = "test";
+        int offset = 5;
+        int length = 10;
+        int expectedOffset = 15;
+        assertEquals(expectedOffset, TarUtils.formatNameBytes(name, buf, offset, length));
+        byte[] expected = new byte[15];
+        expected[5] = 't'; expected[6] = 'e'; expected[7] = 's'; expected[8] = 't';
+        assertArrayEquals(expected, buf);
+    }
+
+    @Test
+    public void testFormatUnsignedOctalStringBasic() throws Exception {
+        byte[] buffer = new byte[10];
+        TarUtils.formatUnsignedOctalString(123, buffer, 0, 10);
+        // Expected: "0000000123" (8 digits, 2 padding)
+        assertArrayEquals("0000000123".getBytes(StandardCharsets.US_ASCII), buffer);
+    }
+
+    @Test
+    public void testFormatUnsignedOctalStringZero() throws Exception {
+        byte[] buffer = new byte[5];
+        TarUtils.formatUnsignedOctalString(0, buffer, 0, 5);
+        assertArrayEquals("00000".getBytes(StandardCharsets.US_ASCII), buffer);
+    }
+
+    @Test
+    public void testFormatUnsignedOctalStringLargeValueFits() throws Exception {
+        byte[] buffer = new byte[10]; // Fits 8 octal digits + padding
+        // Represents 0177777 (octal) = 65535 (decimal)
+        TarUtils.formatUnsignedOctalString(65535, buffer, 0, 10); 
+        assertArrayEquals("000177777".getBytes(StandardCharsets.US_ASCII), buffer);
+    }
+    
+    @Test
+    public void testFormatUnsignedOctalStringMaxValue() throws Exception {
+        byte[] buffer = new byte[22]; // Fits 21 octal digits for Long.MAX_VALUE
+        TarUtils.formatUnsignedOctalString(Long.MAX_VALUE, buffer, 0, 22);
+        // Long.MAX_VALUE in octal is 777777777777777777777
+        assertEquals("0" + "777777777777777777777", new String(buffer, StandardCharsets.US_ASCII));
+    }
+
+    @Test
+    public void testFormatUnsignedOctalStringValueTooLarge() throws Exception {
+        byte[] buffer = new byte[5]; // Too small for 65535
+        try {
+            TarUtils.formatUnsignedOctalString(65535, buffer, 0, 5);
+            fail("Expected IllegalArgumentException for value too large");
+        } catch (IllegalArgumentException e) {
+            assertTrue(e.getMessage().contains("will not fit in octal number buffer of length 5"));
+        }
+    }
+
+    @Test
+    public void testFormatOctalBytesBasic() throws Exception {
+        byte[] buf = new byte[10];
+        int length = 8; // For "123 " and NUL
+        TarUtils.formatOctalBytes(83, buf, 0, length);
+        // Expected: "123 0\0"
+        assertArrayEquals("123 0\0".getBytes(StandardCharsets.US_ASCII), buf);
+    }
+
+    @Test
+    public void testFormatOctalBytesZero() throws Exception {
+        byte[] buf = new byte[5];
+        int length = 5;
+        TarUtils.formatOctalBytes(0, buf, 0, length);
+        // The method pads to idx=length-2, so "000" then space and NUL.
+        assertArrayEquals("000 \0".getBytes(StandardCharsets.US_ASCII), buf);
+    }
+    
+    @Test
+    public void testFormatOctalBytesMaxValueFits() throws Exception {
+        byte[] buf = new byte[12]; // Max length for TarConstants.UIDLEN or TarConstants.SIZELEN (12 bytes for value + space + NUL)
+        // 0177777 (octal) = 65535 (decimal)
+        TarUtils.formatOctalBytes(65535, buf, 0, 12);
+        // Expected: "000177777 \0"
+        assertArrayEquals("000177777 \0".getBytes(StandardCharsets.US_ASCII), buf);
+    }
+
+    @Test
+    public void testFormatOctalBytesValueTooLarge() throws Exception {
+        byte[] buf = new byte[5]; // Too small for value=83, space, and NUL
+        try {
+            TarUtils.formatOctalBytes(83, buf, 0, 5);
+            fail("Expected IllegalArgumentException for value too large");
+        } catch (IllegalArgumentException e) {
+            assertTrue(e.getMessage().contains("will not fit in buffer"));
+        }
+    }
+
+    @Test
+    public void testFormatLongOctalBytesBasic() throws Exception {
+        byte[] buf = new byte[10];
+        int length = 8;
+        TarUtils.formatLongOctalBytes(83, buf, 0, length);
+        // Expected: "0000123 "
+        assertArrayEquals("0000123 ".getBytes(StandardCharsets.US_ASCII), buf);
+    }
+    
+    @Test
+    public void testFormatLongOctalBytesZero() throws Exception {
+        byte[] buf = new byte[5];
+        int length = 5;
+        TarUtils.formatLongOctalBytes(0, buf, 0, length);
+        // So "0000 "
+        assertArrayEquals("0000 ".getBytes(StandardCharsets.US_ASCII), buf);
+    }
+
+    @Test
+    public void testFormatLongOctalBytesMaxValueFits() throws Exception {
+        byte[] buf = new byte[12]; // Fits 11 octal digits + space
+        TarUtils.formatLongOctalBytes(65535, buf, 0, 12);
+        // So "00000177777 "
+        assertArrayEquals("00000177777 ".getBytes(StandardCharsets.US_ASCII), buf);
+    }
+
+    @Test
+    public void testFormatLongOctalBytesValueTooLarge() throws Exception {
+        byte[] buf = new byte[5]; // Too small for value=83 and space
+        try {
+            TarUtils.formatLongOctalBytes(83, buf, 0, 5);
+            fail("Expected IllegalArgumentException for value too large");
+        } catch (IllegalArgumentException e) {
+            assertTrue(e.getMessage().contains("will not fit in buffer"));
+        }
+    }
+
+    @Test
+    public void testFormatLongOctalOrBinaryBytesOctalFits() throws Exception {
+        // Assuming TarConstants.UIDLEN = 8, TarConstants.MAXID = 2097151 (0x1FFFFF)
+        // Value 83 fits as octal
+        byte[] buf = new byte[10];
+        int length = 8;
+        TarUtils.formatLongOctalOrBinaryBytes(83, buf, 0, length);
+        // Should call formatLongOctalBytes
+        assertArrayEquals("000000083 ".getBytes(StandardCharsets.US_ASCII), buf);
+    }
+
+    @Test
+    public void testFormatLongOctalOrBinaryBytesBinaryRequired() throws Exception {
+        // Value larger than max for octal, should be stored as binary
+        byte[] buf = new byte[8]; // UIDLEN = 8
+        long largeValue = 0x1000000L; // Larger than TarConstants.MAXID (0x1FFFFF)
+        TarUtils.formatLongOctalOrBinaryBytes(largeValue, buf, 0, 8);
+        // Expected binary representation, MSB set
+        byte[] expected = new byte[8];
+        expected[0] = (byte) (0x80 | (largeValue >> 56)); // MSB set + highest byte
+        expected[1] = (byte) ((largeValue >> 48) & 0xFF);
+        expected[2] = (byte) ((largeValue >> 40) & 0xFF);
+        expected[3] = (byte) ((largeValue >> 32) & 0xFF);
+        expected[4] = (byte) ((largeValue >> 24) & 0xFF);
+        expected[5] = (byte) ((largeValue >> 16) & 0xFF);
+        expected[6] = (byte) ((largeValue >> 8) & 0xFF);
+        expected[7] = (byte) (largeValue & 0xFF);
+        assertArrayEquals(expected, buf);
+    }
+
+    @Test
+    public void testFormatLongOctalOrBinaryBytesTooLargeForBinary() throws Exception {
+        byte[] buf = new byte[8]; // UIDLEN = 8
+        long tooLargeValue = (1L << 63); // Value that would set the sign bit even after shifting for binary
+        try {
+            TarUtils.formatLongOctalOrBinaryBytes(tooLargeValue, buf, 0, 8);
+            fail("Expected IllegalArgumentException for value too large for binary");
+        } catch (IllegalArgumentException e) {
+            assertTrue(e.getMessage().contains("is too large for 8 byte field."));
+        }
+    }
+    
+    @Test
+    public void testFormatLongOctalOrBinaryBytesMaxOctalValue() throws Exception {
+        // TarConstants.MAXID is 0x1FFFFF (decimal 2097151)
+        byte[] buf = new byte[8];
+        TarUtils.formatLongOctalOrBinaryBytes(0x1FFFFF, buf, 0, 8);
+        // Should still fit as octal
+        assertArrayEquals("0000177777 ".getBytes(StandardCharsets.US_ASCII), buf);
+    }
+
+    @Test
+    public void testFormatCheckSumOctalBytesBasic() throws Exception {
+        byte[] buf = new byte[10];
+        int length = 8; // For "123", NUL and space
+        TarUtils.formatCheckSumOctalBytes(83, buf, 0, length);
+        // Expected: "123\0 "
+        assertArrayEquals("123\0 ".getBytes(StandardCharsets.US_ASCII), buf);
+    }
+
+    @Test
+    public void testFormatCheckSumOctalBytesZero() throws Exception {
+        byte[] buf = new byte[5];
+        int length = 5;
+        TarUtils.formatCheckSumOctalBytes(0, buf, 0, length);
+        // The length for formatUnsignedOctalString is length-2 = 3.
+        // So "000\0 "
+        assertArrayEquals("000\0 ".getBytes(StandardCharsets.US_ASCII), buf);
+    }
+
+    @Test
+    public void testFormatCheckSumOctalBytesMaxValueFits() throws Exception {
+        byte[] buf = new byte[12]; // Fits 10 digits + NUL + space
+        TarUtils.formatCheckSumOctalBytes(65535, buf, 0, 12);
+        // Expected: "000177777\0 "
+        assertArrayEquals("000177777\0 ".getBytes(StandardCharsets.US_ASCII), buf);
+    }
+
+    @Test
+    public void testFormatCheckSumOctalBytesValueTooLarge() throws Exception {
+        byte[] buf = new byte[5]; // Too small for value=83, NUL, and space
+        try {
+            TarUtils.formatCheckSumOctalBytes(83, buf, 0, 5);
+            fail("Expected IllegalArgumentException for value too large");
+        } catch (IllegalArgumentException e) {
+            assertTrue(e.getMessage().contains("will not fit in buffer"));
+        }
+    }
+
+    @Test
+    public void testComputeCheckSumBasic() throws Exception {
+        byte[] buf = "12345".getBytes(StandardCharsets.US_ASCII);
+        assertEquals(255, TarUtils.computeCheckSum(buf)); // 49 + 50 + 51 + 52 + 53 = 255
+    }
+
+    @Test
+    public void testComputeCheckSumWithNul() throws Exception {
+        byte[] buf = {'1', '2', 0, '4', '5'};
+        assertEquals(150, TarUtils.computeCheckSum(buf)); // 49 + 50 + 0 + 52 + 53 = 204. Wait, BYTE_MASK is 255. So 49 + 50 + 0 + 52 + 53 = 204.
+    }
+
+    @Test
+    public void testComputeCheckSumEmpty() throws Exception {
+        byte[] buf = new byte[0];
+        assertEquals(0, TarUtils.computeCheckSum(buf));
+    }
+
+    @Test
+    public void testComputeCheckSumAllZeros() throws Exception {
+        byte[] buf = new byte[5]; // All zeros
+        assertEquals(0, TarUtils.computeCheckSum(buf));
+    }
+}

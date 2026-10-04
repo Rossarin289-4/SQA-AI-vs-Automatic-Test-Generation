@@ -1,0 +1,213 @@
+```java
+package com.fasterxml.jackson.databind.introspect;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.lang.annotation.Annotation;
+import java.lang.reflect.Field;
+import java.util.*;
+import com.fasterxml.jackson.annotation.*;
+import com.fasterxml.jackson.core.Version;
+import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.annotation.*;
+import com.fasterxml.jackson.databind.cfg.HandlerInstantiator;
+import com.fasterxml.jackson.databind.cfg.MapperConfig;
+import com.fasterxml.jackson.databind.jsontype.NamedType;
+import com.fasterxml.jackson.databind.jsontype.TypeIdResolver;
+import com.fasterxml.jackson.databind.jsontype.TypeResolverBuilder;
+import com.fasterxml.jackson.databind.jsontype.impl.StdTypeResolverBuilder;
+import com.fasterxml.jackson.databind.ser.BeanPropertyWriter;
+import com.fasterxml.jackson.databind.ser.VirtualBeanPropertyWriter;
+import com.fasterxml.jackson.databind.ser.impl.AttributePropertyWriter;
+import com.fasterxml.jackson.databind.ser.std.RawSerializer;
+import com.fasterxml.jackson.databind.util.*;
+
+public class JacksonAnnotationIntrospectorTest {
+    @JsonRootName(value = "root", namespace = "")
+    static class Root {}
+
+    @JsonIgnoreProperties(value = {"first", "last"}, ignoreUnknown = true)
+    static class IgnoreProps {}
+
+    @JsonIgnoreType
+    static class IgnoredType {}
+
+    @JsonFilter("filter")
+    static class Filtered {}
+
+    @JsonTypeName("named")
+    static class Typed {}
+
+    enum Names {
+        @JsonProperty("chosen") FIRST,
+        SECOND
+    }
+
+    static class Properties {
+        @JsonProperty(value = "field", required = true, index = Integer.MAX_VALUE, defaultValue = "short")
+        public String configured;
+
+        @JsonProperty(index = Integer.MIN_VALUE)
+        public String minimum;
+
+        @JsonProperty(index = Integer.MAX_VALUE)
+        public String maximum;
+
+        @JsonProperty
+        public String unnamed;
+
+        @JsonIgnore
+        public String ignored;
+
+        @JsonPropertyDescription("desc")
+        public String described;
+    }
+
+    static class SetterTarget {
+        @JsonSetter("specific")
+        @JsonProperty("general")
+        public void setValue(String value) {}
+
+        @JsonCreator(mode = JsonCreator.Mode.DISABLED)
+        public SetterTarget() {}
+
+        @JsonAnySetter
+        public void any(String key, Object value) {}
+    }
+
+    static class Basic {}
+
+    private JacksonAnnotationIntrospector introspector() {
+        return new JacksonAnnotationIntrospector();
+    }
+
+    private AnnotatedClass annotatedClass(Class<?> type) {
+        return AnnotatedClass.construct(type, introspector(), null);
+    }
+
+    private AnnotatedField field(String name) {
+        for (AnnotatedField f : annotatedClass(Properties.class).fields()) {
+            if (name.equals(f.getName())) return f;
+        }
+        throw new AssertionError("field not found");
+    }
+
+    private AnnotatedMethod method(String name, Class<?>... parameters) {
+        return annotatedClass(SetterTarget.class).findMethod(name, parameters);
+    }
+
+    @Test
+    public void testVersionIsAvailable() throws Exception {
+        assertEquals(com.fasterxml.jackson.databind.cfg.PackageVersion.VERSION, introspector().version());
+    }
+
+    @Test
+    public void testEnumExplicitAndDefaultNames() throws Exception {
+        assertEquals("chosen", introspector().findEnumValue(Names.FIRST));
+        assertEquals("SECOND", introspector().findEnumValue(Names.SECOND));
+    }
+
+    @Test
+    public void testRootNameAndEmptyNamespace() throws Exception {
+        PropertyName name = introspector().findRootName(annotatedClass(Root.class));
+        assertEquals("root", name.getSimpleName());
+        assertNull(name.getNamespace());
+    }
+
+    @Test
+    public void testIgnorePropertiesAndUnknownFlag() throws Exception {
+        JacksonAnnotationIntrospector ai = introspector();
+        AnnotatedClass ac = annotatedClass(IgnoreProps.class);
+        assertArrayEquals(new String[] {"first", "last"}, ai.findPropertiesToIgnore(ac));
+        assertEquals(Boolean.TRUE, ai.findIgnoreUnknownProperties(ac));
+    }
+
+    @Test
+    public void testIgnoredTypeValue() throws Exception {
+        assertEquals(Boolean.TRUE, introspector().isIgnorableType(annotatedClass(IgnoredType.class)));
+    }
+
+    @Test
+    public void testFilterIdentifier() throws Exception {
+        assertEquals("filter", introspector().findFilterId(annotatedClass(Filtered.class)));
+    }
+
+    @Test
+    public void testTypeName() throws Exception {
+        assertEquals("named", introspector().findTypeName(annotatedClass(Typed.class)));
+    }
+
+    @Test
+    public void testPropertyRequiredIndexAndDefault() throws Exception {
+        JacksonAnnotationIntrospector ai = introspector();
+        AnnotatedField f = field("configured");
+        assertEquals(Boolean.TRUE, ai.hasRequiredMarker(f));
+        assertEquals(Integer.valueOf(Integer.MAX_VALUE), ai.findPropertyIndex(f));
+        assertEquals("short", ai.findPropertyDefaultValue(f));
+    }
+
+    @Test
+    public void testPropertyIndexAtMinimumAndMaximumIntegerEdges() throws Exception {
+        JacksonAnnotationIntrospector ai = introspector();
+        assertEquals(Integer.valueOf(Integer.MIN_VALUE), ai.findPropertyIndex(field("minimum")));
+        assertEquals(Integer.valueOf(Integer.MAX_VALUE), ai.findPropertyIndex(field("maximum")));
+    }
+
+    @Test
+    public void testPropertyDescriptionAndIgnoreMarker() throws Exception {
+        JacksonAnnotationIntrospector ai = introspector();
+        assertEquals("desc", ai.findPropertyDescription(field("described")));
+        assertTrue(ai.hasIgnoreMarker(field("ignored")));
+    }
+
+    @Test
+    public void testSerializationNameAndDeserializationSetterPrecedence() throws Exception {
+        JacksonAnnotationIntrospector ai = introspector();
+        AnnotatedMethod setter = method("setValue", String.class);
+        assertEquals("specific", ai.findNameForDeserialization(setter).getSimpleName());
+    }
+
+    @Test
+    public void testCreatorDisabledAndAnySetter() throws Exception {
+        JacksonAnnotationIntrospector ai = introspector();
+        AnnotatedMethod any = method("any", String.class, Object.class);
+        assertTrue(ai.hasAnySetterAnnotation(any));
+        assertFalse(ai.hasCreatorAnnotation(annotatedClass(SetterTarget.class).getDefaultConstructor()));
+    }
+
+    @Test
+    public void testUnannotatedClassHasNoRootOrFilter() throws Exception {
+        JacksonAnnotationIntrospector ai = introspector();
+        AnnotatedClass ac = annotatedClass(Basic.class);
+        assertNull(ai.findRootName(ac));
+        assertNull(ai.findFilterId(ac));
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+The request provides no target method, so method selection is exploratory. Tests focus on enum naming, class annotations, property metadata, names, creator handling, and any-setter detection.
+
+### 2. TEST CASE DESIGN
+- `testVersionIsAvailable`: compare the returned version with `PackageVersion.VERSION`, as the method directly returns it.
+- `testEnumExplicitAndDefaultNames`: explicit enum annotation yields `"chosen"`; no explicit annotation falls back to the enum constant name.
+- `testRootNameAndEmptyNamespace`: root annotation yields `"root"`; empty namespace is normalized to null.
+- `testIgnorePropertiesAndUnknownFlag`: retrieve both configured ignored names and the annotation’s `true` flag.
+- `testIgnoredTypeValue`: read the configured `JsonIgnoreType` value.
+- `testFilterIdentifier`: nonempty filter id is returned as configured.
+- `testTypeName`: the configured type name is returned.
+- `testPropertyRequiredIndexAndDefault`: read the configured required flag, maximum int index, and default string.
+- `testPropertyIndexAtMinimumAndMaximumIntegerEdges`: annotation indices at both int extrema are returned unchanged.
+- `testPropertyDescriptionAndIgnoreMarker`: return the description and honor a true ignore marker.
+- `testSerializationNameAndDeserializationSetterPrecedence`: setter annotation supplies `"specific"` for deserialization.
+- `testCreatorDisabledAndAnySetter`: disabled creator mode returns false; annotated any-setter returns true.
+- `testUnannotatedClassHasNoRootOrFilter`: absent annotations yield null for root name and filter id.
+
+### 4. DEFECT DETECTION STRATEGY
+These tests pin direct annotation lookup, fallback behavior, normalization, precedence, and integer-edge metadata. No defect detection is claimed.
+
+### 5. SUMMARY
+13 tests.
+
+### 6. LIMITATIONS
+Coverage is exploratory and does not exercise all listed public methods or complex resolver/configuration paths. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

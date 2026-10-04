@@ -1,0 +1,919 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Preconditions;
+import com.google.common.collect.Lists;
+import com.google.javascript.jscomp.mozilla.rhino.ScriptRuntime;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.jstype.TernaryValue;
+import java.util.List;
+import java.util.Locale;
+
+public class PeepholeFoldConstantsTest {
+
+    // Helper method to create a simple peephole optimization instance.
+    private PeepholeFoldConstants peepholeFoldConstants = new PeepholeFoldConstants();
+
+    // Helper to simulate reportCodeChange() and check if a change occurred.
+    private boolean codeChanged = false;
+    private void reportCodeChange() {
+        codeChanged = true;
+    }
+
+    // Mock compiler for reporting errors.
+    private class MockCompiler extends AbstractCompiler {
+        @Override
+        public void report(DiagnosticType diagnosticType, String... arguments) {
+            // In tests, we don't actually report errors, but we can track them if needed.
+        }
+
+        @Override
+        public void report(JSError error) {
+            // In tests, we don't actually report errors, but we can track them if needed.
+        }
+
+        @Override
+        public void setProgress(double progress) {}
+
+        @Override
+        public double getProgress() { return 1.0; }
+
+        @Override
+        public void process(Node externs, Node root) {}
+
+        @Override
+        public Node parse(CompilerOptions options) { return null; }
+
+        @Override
+        public void parse(SourceFile externs, SourceFile code) {}
+
+        @Override
+        public void parse(SourceFile externs, List<SourceFile> codes) {}
+
+        @Override
+        public boolean isNormalized() { return false; }
+
+        @Override
+        public boolean isTypeChecked() { return false; }
+
+        @Override
+        public boolean isSemanticallyANSASound() { return false; }
+
+        @Override
+        public void addChange(Node node, Node replacement) {
+            // Called by reportCodeChange in the peephole optimiser.
+            // We can use this to track changes.
+            PeepholeFoldConstantsTest.this.reportCodeChange();
+        }
+        // Other abstract methods to be implemented or stubbed
+        // ...
+    }
+
+    private PeepholeFoldConstants getOptimiser(Node node) {
+        // Need to provide a compiler instance for reportCodeChange to work
+        // A better approach would be to mock AbstractCompiler more thoroughly or
+        // to have peepholeFoldConstants take a Compiler instance in its constructor.
+        // For now, we'll use a mock that allows reportCodeChange to be called.
+        // The PeepholeFoldConstants class's reportCodeChange calls this.reportCodeChange() directly
+        // which means we need to set up the PeepholeFoldConstants instance with a mock.
+        // This setup is a bit indirect. A cleaner way would be to inject the compiler.
+        return peepholeFoldConstants;
+    }
+
+
+    private Node optimize(Node subtree) {
+        codeChanged = false; // Reset for each test
+        // NodeUtil.setCompiler(new MockCompiler()); // Set a mock compiler for NodeUtil if needed
+        // PeepholeFoldConstants.setCompiler(new MockCompiler()); // Set a mock compiler for PeepholeFoldConstants if needed
+        // The current PeepholeFoldConstants directly calls reportCodeChange() without a compiler context.
+        // We've overridden reportCodeChange in the test class to track changes.
+
+        // The actual optimization method is optimizeSubtree.
+        // We need to create a parent node for subtree so that replaceChild works correctly.
+        Node parent = new Node(Token.EXPR_RESULT, subtree);
+        peepholeFoldConstants.optimizeSubtree(subtree);
+        if (codeChanged) {
+            // If code changed, the subtree might have been replaced.
+            // We need to return the potentially new root of the modified subtree.
+            // In this setup, optimizeSubtree replaces the node in its parent.
+            // So we return the potentially new first child of the EXPR_RESULT.
+            return parent.getFirstChild();
+        } else {
+            return subtree; // No change, return original
+        }
+    }
+
+    private Node createNodeFromString(String s) {
+        return Node.newString(s);
+    }
+
+    private Node createNodeFromNumber(double d) {
+        return Node.newNumber(d);
+    }
+
+    private Node createNodeFromBoolean(boolean b) {
+        return new Node(b ? Token.TRUE : Token.FALSE);
+    }
+
+    private Node createNodeFromVoid() {
+        return new Node(Token.VOID);
+    }
+
+    private Node createNodeFromNull() {
+        return new Node(Token.NULL);
+    }
+
+    @Test
+    public void testFoldTypeofNumber() throws Exception {
+        Node typeofNode = new Node(Token.TYPEOF, createNodeFromNumber(123.45));
+        Node result = optimize(typeofNode);
+        assertEquals(Token.STRING, result.getType());
+        assertEquals("number", result.getString());
+    }
+
+    @Test
+    public void testFoldTypeofBoolean() throws Exception {
+        Node typeofNode = new Node(Token.TYPEOF, createNodeFromBoolean(true));
+        Node result = optimize(typeofNode);
+        assertEquals(Token.STRING, result.getType());
+        assertEquals("boolean", result.getString());
+    }
+
+    @Test
+    public void testFoldTypeofBooleanFalse() throws Exception {
+        Node typeofNode = new Node(Token.TYPEOF, createNodeFromBoolean(false));
+        Node result = optimize(typeofNode);
+        assertEquals(Token.STRING, result.getType());
+        assertEquals("boolean", result.getString());
+    }
+
+    @Test
+    public void testFoldTypeofNull() throws Exception {
+        Node typeofNode = new Node(Token.TYPEOF, createNodeFromNull());
+        Node result = optimize(typeofNode);
+        assertEquals(Token.STRING, result.getType());
+        assertEquals("object", result.getString());
+    }
+
+    @Test
+    public void testFoldTypeofUndefinedName() throws Exception {
+        Node typeofNode = new Node(Token.TYPEOF, new Node(Token.NAME, new Node(Token.STRING, "undefined")));
+        Node result = optimize(typeofNode);
+        assertEquals(Token.STRING, result.getType());
+        assertEquals("undefined", result.getString());
+    }
+
+    @Test
+    public void testFoldNegationOfZero() throws Exception {
+        Node negNode = new Node(Token.NEG, createNodeFromNumber(0.0));
+        Node result = optimize(negNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(0.0, result.getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldNegationOfNumber() throws Exception {
+        Node negNode = new Node(Token.NEG, createNodeFromNumber(5.5));
+        Node result = optimize(negNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(-5.5, result.getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldNegationOfNegativeNumber() throws Exception {
+        Node negNode = new Node(Token.NEG, createNodeFromNumber(-5.5));
+        Node result = optimize(negNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(5.5, result.getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldBitwiseNotOnInteger() throws Exception {
+        Node bitNotNode = new Node(Token.BITNOT, createNodeFromNumber(5));
+        Node result = optimize(bitNotNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(~5, (int) result.getDouble());
+    }
+
+    @Test
+    public void testFoldBitwiseNotOnNegativeInteger() throws Exception {
+        Node bitNotNode = new Node(Token.BITNOT, createNodeFromNumber(-6));
+        Node result = optimize(bitNotNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(~(-6), (int) result.getDouble());
+    }
+
+    @Test
+    public void testFoldAdditionOfTwoNumbers() throws Exception {
+        Node addNode = new Node(Token.ADD, createNodeFromNumber(5), createNodeFromNumber(10));
+        Node result = optimize(addNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(15.0, result.getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldAdditionWithNegativeNumber() throws Exception {
+        Node addNode = new Node(Token.ADD, createNodeFromNumber(5), createNodeFromNumber(-10));
+        Node result = optimize(addNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(-5.0, result.getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldAdditionOfStrings() throws Exception {
+        Node addNode = new Node(Token.ADD, createNodeFromString("hello"), createNodeFromString("world"));
+        Node result = optimize(addNode);
+        assertEquals(Token.STRING, result.getType());
+        assertEquals("helloworld", result.getString());
+    }
+
+    @Test
+    public void testFoldAdditionStringAndNumber() throws Exception {
+        Node addNode = new Node(Token.ADD, createNodeFromString("hello"), createNodeFromNumber(123));
+        Node result = optimize(addNode);
+        assertEquals(Token.STRING, result.getType());
+        assertEquals("hello123", result.getString());
+    }
+
+    @Test
+    public void testFoldAdditionNumberAndString() throws Exception {
+        Node addNode = new Node(Token.ADD, createNodeFromNumber(123), createNodeFromString("world"));
+        Node result = optimize(addNode);
+        assertEquals(Token.STRING, result.getType());
+        assertEquals("123world", result.getString());
+    }
+
+    @Test
+    public void testFoldSubtraction() throws Exception {
+        Node subNode = new Node(Token.SUB, createNodeFromNumber(10), createNodeFromNumber(3));
+        Node result = optimize(subNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(7.0, result.getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldMultiplication() throws Exception {
+        Node mulNode = new Node(Token.MUL, createNodeFromNumber(5), createNodeFromNumber(6));
+        Node result = optimize(mulNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(30.0, result.getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldDivision() throws Exception {
+        Node divNode = new Node(Token.DIV, createNodeFromNumber(10), createNodeFromNumber(2));
+        Node result = optimize(divNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(5.0, result.getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldModulo() throws Exception {
+        Node modNode = new Node(Token.MOD, createNodeFromNumber(10), createNodeFromNumber(3));
+        Node result = optimize(modNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(1.0, result.getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldBitwiseAnd() throws Exception {
+        Node bitAndNode = new Node(Token.BITAND, createNodeFromNumber(5), createNodeFromNumber(3));
+        Node result = optimize(bitAndNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(1.0, result.getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldBitwiseOr() throws Exception {
+        Node bitOrNode = new Node(Token.BITOR, createNodeFromNumber(5), createNodeFromNumber(3));
+        Node result = optimize(bitOrNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(7.0, result.getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldBitwiseXor() throws Exception {
+        Node bitXorNode = new Node(Token.BITXOR, createNodeFromNumber(5), createNodeFromNumber(3));
+        Node result = optimize(bitXorNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(6.0, result.getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldLeftShift() throws Exception {
+        Node lshNode = new Node(Token.LSH, createNodeFromNumber(5), createNodeFromNumber(1));
+        Node result = optimize(lshNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(10.0, result.getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldRightShift() throws Exception {
+        Node rshNode = new Node(Token.RSH, createNodeFromNumber(10), createNodeFromNumber(1));
+        Node result = optimize(rshNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(5.0, result.getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldUnsignedRightShift() throws Exception {
+        Node urshNode = new Node(Token.URSH, createNodeFromNumber(-10), createNodeFromNumber(1));
+        Node result = optimize(urshNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(Double.longBitsToDouble(Double.doubleToLongBits(-10) >>> 1), result.getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldComparisonEqual() throws Exception {
+        Node eqNode = new Node(Token.EQ, createNodeFromNumber(5), createNodeFromNumber(5));
+        Node result = optimize(eqNode);
+        assertEquals(Token.TRUE, result.getType());
+    }
+
+    @Test
+    public void testFoldComparisonNotEqual() throws Exception {
+        Node neNode = new Node(Token.NE, createNodeFromNumber(5), createNodeFromNumber(10));
+        Node result = optimize(neNode);
+        assertEquals(Token.TRUE, result.getType());
+    }
+
+    @Test
+    public void testFoldComparisonLessThan() throws Exception {
+        Node ltNode = new Node(Token.LT, createNodeFromNumber(5), createNodeFromNumber(10));
+        Node result = optimize(ltNode);
+        assertEquals(Token.TRUE, result.getType());
+    }
+
+    @Test
+    public void testFoldComparisonGreaterThan() throws Exception {
+        Node gtNode = new Node(Token.GT, createNodeFromNumber(10), createNodeFromNumber(5));
+        Node result = optimize(gtNode);
+        assertEquals(Token.TRUE, result.getType());
+    }
+
+    @Test
+    public void testFoldComparisonLessThanOrEqual() throws Exception {
+        Node leNode = new Node(Token.LE, createNodeFromNumber(5), createNodeFromNumber(5));
+        Node result = optimize(leNode);
+        assertEquals(Token.TRUE, result.getType());
+    }
+
+    @Test
+    public void testFoldComparisonGreaterThanOrEqual() throws Exception {
+        Node geNode = new Node(Token.GE, createNodeFromNumber(10), createNodeFromNumber(5));
+        Node result = optimize(geNode);
+        assertEquals(Token.TRUE, result.getType());
+    }
+
+    @Test
+    public void testFoldAndTrueTrue() throws Exception {
+        Node andNode = new Node(Token.AND, createNodeFromBoolean(true), createNodeFromBoolean(true));
+        Node result = optimize(andNode);
+        assertEquals(Token.TRUE, result.getType());
+    }
+
+    @Test
+    public void testFoldAndTrueFalse() throws Exception {
+        Node andNode = new Node(Token.AND, createNodeFromBoolean(true), createNodeFromBoolean(false));
+        Node result = optimize(andNode);
+        assertEquals(Token.FALSE, result.getType());
+    }
+
+    @Test
+    public void testFoldAndFalseTrue() throws Exception {
+        Node andNode = new Node(Token.AND, createNodeFromBoolean(false), createNodeFromBoolean(true));
+        Node result = optimize(andNode);
+        assertEquals(Token.FALSE, result.getType());
+    }
+
+    @Test
+    public void testFoldOrTrueTrue() throws Exception {
+        Node orNode = new Node(Token.OR, createNodeFromBoolean(true), createNodeFromBoolean(true));
+        Node result = optimize(orNode);
+        assertEquals(Token.TRUE, result.getType());
+    }
+
+    @Test
+    public void testFoldOrTrueFalse() throws Exception {
+        Node orNode = new Node(Token.OR, createNodeFromBoolean(true), createNodeFromBoolean(false));
+        Node result = optimize(orNode);
+        assertEquals(Token.TRUE, result.getType());
+    }
+
+    @Test
+    public void testFoldOrFalseTrue() throws Exception {
+        Node orNode = new Node(Token.OR, createNodeFromBoolean(false), createNodeFromBoolean(true));
+        Node result = optimize(orNode);
+        assertEquals(Token.TRUE, result.getType());
+    }
+
+    @Test
+    public void testFoldOrFalseFalse() throws Exception {
+        Node orNode = new Node(Token.OR, createNodeFromBoolean(false), createNodeFromBoolean(false));
+        Node result = optimize(orNode);
+        assertEquals(Token.FALSE, result.getType());
+    }
+
+    @Test
+    public void testFoldArrayLiteralLength() throws Exception {
+        Node arrayLit = new Node(Token.ARRAYLIT, createNodeFromNumber(1), createNodeFromNumber(2), createNodeFromNumber(3));
+        Node getPropNode = new Node(Token.GETPROP, arrayLit, Node.newString("length"));
+        Node result = optimize(getPropNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(3.0, result.getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldStringLength() throws Exception {
+        Node stringNode = Node.newString("abc");
+        Node getPropNode = new Node(Token.GETPROP, stringNode, Node.newString("length"));
+        Node result = optimize(getPropNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(3.0, result.getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldGetElemFromArrayLiteralValidIndex() throws Exception {
+        Node arrayLit = new Node(Token.ARRAYLIT, createNodeFromNumber(10), createNodeFromNumber(20), createNodeFromNumber(30));
+        Node getElemNode = new Node(Token.GETELEM, arrayLit, createNodeFromNumber(1));
+        Node result = optimize(getElemNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(20.0, result.getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldGetElemFromArrayLiteralFirstIndex() throws Exception {
+        Node arrayLit = new Node(Token.ARRAYLIT, createNodeFromNumber(10), createNodeFromNumber(20), createNodeFromNumber(30));
+        Node getElemNode = new Node(Token.GETELEM, arrayLit, createNodeFromNumber(0));
+        Node result = optimize(getElemNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(10.0, result.getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldGetElemFromArrayLiteralLastIndex() throws Exception {
+        Node arrayLit = new Node(Token.ARRAYLIT, createNodeFromNumber(10), createNodeFromNumber(20), createNodeFromNumber(30));
+        Node getElemNode = new Node(Token.GETELEM, arrayLit, createNodeFromNumber(2));
+        Node result = optimize(getElemNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(30.0, result.getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldInstanceOfImmutable() throws Exception {
+        Node instanceofNode = new Node(Token.INSTANCEOF, Node.newNumber(123), Node.newString("Object"));
+        Node result = optimize(instanceofNode);
+        assertEquals(Token.FALSE, result.getType());
+    }
+
+    @Test
+    public void testFoldInstanceOfObjectConstructor() throws Exception {
+        Node instanceofNode = new Node(Token.INSTANCEOF, Node.newString("test"), Node.newString("Object"));
+        Node result = optimize(instanceofNode);
+        assertEquals(Token.TRUE, result.getType());
+    }
+
+    @Test
+    public void testFoldArrayJoinEmpty() throws Exception {
+        Node arrayLit = new Node(Token.ARRAYLIT);
+        Node joinCall = new Node(Token.CALL, new Node(Token.GETPROP, arrayLit, Node.newString("join")), Node.newString(""));
+        Node result = optimize(joinCall);
+        assertEquals(Token.STRING, result.getType());
+        assertEquals("", result.getString());
+    }
+
+    @Test
+    public void testFoldArrayJoinSingleElement() throws Exception {
+        Node arrayLit = new Node(Token.ARRAYLIT, Node.newString("a"));
+        Node joinCall = new Node(Token.CALL, new Node(Token.GETPROP, arrayLit, Node.newString("join")), Node.newString(""));
+        Node result = optimize(joinCall);
+        assertEquals(Token.STRING, result.getType());
+        assertEquals("a", result.getString());
+    }
+
+    @Test
+    public void testFoldArrayJoinMultipleElements() throws Exception {
+        Node arrayLit = new Node(Token.ARRAYLIT, Node.newString("a"), Node.newString("b"), Node.newString("c"));
+        Node joinCall = new Node(Token.CALL, new Node(Token.GETPROP, arrayLit, Node.newString("join")), Node.newString(""));
+        Node result = optimize(joinCall);
+        assertEquals(Token.STRING, result.getType());
+        assertEquals("abc", result.getString());
+    }
+
+    @Test
+    public void testFoldArrayJoinWithCommaDelimiter() throws Exception {
+        Node arrayLit = new Node(Token.ARRAYLIT, Node.newString("a"), Node.newString("b"));
+        Node joinCall = new Node(Token.CALL, new Node(Token.GETPROP, arrayLit, Node.newString("join")), Node.newString(","));
+        Node result = optimize(joinCall);
+        assertEquals(Token.STRING, result.getType());
+        assertEquals("a,b", result.getString());
+    }
+
+    @Test
+    public void testFoldStringIndexOf() throws Exception {
+        Node stringLiteral = Node.newString("abcdef");
+        Node searchValue = Node.newString("cd");
+        Node indexOfCall = new Node(Token.CALL, new Node(Token.GETPROP, stringLiteral, Node.newString("indexOf")), searchValue);
+        Node result = optimize(indexOfCall);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(2.0, result.getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldStringIndexOfNotFound() throws Exception {
+        Node stringLiteral = Node.newString("abcdef");
+        Node searchValue = Node.newString("xyz");
+        Node indexOfCall = new Node(Token.CALL, new Node(Token.GETPROP, stringLiteral, Node.newString("indexOf")), searchValue);
+        Node result = optimize(indexOfCall);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(-1.0, result.getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldStringIndexOfWithStartIndex() throws Exception {
+        Node stringLiteral = Node.newString("abcabc");
+        Node searchValue = Node.newString("bc");
+        Node startIndex = Node.newNumber(3);
+        Node indexOfCall = new Node(Token.CALL, new Node(Token.GETPROP, stringLiteral, Node.newString("indexOf")), searchValue, startIndex);
+        Node result = optimize(indexOfCall);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(3.0, result.getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldStringLastIndexOf() throws Exception {
+        Node stringLiteral = Node.newString("abcabc");
+        Node searchValue = Node.newString("bc");
+        Node lastIndexOfCall = new Node(Token.CALL, new Node(Token.GETPROP, stringLiteral, Node.newString("lastIndexOf")), searchValue);
+        Node result = optimize(lastIndexOfCall);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(3.0, result.getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldStringLastIndexOfWithStartIndex() throws Exception {
+        Node stringLiteral = Node.newString("abcabc");
+        Node searchValue = Node.newString("bc");
+        Node startIndex = Node.newNumber(3); // Start from index 3
+        Node lastIndexOfCall = new Node(Token.CALL, new Node(Token.GETPROP, stringLiteral, Node.newString("lastIndexOf")), searchValue, startIndex);
+        Node result = optimize(lastIndexOfCall);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(3.0, result.getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldStringSubstringSimple() throws Exception {
+        Node stringLiteral = Node.newString("abcdef");
+        Node startIndex = Node.newNumber(2);
+        Node endIndex = Node.newNumber(4);
+        Node substringCall = new Node(Token.CALL, new Node(Token.GETPROP, stringLiteral, Node.newString("substring")), startIndex, endIndex);
+        Node result = optimize(substringCall);
+        assertEquals(Token.STRING, result.getType());
+        assertEquals("cd", result.getString());
+    }
+
+    @Test
+    public void testFoldStringSubstringToEnd() throws Exception {
+        Node stringLiteral = Node.newString("abcdef");
+        Node startIndex = Node.newNumber(2);
+        Node substringCall = new Node(Token.CALL, new Node(Token.GETPROP, stringLiteral, Node.newString("substring")), startIndex);
+        Node result = optimize(substringCall);
+        assertEquals(Token.STRING, result.getType());
+        assertEquals("cdef", result.getString());
+    }
+
+    @Test
+    public void testFoldStringSubstrSimple() throws Exception {
+        Node stringLiteral = Node.newString("abcdef");
+        Node start = Node.newNumber(2);
+        Node length = Node.newNumber(2);
+        Node substrCall = new Node(Token.CALL, new Node(Token.GETPROP, stringLiteral, Node.newString("substr")), start, length);
+        Node result = optimize(substrCall);
+        assertEquals(Token.STRING, result.getType());
+        assertEquals("cd", result.getString());
+    }
+
+    @Test
+    public void testFoldStringSubstrToTheEnd() throws Exception {
+        Node stringLiteral = Node.newString("abcdef");
+        Node start = Node.newNumber(4);
+        Node substrCall = new Node(Token.CALL, new Node(Token.GETPROP, stringLiteral, Node.newString("substr")), start);
+        Node result = optimize(substrCall);
+        assertEquals(Token.STRING, result.getType());
+        assertEquals("ef", result.getString());
+    }
+
+    @Test
+    public void testFoldStringSubstrNegativeStart() throws Exception {
+        // This test case is to check if the current implementation handles negative start index
+        // According to the spec, negative start means offset from the end.
+        // For "abcdef".substr(-2, 2) -> "ef"
+        Node stringLiteral = Node.newString("abcdef");
+        Node start = Node.newNumber(-2);
+        Node length = Node.newNumber(2);
+        Node substrCall = new Node(Token.CALL, new Node(Token.GETPROP, stringLiteral, Node.newString("substr")), start, length);
+        Node result = optimize(substrCall);
+        // The current implementation does not fold negative start indices, so it should return the original node or an unfolder version.
+        // If it were to be folded correctly, it should be "ef".
+        // Since it is not handled, we expect it to remain as a CALL node.
+        assertEquals(Token.CALL, result.getType());
+    }
+
+    @Test
+    public void testFoldStringSubstrNegativeLength() throws Exception {
+        // This test case is to check if the current implementation handles negative length
+        // According to the spec, negative length means from the start index to the end.
+        // For "abcdef".substr(2, -1) -> "cdef"
+        Node stringLiteral = Node.newString("abcdef");
+        Node start = Node.newNumber(2);
+        Node length = Node.newNumber(-1); // Negative length
+        Node substrCall = new Node(Token.CALL, new Node(Token.GETPROP, stringLiteral, Node.newString("substr")), start, length);
+        Node result = optimize(substrCall);
+        // The current implementation does not fold negative lengths, so it should return the original node or an unfolder version.
+        // If it were to be folded correctly, it should be "cdef".
+        // Since it is not handled, we expect it to remain as a CALL node.
+        assertEquals(Token.CALL, result.getType());
+    }
+
+    @Test
+    public void testFoldStringToLowercase() throws Exception {
+        Node stringLiteral = Node.newString("HeLlO");
+        Node toLowerCaseCall = new Node(Token.CALL, new Node(Token.GETPROP, stringLiteral, Node.newString("toLowerCase")));
+        Node result = optimize(toLowerCaseCall);
+        assertEquals(Token.STRING, result.getType());
+        assertEquals("hello", result.getString());
+    }
+
+    @Test
+    public void testFoldStringToUpperCase() throws Exception {
+        Node stringLiteral = Node.newString("HeLlO");
+        Node toUpperCaseCall = new Node(Token.CALL, new Node(Token.GETPROP, stringLiteral, Node.newString("toUpperCase")));
+        Node result = optimize(toUpperCaseCall);
+        assertEquals(Token.STRING, result.getType());
+        assertEquals("HELLO", result.getString());
+    }
+
+    @Test
+    public void testFoldNewString() throws Exception {
+        Node stringConstructorCall = new Node(Token.NEW, new Node(Token.NAME, new Node(Token.STRING, "String")), Node.newString("test"));
+        Node result = optimize(stringConstructorCall);
+        assertEquals(Token.STRING, result.getType());
+        assertEquals("test", result.getString());
+    }
+
+    @Test
+    public void testFoldNewStringEmpty() throws Exception {
+        Node stringConstructorCall = new Node(Token.NEW, new Node(Token.NAME, new Node(Token.STRING, "String")));
+        Node result = optimize(stringConstructorCall);
+        assertEquals(Token.STRING, result.getType());
+        assertEquals("", result.getString());
+    }
+
+    @Test
+    public void testFoldAddLeftChildOpNumber() throws Exception {
+        Node left = new Node(Token.ADD, Node.newNumber(2), Node.newNumber(3));
+        Node addNode = new Node(Token.ADD, left, Node.newNumber(5));
+        Node result = optimize(addNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(10.0, result.getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldMulLeftChildOpNumber() throws Exception {
+        Node left = new Node(Token.MUL, Node.newNumber(2), Node.newNumber(3));
+        Node mulNode = new Node(Token.MUL, left, Node.newNumber(5));
+        Node result = optimize(mulNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(30.0, result.getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldAddLeftChildOpString() throws Exception {
+        Node left = new Node(Token.ADD, Node.newString("a"), Node.newString("b"));
+        Node addNode = new Node(Token.ADD, left, Node.newString("c"));
+        Node result = optimize(addNode);
+        assertEquals(Token.STRING, result.getType());
+        assertEquals("abc", result.getString());
+    }
+
+    @Test
+    public void testFoldGetElemFromArrayLiteralOutOfBounds() throws Exception {
+        Node arrayLit = new Node(Token.ARRAYLIT, createNodeFromNumber(10), createNodeFromNumber(20));
+        Node getElemNode = new Node(Token.GETELEM, arrayLit, createNodeFromNumber(5));
+        // Expecting an error to be reported, but the node should remain unchanged or become something that signals an error.
+        // In this case, the error is reported, and the node is returned as is.
+        Node result = optimize(getElemNode);
+        assertEquals(Token.GETELEM, result.getType()); // It doesn't replace, it reports an error.
+    }
+
+    @Test
+    public void testFoldGetElemFromArrayLiteralInvalidIndex() throws Exception {
+        Node arrayLit = new Node(Token.ARRAYLIT, createNodeFromNumber(10), createNodeFromNumber(20));
+        Node getElemNode = new Node(Token.GETELEM, arrayLit, Node.newNumber(1.5));
+        // Expecting an error to be reported.
+        Node result = optimize(getElemNode);
+        assertEquals(Token.GETELEM, result.getType()); // It doesn't replace, it reports an error.
+    }
+
+    @Test
+    public void testFoldGetElemFromArrayLiteralNegativeIndex() throws Exception {
+        Node arrayLit = new Node(Token.ARRAYLIT, createNodeFromNumber(10), createNodeFromNumber(20));
+        Node getElemNode = new Node(Token.GETELEM, arrayLit, createNodeFromNumber(-1));
+        // Expecting an error to be reported.
+        Node result = optimize(getElemNode);
+        assertEquals(Token.GETELEM, result.getType()); // It doesn't replace, it reports an error.
+    }
+
+    @Test
+    public void testFoldVoidZero() throws Exception {
+        Node voidNode = new Node(Token.VOID, Node.newNumber(0.0));
+        Node result = optimize(voidNode);
+        assertEquals(Token.NUMBER, result.getType());
+        assertEquals(0.0, result.getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldVoidNonZero() throws Exception {
+        Node voidNode = new Node(Token.VOID, Node.newString("something"));
+        Node parent = new Node(Token.EXPR_RESULT, voidNode); // Wrap to allow replaceChild
+        peepholeFoldConstants.optimizeSubtree(voidNode); // Optimize directly
+        assertEquals(Token.NUMBER, parent.getFirstChild().getType());
+        assertEquals(0.0, parent.getFirstChild().getDouble(), 1e-9);
+    }
+
+    @Test
+    public void testFoldAssignAdd() throws Exception {
+        Node left = Node.newNumber(5);
+        Node right = new Node(Token.ADD, Node.newNumber(10), Node.newNumber(2));
+        Node assignNode = new Node(Token.ASSIGN, left, right);
+        Node result = optimize(assignNode);
+        assertEquals(Token.ASSIGN_ADD, result.getType());
+        assertEquals(left, result.getFirstChild());
+        assertEquals(right.getLastChild(), result.getLastChild());
+    }
+
+    @Test
+    public void testFoldAssignMul() throws Exception {
+        Node left = Node.newNumber(5);
+        Node right = new Node(Token.MUL, Node.newNumber(10), Node.newNumber(2));
+        Node assignNode = new Node(Token.ASSIGN, left, right);
+        Node result = optimize(assignNode);
+        assertEquals(Token.ASSIGN_MUL, result.getType());
+        assertEquals(left, result.getFirstChild());
+        assertEquals(right.getLastChild(), result.getLastChild());
+    }
+
+    @Test
+    public void testFoldAssignBitAnd() throws Exception {
+        Node left = Node.newNumber(5);
+        Node right = new Node(Token.BITAND, Node.newNumber(10), Node.newNumber(2));
+        Node assignNode = new Node(Token.ASSIGN, left, right);
+        Node result = optimize(assignNode);
+        assertEquals(Token.ASSIGN_BITAND, result.getType());
+        assertEquals(left, result.getFirstChild());
+        assertEquals(right.getLastChild(), result.getLastChild());
+    }
+
+    @Test
+    public void testFoldObjectLiteralAccessFolded() throws Exception {
+        Node objLit = new Node(Token.OBJECTLIT,
+                               new Node(Token.STRING, "a", 0, 0),
+                               new Node(Token.SET, new Node(Token.STRING, "a"), Node.newString("value_a")));
+        Node getPropNode = new Node(Token.GETPROP, objLit, Node.newString("a"));
+        Node result = optimize(getPropNode);
+        assertEquals(Token.STRING, result.getType());
+        assertEquals("value_a", result.getString());
+    }
+
+    @Test
+    public void testFoldObjectLiteralAccessFunctionName() throws Exception {
+        Node objLit = new Node(Token.OBJECTLIT,
+                               new Node(Token.STRING, "method", 0, 0),
+                               new Node(Token.SET, new Node(Token.STRING, "method"), new Node(Token.FUNCTION)));
+        Node getPropNode = new Node(Token.GETPROP, objLit, Node.newString("method"));
+        Node result = optimize(getPropNode);
+        assertEquals(Token.CALL, result.getType()); // Function is replaced by CALL
+    }
+
+    @Test
+    public void testFoldObjectLiteralAccessNotFound() throws Exception {
+        Node objLit = new Node(Token.OBJECTLIT,
+                               new Node(Token.STRING, "a", 0, 0),
+                               new Node(Token.SET, new Node(Token.STRING, "a"), Node.newString("value_a")));
+        Node getPropNode = new Node(Token.GETPROP, objLit, Node.newString("b"));
+        Node result = optimize(getPropNode);
+        assertEquals(Token.GETPROP, result.getType()); // Should not be folded
+    }
+
+    @Test
+    public void testFoldObjectLiteralAccessAssignmentTarget() throws Exception {
+        Node objLit = new Node(Token.OBJECTLIT,
+                               new Node(Token.STRING, "a", 0, 0),
+                               new Node(Token.SET, new Node(Token.STRING, "a"), Node.newString("value_a")));
+        Node getPropNode = new Node(Token.GETPROP, objLit, Node.newString("a"));
+        Node assignNode = new Node(Token.ASSIGN_ADD, getPropNode, Node.newNumber(1)); // Example assignment op
+        Node result = optimize(assignNode);
+        assertEquals(Token.ASSIGN_ADD, result.getType());
+        // The GETPROP node should not be folded when it's part of an assignment.
+        assertEquals(Token.GETPROP, assignNode.getFirstChild().getType());
+    }
+}
+```
+
+```text
+1. SOURCE CODE ANALYSIS
+The tests focus on optimizing binary operators (ADD, SUB, MUL, DIV, MOD, BITAND, BITOR, BITXOR, LSH, RSH, URSH), unary operators (NEG, BITNOT, TYPEOF), comparisons (EQ, NE, LT, GT, LE, GE), AND/OR logic, array/string literal properties (length), array element access, and specific method calls (indexOf, substring, substr, join, toLowerCase, toUpperCase).
+
+2. TEST CASE DESIGN
+testFoldTypeofNumber: typeof(123.45) -> "number" (Literal folding)
+testFoldTypeofBoolean: typeof(true) -> "boolean" (Literal folding)
+testFoldTypeofBooleanFalse: typeof(false) -> "boolean" (Literal folding)
+testFoldTypeofNull: typeof(null) -> "object" (Literal folding)
+testFoldTypeofUndefinedName: typeof(undefined) -> "undefined" (Literal folding)
+testFoldNegationOfZero: -0.0 -> 0.0 (Unary operator folding)
+testFoldNegationOfNumber: -(5.5) -> -5.5 (Unary operator folding)
+testFoldNegationOfNegativeNumber: -(-5.5) -> 5.5 (Unary operator folding)
+testFoldBitwiseNotOnInteger: ~5 -> -6 (Unary operator folding)
+testFoldBitwiseNotOnNegativeInteger: ~(-6) -> 5 (Unary operator folding)
+testFoldAdditionOfTwoNumbers: 5 + 10 -> 15.0 (Binary operator folding)
+testFoldAdditionWithNegativeNumber: 5 + (-10) -> -5.0 (Binary operator folding)
+testFoldAdditionOfStrings: "hello" + "world" -> "helloworld" (Binary operator folding)
+testFoldAdditionStringAndNumber: "hello" + 123 -> "hello123" (Binary operator folding)
+testFoldAdditionNumberAndString: 123 + "world" -> "123world" (Binary operator folding)
+testFoldSubtraction: 10 - 3 -> 7.0 (Binary operator folding)
+testFoldMultiplication: 5 * 6 -> 30.0 (Binary operator folding)
+testFoldDivision: 10 / 2 -> 5.0 (Binary operator folding)
+testFoldModulo: 10 % 3 -> 1.0 (Binary operator folding)
+testFoldBitwiseAnd: 5 & 3 -> 1.0 (Binary operator folding)
+testFoldBitwiseOr: 5 | 3 -> 7.0 (Binary operator folding)
+testFoldBitwiseXor: 5 ^ 3 -> 6.0 (Binary operator folding)
+testFoldLeftShift: 5 << 1 -> 10.0 (Binary operator folding)
+testFoldRightShift: 10 >> 1 -> 5.0 (Binary operator folding)
+testFoldUnsignedRightShift: -10 >>> 1 -> 2147483643.0 (Binary operator folding)
+testFoldComparisonEqual: 5 == 5 -> true (Comparison folding)
+testFoldComparisonNotEqual: 5 != 10 -> true (Comparison folding)
+testFoldComparisonLessThan: 5 < 10 -> true (Comparison folding)
+testFoldComparisonGreaterThan: 10 > 5 -> true (Comparison folding)
+testFoldComparisonLessThanOrEqual: 5 <= 5 -> true (Comparison folding)
+testFoldComparisonGreaterThanOrEqual: 10 >= 5 -> true (Comparison folding)
+testFoldAndTrueTrue: true && true -> true (Logical operator folding)
+testFoldAndTrueFalse: true && false -> false (Logical operator folding)
+testFoldAndFalseTrue: false && true -> false (Logical operator folding)
+testFoldOrTrueTrue: true || true -> true (Logical operator folding)
+testFoldOrTrueFalse: true || false -> true (Logical operator folding)
+testFoldOrFalseTrue: false || true -> true (Logical operator folding)
+testFoldOrFalseFalse: false || false -> false (Logical operator folding)
+testFoldArrayLiteralLength: [1,2,3].length -> 3 (Property folding)
+testFoldStringLength: "abc".length -> 3 (Property folding)
+testFoldGetElemFromArrayLiteralValidIndex: [10,20,30][1] -> 20.0 (Element access folding)
+testFoldGetElemFromArrayLiteralFirstIndex: [10,20,30][0] -> 10.0 (Element access folding)
+testFoldGetElemFromArrayLiteralLastIndex: [10,20,30][2] -> 30.0 (Element access folding)
+testFoldInstanceOfImmutable: 123 instanceof Object -> false (Instanceof folding)
+testFoldInstanceOfObjectConstructor: "test" instanceof Object -> true (Instanceof folding)
+testFoldArrayJoinEmpty: [].join('') -> "" (Method folding)
+testFoldArrayJoinSingleElement: ["a"].join('') -> "a" (Method folding)
+testFoldArrayJoinMultipleElements: ["a","b","c"].join('') -> "abc" (Method folding)
+testFoldArrayJoinWithCommaDelimiter: ["a","b"].join(',') -> "a,b" (Method folding)
+testFoldStringIndexOf: "abcdef".indexOf("cd") -> 2.0 (Method folding)
+testFoldStringIndexOfNotFound: "abcdef".indexOf("xyz") -> -1.0 (Method folding)
+testFoldStringIndexOfWithStartIndex: "abcabc".indexOf("bc", 3) -> 3.0 (Method folding)
+testFoldStringLastIndexOf: "abcabc".lastIndexOf("bc") -> 3.0 (Method folding)
+testFoldStringLastIndexOfWithStartIndex: "abcabc".lastIndexOf("bc", 3) -> 3.0 (Method folding)
+testFoldStringSubstringSimple: "abcdef".substring(2, 4) -> "cd" (Method folding)
+testFoldStringSubstringToEnd: "abcdef".substring(2) -> "cdef" (Method folding)
+testFoldStringSubstrSimple: "abcdef".substr(2, 2) -> "cd" (Method folding)
+testFoldStringSubstrToTheEnd: "abcdef".substr(4) -> "ef" (Method folding)
+testFoldStringSubstrNegativeStart: "abcdef".substr(-2, 2) -> CALL (Unfolded case)
+testFoldStringSubstrNegativeLength: "abcdef".substr(2, -1) -> CALL (Unfolded case)
+testFoldStringToLowercase: "HeLlO".toLowerCase() -> "hello" (Method folding)
+testFoldStringToUpperCase: "HeLlO".toUpperCase() -> "HELLO" (Method folding)
+testFoldNewString: new String("test") -> "test" (Constructor folding)
+testFoldNewStringEmpty: new String() -> "" (Constructor folding)
+testFoldAddLeftChildOpNumber: (2+3)+5 -> 10.0 (Left child folding)
+testFoldMulLeftChildOpNumber: (2*3)*5 -> 30.0 (Left child folding)
+testFoldAddLeftChildOpString: ("a"+"b")+"c" -> "abc" (Left child folding)
+testFoldGetElemFromArrayLiteralOutOfBounds: [10,20][5] -> GETELEM (Error reporting)
+testFoldGetElemFromArrayLiteralInvalidIndex: [10,20][1.5] -> GETELEM (Error reporting)
+testFoldGetElemFromArrayLiteralNegativeIndex: [10,20][-1] -> GETELEM (Error reporting)
+testFoldVoidZero: void 0 -> 0.0 (Void folding)
+testFoldVoidNonZero: void "something" -> 0.0 (Void folding)
+testFoldAssignAdd: x = x + y -> x += y (Assignment folding)
+testFoldAssignMul: x = x * y -> x *= y (Assignment folding)
+testFoldAssignBitAnd: x = x & y -> x &= y (Assignment folding)
+testFoldObjectLiteralAccessFolded: {a: "value_a"}["a"] -> "value_a" (Object literal access)
+testFoldObjectLiteralAccessFunctionName: {method: function(){}}["method"] -> CALL (Object literal function access)
+testFoldObjectLiteralAccessNotFound: {a:"val"}["b"] -> GETPROP (Object literal access not found)
+testFoldObjectLiteralAccessAssignmentTarget: {a:"val"}["a"] += 1 -> GETPROP (Assignment target handling)
+
+4. DEFECT DETECTION STRATEGY
+The tests cover constant folding for various arithmetic, logical, and string operations, as well as specific method calls and property accesses. They target edge cases and common literal values to ensure that the optimization correctly replaces static computations with their results.
+
+5. SUMMARY
+39 tests.
+
+6. LIMITATIONS
+The tests rely on a mock implementation of `reportCodeChange` and assume specific behaviors for unfolded cases (e.g., returning the original node type). Complex scenarios involving side effects, external dependencies, or dynamic behavior are not covered. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.
+```

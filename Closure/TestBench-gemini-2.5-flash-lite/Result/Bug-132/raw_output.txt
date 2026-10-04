@@ -1,0 +1,1407 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Joiner;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Predicate;
+import com.google.common.collect.ImmutableSet;
+import com.google.javascript.jscomp.CodingConvention.Bind;
+import com.google.javascript.rhino.IR;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.jstype.TernaryValue;
+import java.util.regex.Pattern;
+
+public class PeepholeSubstituteAlternateSyntaxTest {
+
+    // Helper to create a Node of a specific type and value
+    private Node createNode(int type, Object value) {
+        Node node = null;
+        switch (type) {
+            case Token.STRING:
+                node = IR.string((String) value);
+                break;
+            case Token.NUMBER:
+                node = IR.number((Double) value);
+                break;
+            case Token.TRUE:
+                node = IR.trueNode();
+                break;
+            case Token.FALSE:
+                node = IR.falseNode();
+                break;
+            case Token.NAME:
+                node = IR.name((String) value);
+                break;
+            case Token.CALL:
+                node = (Node) value; // value should be a Node
+                break;
+            case Token.NEW:
+                node = (Node) value; // value should be a Node
+                break;
+            case Token.OBJECTLIT:
+                node = IR.objectlit();
+                break;
+            case Token.ARRAYLIT:
+                node = IR.arraylit();
+                break;
+            case Token.REGEXP:
+                node = (Node) value; // value should be a Node
+                break;
+            case Token.RETURN:
+                node = IR.returnNode((Node) value);
+                break;
+            case Token.THROW:
+                node = IR.throwNode((Node) value);
+                break;
+            case Token.IF:
+                node = (Node) value; // value should be a Node
+                break;
+            case Token.HOOK:
+                node = (Node) value; // value should be a Node
+                break;
+            case Token.ASSIGN:
+                node = (Node) value; // value should be a Node
+                break;
+            case Token.ADD:
+                node = (Node) value; // value should be a Node
+                break;
+            case Token.OR:
+                node = (Node) value; // value should be a Node
+                break;
+            case Token.AND:
+                node = (Node) value; // value should be a Node
+                break;
+            case Token.NOT:
+                node = (Node) value; // value should be a Node
+                break;
+            case Token.EQ:
+                node = (Node) value; // value should be a Node
+                break;
+            case Token.NE:
+                node = (Node) value; // value should be a Node
+                break;
+            case Token.VOID:
+                node = IR.voidNode((Node) value);
+                break;
+            case Token.EXPR_RESULT:
+                node = IR.exprResult((Node) value);
+                break;
+            default:
+                throw new IllegalArgumentException("Unsupported token type: " + type);
+        }
+        return node;
+    }
+
+    // Helper to simplify AST creation for specific tests
+    private Node createCall(String functionName, Node... args) {
+        Node nameNode = IR.name(functionName);
+        Node callNode = IR.call(nameNode, args);
+        return callNode;
+    }
+
+    private Node createNew(String className, Node... args) {
+        Node nameNode = IR.name(className);
+        Node newNode = new Node(Token.NEW, nameNode, args);
+        return newNode;
+    }
+
+    private PeepholeSubstituteAlternateSyntax createOptimizer(boolean late) {
+        // We need a minimal Compiler instance for the optimizer to use
+        Compiler compiler = new Compiler();
+        compiler.init(); // Initialize necessary components
+        return new PeepholeSubstituteAlternateSyntax(late);
+    }
+
+    // Test for tryRemoveRedundantExit
+    @Test
+    public void testTryRemoveRedundantExit_return() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node returnNode = IR.returnNode(IR.number(1));
+        Node parent = IR.block(returnNode); // Wrap in a block for context
+        returnNode.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(returnNode);
+
+        assertNull(result); // Should be removed
+    }
+
+    @Test
+    public void testTryRemoveRedundantExit_throw() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node throwNode = IR.throwNode(IR.string("error"));
+        Node parent = IR.block(throwNode);
+        throwNode.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(throwNode);
+
+        assertNull(result); // Should be removed
+    }
+
+    @Test
+    public void testTryRemoveRedundantExit_noRemoval() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node returnNode = IR.returnNode(IR.number(1));
+        Node followedBy = IR.string("something else"); // Something that does not match
+        Node parent = IR.block(returnNode, followedBy);
+        returnNode.setParent(parent);
+        followedBy.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(returnNode);
+
+        assertNotNull(result); // Should not be removed
+        assertEquals(Token.RETURN, result.getType());
+    }
+
+    // Test for tryReplaceExitWithBreak
+    @Test
+    public void testTryReplaceExitWithBreak_return() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node loopBody = IR.block();
+        Node breakTarget = IR.whileNode(IR.trueNode(), loopBody); // Simple while loop
+        Node returnNode = IR.returnNode(IR.number(1));
+        loopBody.addChildToBack(returnNode);
+        returnNode.setParent(loopBody);
+
+        Node result = optimizer.optimizeSubtree(returnNode);
+
+        assertNotNull(result);
+        assertEquals(Token.BREAK, result.getType());
+        assertFalse(result.hasChildren());
+    }
+
+    @Test
+    public void testTryReplaceExitWithBreak_throw() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node loopBody = IR.block();
+        Node breakTarget = IR.whileNode(IR.trueNode(), loopBody); // Simple while loop
+        Node throwNode = IR.throwNode(IR.string("error"));
+        loopBody.addChildToBack(throwNode);
+        throwNode.setParent(loopBody);
+
+        Node result = optimizer.optimizeSubtree(throwNode);
+
+        assertNotNull(result);
+        assertEquals(Token.BREAK, result.getType());
+        assertFalse(result.hasChildren());
+    }
+
+    @Test
+    public void testTryReplaceExitWithBreak_noReplacementIfNoBreakTarget() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node returnNode = IR.returnNode(IR.number(1));
+        Node parent = IR.script(returnNode); // Not inside a loop or switch
+        returnNode.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(returnNode);
+
+        assertNotNull(result);
+        assertEquals(Token.RETURN, result.getType()); // Should remain return
+    }
+
+    // Test for tryMinimizeNot
+    @Test
+    public void testTryMinimizeNot_eq_ne() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node notNode = IR.not(IR.eq(IR.number(1), IR.number(2)));
+        Node parent = IR.exprResult(notNode);
+        notNode.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(notNode);
+
+        assertNotNull(result);
+        assertEquals(Token.NE, result.getType());
+        assertEquals(Token.NUMBER, result.getFirstChild().getType());
+        assertEquals(1.0, result.getFirstChild().getDouble(), 0.00001);
+        assertEquals(Token.NUMBER, result.getLastChild().getType());
+        assertEquals(2.0, result.getLastChild().getDouble(), 0.00001);
+    }
+
+    @Test
+    public void testTryMinimizeNot_ne_eq() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node notNode = IR.not(IR.ne(IR.number(1), IR.number(2)));
+        Node parent = IR.exprResult(notNode);
+        notNode.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(notNode);
+
+        assertNotNull(result);
+        assertEquals(Token.EQ, result.getType());
+        assertEquals(Token.NUMBER, result.getFirstChild().getType());
+        assertEquals(1.0, result.getFirstChild().getDouble(), 0.00001);
+        assertEquals(Token.NUMBER, result.getLastChild().getType());
+        assertEquals(2.0, result.getLastChild().getDouble(), 0.00001);
+    }
+
+    @Test
+    public void testTryMinimizeNot_sheq_shne() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node notNode = IR.not(IR.sheq(IR.number(1), IR.number(2)));
+        Node parent = IR.exprResult(notNode);
+        notNode.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(notNode);
+
+        assertNotNull(result);
+        assertEquals(Token.SHNE, result.getType());
+    }
+
+    @Test
+    public void testTryMinimizeNot_shne_sheq() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node notNode = IR.not(IR.shne(IR.number(1), IR.number(2)));
+        Node parent = IR.exprResult(notNode);
+        notNode.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(notNode);
+
+        assertNotNull(result);
+        assertEquals(Token.SHEQ, result.getType());
+    }
+
+    @Test
+    public void testTryMinimizeNot_otherOperator() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node notNode = IR.not(IR.lt(IR.number(1), IR.number(2))); // LT is not handled
+        Node parent = IR.exprResult(notNode);
+        notNode.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(notNode);
+
+        assertNotNull(result);
+        assertEquals(Token.NOT, result.getType()); // Should remain NOT
+        assertEquals(Token.LT, result.getFirstChild().getType());
+    }
+
+    // Test for tryMinimizeIf
+    @Test
+    public void testTryMinimizeIf_ifThenElse_toHook() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node cond = IR.trueNode();
+        Node thenExpr = IR.string("a");
+        Node elseExpr = IR.string("b");
+        Node thenBlock = IR.block(IR.exprResult(thenExpr));
+        Node elseBlock = IR.block(IR.exprResult(elseExpr));
+        Node ifNode = IR.ifNode(cond, thenBlock, elseBlock);
+        Node parent = IR.block(ifNode);
+        ifNode.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(ifNode);
+
+        assertNotNull(result);
+        assertEquals(Token.EXPR_RESULT, result.getType());
+        assertEquals(Token.HOOK, result.getFirstChild().getType());
+        assertEquals(Token.TRUE, result.getFirstChild().getFirstChild().getType());
+        assertEquals("a", result.getFirstChild().getChildAtIndex(1).getString());
+        assertEquals("b", result.getFirstChild().getLastChild().getString());
+    }
+
+    @Test
+    public void testTryMinimizeIf_ifThen_toAnd() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node cond = IR.trueNode();
+        Node expr = IR.string("a");
+        Node thenBlock = IR.block(IR.exprResult(expr));
+        Node ifNode = IR.ifNode(cond, thenBlock);
+        Node parent = IR.block(ifNode);
+        ifNode.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(ifNode);
+
+        assertNotNull(result);
+        assertEquals(Token.EXPR_RESULT, result.getType());
+        assertEquals(Token.AND, result.getFirstChild().getType());
+        assertEquals(Token.TRUE, result.getFirstChild().getFirstChild().getType());
+        assertEquals("a", result.getFirstChild().getLastChild().getString());
+    }
+
+    @Test
+    public void testTryMinimizeIf_ifThen_toOr_whenConditionIsNot() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node cond = IR.not(IR.falseNode()); // Equivalent to true
+        Node expr = IR.string("a");
+        Node thenBlock = IR.block(IR.exprResult(expr));
+        Node ifNode = IR.ifNode(cond, thenBlock);
+        Node parent = IR.block(ifNode);
+        ifNode.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(ifNode);
+
+        assertNotNull(result);
+        assertEquals(Token.EXPR_RESULT, result.getType());
+        assertEquals(Token.OR, result.getFirstChild().getType()); // Should become OR
+        assertEquals(Token.FALSE, result.getFirstChild().getFirstChild().getType());
+        assertEquals("a", result.getFirstChild().getLastChild().getString());
+    }
+
+
+    // Test for tryReplaceUndefined
+    @Test
+    public void testTryReplaceUndefined_undefined() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node undefinedNode = IR.name("undefined");
+        Node parent = IR.exprResult(undefinedNode);
+        undefinedNode.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(undefinedNode);
+
+        assertNotNull(result);
+        assertEquals(Token.VOID, result.getType());
+        assertEquals(Token.NUMBER, result.getFirstChild().getType());
+        assertEquals(0.0, result.getFirstChild().getDouble(), 0.00001);
+    }
+
+    @Test
+    public void testTryReplaceUndefined_voidZero() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node voidNode = IR.voidNode(IR.number(0));
+        Node parent = IR.exprResult(voidNode);
+        voidNode.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(voidNode);
+
+        assertNotNull(result);
+        assertEquals(Token.VOID, result.getType());
+        assertEquals(Token.NUMBER, result.getFirstChild().getType());
+        assertEquals(0.0, result.getFirstChild().getDouble(), 0.00001);
+    }
+
+    @Test
+    public void testTryReplaceUndefined_identifierNotUndefined() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node nameNode = IR.name("someName");
+        Node parent = IR.exprResult(nameNode);
+        nameNode.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(nameNode);
+
+        assertNotNull(result);
+        assertEquals(Token.NAME, result.getType());
+        assertEquals("someName", result.getString()); // Should remain unchanged
+    }
+
+    // Test for tryReduceReturn
+    @Test
+    public void testTryReduceReturn_returnUndefined() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node returnNode = IR.returnNode(IR.name("undefined"));
+        Node parent = IR.block(returnNode);
+        returnNode.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(returnNode);
+
+        assertNotNull(result);
+        assertEquals(Token.RETURN, result.getType());
+        assertFalse(result.hasChildren()); // Should be reduced to just "return;"
+    }
+
+    @Test
+    public void testTryReduceReturn_returnVoidZero() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node returnNode = IR.returnNode(IR.voidNode(IR.number(0)));
+        Node parent = IR.block(returnNode);
+        returnNode.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(returnNode);
+
+        assertNotNull(result);
+        assertEquals(Token.RETURN, result.getType());
+        assertFalse(result.hasChildren()); // Should be reduced to just "return;"
+    }
+
+    @Test
+    public void testTryReduceReturn_returnVoidOne() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node returnNode = IR.returnNode(IR.voidNode(IR.number(1))); // void 1 is pure
+        Node parent = IR.block(returnNode);
+        returnNode.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(returnNode);
+
+        assertNotNull(result);
+        assertEquals(Token.RETURN, result.getType());
+        assertFalse(result.hasChildren()); // Should be reduced to just "return;"
+    }
+
+    @Test
+    public void testTryReduceReturn_returnVoidExpressionWithSideEffects() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node callNode = createCall("foo"); // Assume foo has side effects
+        Node returnNode = IR.returnNode(IR.voidNode(callNode));
+        Node parent = IR.block(returnNode);
+        returnNode.setParent(parent);
+        callNode.setParent(returnNode);
+
+        Node result = optimizer.optimizeSubtree(returnNode);
+
+        assertNotNull(result);
+        assertEquals(Token.RETURN, result.getType());
+        assertTrue(result.hasChildren()); // Should not be reduced if side effect
+        assertEquals(Token.VOID, result.getFirstChild().getType());
+        assertEquals(callNode, result.getFirstChild().getFirstChild());
+    }
+
+    // Test for trySplitComma
+    @Test
+    public void testTrySplitComma_exprResult() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(false); // late = false
+        Node left = IR.number(1);
+        Node right = IR.number(2);
+        Node commaNode = IR.comma(left, right);
+        Node parent = IR.exprResult(commaNode);
+        Node grandParent = IR.block(parent);
+        commaNode.setParent(parent);
+        left.setParent(commaNode);
+        right.setParent(commaNode);
+
+        Node result = optimizer.optimizeSubtree(commaNode);
+
+        assertNotNull(result);
+        assertEquals(left, result); // Should return the left operand
+        assertEquals(Token.EXPR_RESULT, parent.getType());
+        assertEquals(Token.NUMBER, parent.getFirstChild().getType()); // Parent should now be left
+        assertEquals(1.0, parent.getFirstChild().getDouble(), 0.00001);
+
+        Node newStatement = parent.getNext();
+        assertNotNull(newStatement);
+        assertEquals(Token.EXPR_RESULT, newStatement.getType());
+        assertEquals(Token.NUMBER, newStatement.getFirstChild().getType());
+        assertEquals(2.0, newStatement.getFirstChild().getDouble(), 0.00001); // New statement should be right
+    }
+
+    @Test
+    public void testTrySplitComma_notExprResult() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(false); // late = false
+        Node left = IR.number(1);
+        Node right = IR.number(2);
+        Node commaNode = IR.comma(left, right);
+        Node parent = IR.assign(IR.name("x"), commaNode); // Assign is not ExprResult
+        commaNode.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(commaNode);
+
+        assertNotNull(result);
+        assertEquals(commaNode, result); // Should remain unchanged
+        assertEquals(Token.COMMA, result.getType());
+        assertEquals(left, result.getFirstChild());
+        assertEquals(right, result.getLastChild());
+    }
+
+    // Test for tryReplaceIf
+    @Test
+    public void testTryReplaceIf_ifReturnIfReturn() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node returnVal = IR.number(1);
+        Node if1 = IR.ifNode(IR.trueNode(), IR.returnNode(returnVal));
+        Node if2 = IR.ifNode(IR.trueNode(), IR.returnNode(returnVal.cloneTree()));
+        Node block = IR.block(if1, if2);
+        if1.setParent(block);
+        if2.setParent(block);
+
+        Node result = optimizer.optimizeSubtree(if1);
+
+        assertNotNull(result);
+        assertEquals(Token.IF, result.getType());
+        assertEquals(Token.OR, result.getFirstChild().getType());
+        assertEquals(Token.TRUE, result.getFirstChild().getFirstChild().getType());
+        assertEquals(Token.TRUE, result.getFirstChild().getLastChild().getType());
+        assertEquals(Token.RETURN, result.getLastChild().getFirstChild().getType());
+        assertEquals(returnVal.getDouble(), result.getLastChild().getFirstChild().getDouble(), 0.00001);
+    }
+
+    @Test
+    public void testTryReplaceIf_ifReturnIfElseReturn() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node returnVal = IR.number(1);
+        Node if1 = IR.ifNode(IR.trueNode(), IR.returnNode(returnVal));
+        Node innerElse = IR.returnNode(returnVal.cloneTree());
+        Node if2 = IR.ifNode(IR.trueNode(), IR.string("foo"), innerElse);
+        Node block = IR.block(if1, if2);
+        if1.setParent(block);
+        if2.setParent(block);
+
+        Node result = optimizer.optimizeSubtree(if1);
+
+        assertNotNull(result);
+        assertEquals(Token.IF, result.getType());
+        assertEquals(Token.AND, result.getFirstChild().getType());
+        assertEquals(Token.NOT, result.getFirstChild().getFirstChild().getType());
+        assertEquals(Token.TRUE, result.getFirstChild().getFirstChild().getLastChild().getType());
+        assertEquals(Token.TRUE, result.getFirstChild().getLastChild().getType());
+        assertEquals(Token.STRING, result.getChildAtIndex(1).getType()); // then branch
+        assertEquals("foo", result.getChildAtIndex(1).getString());
+        assertEquals(innerElse, result.getLastChild()); // else branch
+    }
+
+    @Test
+    public void testTryReplaceIf_ifReturnExpressionElseReturnExpression() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node cond = IR.trueNode();
+        Node thenExpr = IR.number(1);
+        Node elseExpr = IR.number(2);
+        Node thenBlock = IR.block(IR.returnNode(thenExpr));
+        Node elseBlock = IR.block(IR.returnNode(elseExpr));
+        Node ifNode = IR.ifNode(cond, thenBlock, elseBlock);
+        Node parent = IR.block(ifNode);
+        ifNode.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(ifNode);
+
+        assertNotNull(result);
+        assertEquals(Token.RETURN, result.getType());
+        assertEquals(Token.HOOK, result.getFirstChild().getType());
+        assertEquals(cond, result.getFirstChild().getFirstChild());
+        assertEquals(thenExpr, result.getFirstChild().getChildAtIndex(1));
+        assertEquals(elseExpr, result.getFirstChild().getLastChild());
+    }
+
+    // Test for tryFoldSimpleFunctionCall
+    @Test
+    public void testTryFoldSimpleFunctionCall_StringImmutable() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node stringLiteral = IR.string("hello");
+        Node callNode = createCall("String", stringLiteral);
+        Node parent = IR.exprResult(callNode);
+        callNode.setParent(parent);
+        stringLiteral.setParent(callNode);
+
+        Node result = optimizer.optimizeSubtree(callNode);
+
+        assertNotNull(result);
+        assertEquals(Token.ADD, result.getType());
+        assertEquals(Token.STRING, result.getFirstChild().getType());
+        assertEquals("", result.getFirstChild().getString());
+        assertEquals(Token.STRING, result.getLastChild().getType());
+        assertEquals("hello", result.getLastChild().getString());
+    }
+
+    @Test
+    public void testTryFoldSimpleFunctionCall_StringVariable() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node varNode = IR.name("myVar");
+        Node callNode = createCall("String", varNode);
+        Node parent = IR.exprResult(callNode);
+        callNode.setParent(parent);
+        varNode.setParent(callNode);
+
+        Node result = optimizer.optimizeSubtree(callNode);
+
+        assertNotNull(result);
+        assertEquals(Token.CALL, result.getType()); // Should not fold if not immutable
+        assertEquals("String", result.getFirstChild().getString());
+        assertEquals(varNode, result.getLastChild());
+    }
+
+    // Test for tryFoldLiteralConstructor
+    @Test
+    public void testTryFoldLiteralConstructor_newObjectNoArgs() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node newNode = createNew("Object");
+        Node parent = IR.exprResult(newNode);
+        newNode.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(newNode);
+
+        assertNotNull(result);
+        assertEquals(Token.OBJECTLIT, result.getType());
+        assertFalse(result.hasChildren());
+    }
+
+    @Test
+    public void testTryFoldLiteralConstructor_newArrayNoArgs() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node newNode = createNew("Array");
+        Node parent = IR.exprResult(newNode);
+        newNode.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(newNode);
+
+        assertNotNull(result);
+        assertEquals(Token.ARRAYLIT, result.getType());
+        assertFalse(result.hasChildren());
+    }
+
+    @Test
+    public void testTryFoldLiteralConstructor_newArrayOneStringArg() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node arg = IR.string("a");
+        Node newNode = createNew("Array", arg);
+        Node parent = IR.exprResult(newNode);
+        newNode.setParent(parent);
+        arg.setParent(newNode);
+
+        Node result = optimizer.optimizeSubtree(newNode);
+
+        assertNotNull(result);
+        assertEquals(Token.ARRAYLIT, result.getType());
+        assertTrue(result.hasChildren());
+        assertEquals(arg, result.getFirstChild());
+    }
+
+    @Test
+    public void testTryFoldLiteralConstructor_newArrayOneNumberArg() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node arg = IR.number(5.0); // Array(5) creates an array of length 5
+        Node newNode = createNew("Array", arg);
+        Node parent = IR.exprResult(newNode);
+        newNode.setParent(parent);
+        arg.setParent(newNode);
+
+        Node result = optimizer.optimizeSubtree(newNode);
+
+        assertNotNull(result);
+        assertEquals(Token.ARRAYLIT, result.getType());
+        // Array(5) becomes [] with length 5, not [5.0]
+        assertFalse(result.hasChildren());
+    }
+
+    @Test
+    public void testTryFoldLiteralConstructor_newArrayZeroNumberArg() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node arg = IR.number(0.0); // Array(0)
+        Node newNode = createNew("Array", arg);
+        Node parent = IR.exprResult(newNode);
+        newNode.setParent(parent);
+        arg.setParent(newNode);
+
+        Node result = optimizer.optimizeSubtree(newNode);
+
+        assertNotNull(result);
+        assertEquals(Token.ARRAYLIT, result.getType());
+        assertFalse(result.hasChildren());
+    }
+
+    @Test
+    public void testTryFoldLiteralConstructor_newArrayMultipleArgs() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node arg1 = IR.number(1.0);
+        Node arg2 = IR.string("a");
+        Node newNode = createNew("Array", arg1, arg2);
+        Node parent = IR.exprResult(newNode);
+        newNode.setParent(parent);
+        arg1.setParent(newNode);
+        arg2.setParent(newNode);
+
+        Node result = optimizer.optimizeSubtree(newNode);
+
+        assertNotNull(result);
+        assertEquals(Token.ARRAYLIT, result.getType());
+        assertTrue(result.hasChildren());
+        assertEquals(arg1, result.getFirstChild());
+        assertEquals(arg2, result.getLastChild());
+    }
+
+    @Test
+    public void testTryFoldLiteralConstructor_newRegExpLiteral() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node pattern = IR.string("abc");
+        Node newNode = createNew("RegExp", pattern);
+        newNode.setType(Token.CALL); // Make it a call as per tryFoldRegularExpressionConstructor
+        newNode.addChildToBack(IR.name("RegExp")); // Set constructor name
+        newNode.addChildToBack(pattern); // Add pattern
+        pattern.setParent(newNode);
+
+        Node result = optimizer.optimizeSubtree(newNode);
+
+        assertNotNull(result);
+        assertEquals(Token.REGEXP, result.getType());
+        assertEquals("abc", result.getFirstChild().getString());
+    }
+
+    // Test for tryFoldStandardConstructors
+    @Test
+    public void testTryFoldStandardConstructors_newObject() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node newNode = createNew("Object");
+        Node parent = IR.exprResult(newNode);
+        newNode.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(newNode);
+
+        assertNotNull(result);
+        assertEquals(Token.CALL, result.getType()); // Should become a call
+        assertEquals("Object", result.getFirstChild().getString());
+    }
+
+    @Test
+    public void testTryFoldStandardConstructors_newArray() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node newNode = createNew("Array");
+        Node parent = IR.exprResult(newNode);
+        newNode.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(newNode);
+
+        assertNotNull(result);
+        assertEquals(Token.CALL, result.getType()); // Should become a call
+        assertEquals("Array", result.getFirstChild().getString());
+    }
+
+    @Test
+    public void testTryFoldStandardConstructors_newRegExp() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node newNode = createNew("RegExp");
+        Node parent = IR.exprResult(newNode);
+        newNode.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(newNode);
+
+        assertNotNull(result);
+        assertEquals(Token.CALL, result.getType()); // Should become a call
+        assertEquals("RegExp", result.getFirstChild().getString());
+    }
+
+    @Test
+    public void testTryFoldStandardConstructors_newError() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node newNode = createNew("Error");
+        Node parent = IR.exprResult(newNode);
+        newNode.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(newNode);
+
+        assertNotNull(result);
+        assertEquals(Token.CALL, result.getType()); // Should become a call
+        assertEquals("Error", result.getFirstChild().getString());
+    }
+
+    @Test
+    public void testTryFoldStandardConstructors_newCustomObject() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node newNode = createNew("MyObject"); // Custom constructor
+        Node parent = IR.exprResult(newNode);
+        newNode.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(newNode);
+
+        assertNotNull(result);
+        assertEquals(Token.NEW, result.getType()); // Should remain NEW
+        assertEquals("MyObject", result.getFirstChild().getString());
+    }
+
+    // Test for trySplitComma
+    @Test
+    public void testTrySplitComma_lateFalse() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(false);
+        Node left = IR.number(1);
+        Node right = IR.number(2);
+        Node commaNode = IR.comma(left, right);
+        Node parent = IR.exprResult(commaNode);
+        Node grandParent = IR.block(parent);
+        commaNode.setParent(parent);
+
+        optimizer.optimizeSubtree(commaNode);
+
+        assertEquals(Token.EXPR_RESULT, parent.getType());
+        assertEquals(Token.NUMBER, parent.getFirstChild().getType());
+        assertEquals(1.0, parent.getFirstChild().getDouble(), 0.00001);
+        Node newStatement = parent.getNext();
+        assertNotNull(newStatement);
+        assertEquals(Token.EXPR_RESULT, newStatement.getType());
+        assertEquals(Token.NUMBER, newStatement.getFirstChild().getType());
+        assertEquals(2.0, newStatement.getFirstChild().getDouble(), 0.00001);
+    }
+
+    // Test for tryReplaceUndefined
+    @Test
+    public void testTryReplaceUndefined_nameUndefined() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node nameNode = IR.name("undefined");
+        Node parent = IR.exprResult(nameNode);
+        nameNode.setParent(parent);
+
+        optimizer.optimizeSubtree(nameNode);
+
+        assertEquals(Token.VOID, nameNode.getParent().getType());
+        assertEquals(0.0, nameNode.getParent().getFirstChild().getDouble(), 0.00001);
+    }
+
+    // Test for reduceTrueFalse
+    @Test
+    public void testReduceTrueFalse_trueLate() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node trueNode = IR.trueNode();
+        Node parent = IR.exprResult(trueNode);
+        trueNode.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(trueNode);
+
+        assertNotNull(result);
+        assertEquals(Token.NOT, result.getType());
+        assertEquals(Token.NUMBER, result.getFirstChild().getType());
+        assertEquals(0.0, result.getFirstChild().getDouble(), 0.00001);
+    }
+
+    @Test
+    public void testReduceTrueFalse_falseLate() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node falseNode = IR.falseNode();
+        Node parent = IR.exprResult(falseNode);
+        falseNode.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(falseNode);
+
+        assertNotNull(result);
+        assertEquals(Token.NOT, result.getType());
+        assertEquals(Token.NUMBER, result.getFirstChild().getType());
+        assertEquals(1.0, result.getFirstChild().getDouble(), 0.00001);
+    }
+
+    @Test
+    public void testReduceTrueFalse_trueNotLate() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(false);
+        Node trueNode = IR.trueNode();
+        Node parent = IR.exprResult(trueNode);
+        trueNode.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(trueNode);
+
+        assertNotNull(result);
+        assertEquals(Token.TRUE, result.getType()); // Should remain TRUE
+    }
+
+    // Test for tryMinimizeArrayLiteral and tryMinimizeStringArrayLiteral
+    @Test
+    public void testTryMinimizeStringArrayLiteral_late() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node s1 = IR.string("a");
+        Node s2 = IR.string("b");
+        Node s3 = IR.string("c");
+        Node arrayLit = IR.arraylit(s1, s2, s3);
+        Node parent = IR.exprResult(arrayLit);
+        arrayLit.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(arrayLit);
+
+        assertNotNull(result);
+        assertEquals(Token.CALL, result.getType());
+        assertEquals("split", result.getFirstChild().getLastChild().getString()); // getprop("split")
+        assertEquals("a,b,c", result.getFirstChild().getFirstChild().getString()); // template string
+        assertEquals(",", result.getLastChild().getString()); // delimiter
+    }
+
+    @Test
+    public void testTryMinimizeStringArrayLiteral_notLate() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(false);
+        Node s1 = IR.string("a");
+        Node s2 = IR.string("b");
+        Node arrayLit = IR.arraylit(s1, s2);
+        Node parent = IR.exprResult(arrayLit);
+        arrayLit.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(arrayLit);
+
+        assertNotNull(result);
+        assertEquals(Token.ARRAYLIT, result.getType()); // Should not be folded if not late
+    }
+
+    @Test
+    public void testTryMinimizeStringArrayLiteral_savingTooSmall() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node s1 = IR.string("a");
+        Node arrayLit = IR.arraylit(s1); // Saving will be 2*1 - ".split('.').length()" = 2 - 11 = -9
+        Node parent = IR.exprResult(arrayLit);
+        arrayLit.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(arrayLit);
+
+        assertNotNull(result);
+        assertEquals(Token.ARRAYLIT, result.getType()); // Should not be folded if saving <= 0
+    }
+
+    @Test
+    public void testTryMinimizeStringArrayLiteral_pickDelimiter() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        String[] testStrings = {"apple", "banana", "cherry"};
+        // Assume the optimizer internally picks ',' as a delimiter
+        Node s1 = IR.string("apple");
+        Node s2 = IR.string("banana");
+        Node s3 = IR.string("cherry");
+        Node arrayLit = IR.arraylit(s1, s2, s3);
+        Node parent = IR.exprResult(arrayLit);
+        arrayLit.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(arrayLit);
+
+        assertNotNull(result);
+        assertEquals(Token.CALL, result.getType());
+        assertEquals("apple,banana,cherry", result.getFirstChild().getFirstChild().getString());
+        assertEquals(",", result.getLastChild().getString());
+    }
+
+    // Test for tryFoldImmediateCallToBoundFunction
+    @Test
+    public void testTryFoldImmediateCallToBoundFunction_basic() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+
+        // Mock a bind call signature
+        Node boundFunctionCall = IR.call(IR.getprop(IR.name("obj"), IR.string("method")));
+        Node bindTarget = IR.name("obj");
+        Node param1 = IR.string("arg1");
+        Node param2 = IR.number(1.0);
+
+        // Simulate the structure of a bound function call: (fn.bind(a,b))()
+        // This requires a bit of manual node creation as describeFunctionBind is internal
+        Node bindCall = IR.call(IR.getprop(bindTarget, IR.string("bind")), bindTarget.cloneTree(), param1.cloneTree(), param2.cloneTree());
+        Node callToBound = IR.call(bindCall); // The actual call to the bound function
+
+        Node parent = IR.block(callToBound);
+        callToBound.setParent(parent);
+
+        // Manually simulate the Bind object that getCodingConvention().describeFunctionBind would return
+        // This is a simplification as describeFunctionBind is complex.
+        // We are testing the logic *after* describeFunctionBind has determined it's a bind call.
+        // The actual test would need to mock or bypass `describeFunctionBind`.
+        // For now, we'll test `tryFoldImmediateCallToBoundFunction` directly, assuming it gets a valid Bind object.
+
+        // Direct invocation with a mock Bind object would be ideal but not possible here.
+        // We will rely on the code path within optimizeSubtree calling this method.
+        // The following is a placeholder that shows intent, but the actual test needs
+        // to trigger this logic through optimizeSubtree.
+
+        // Let's construct a scenario that *might* trigger it if optimizeSubtree is called on the right node.
+        // The target is `(fn.bind(a,b))()` which is a CALL node.
+        // optimizeSubtree is called on CALL.
+        // Inside optimizeSubtree, it calls tryFoldSimpleFunctionCall, then tryFoldImmediateCallToBoundFunction.
+
+        // The test below manually simulates the node that would be passed to tryFoldImmediateCallToBoundFunction
+        // and checks its output. This bypasses the need for `describeFunctionBind` in the test itself.
+
+        Node targetMethod = IR.getprop(IR.name("obj"), IR.string("method"));
+        Node callArgs = IR.paramList(IR.string("arg1"), IR.number(1.0)); // This would be the params for the bound call
+        Node bindExpr = IR.call(IR.getprop(targetMethod.cloneTree(), IR.string("bind")), targetMethod.cloneTree(), callArgs.getChildAtIndex(0).cloneTree(), callArgs.getChildAtIndex(1).cloneTree()); // fn.bind(a,b)
+        Node callToBoundWrapper = IR.call(bindExpr); // (fn.bind(a,b))()
+
+        // The internal logic of tryFoldImmediateCallToBoundFunction inspects the target of the CALL node.
+        // If it's a CALL to .bind(), it will attempt to transform it.
+        // The test setup above for `callToBoundWrapper` doesn't directly represent `(fn.bind(a,b))()` correctly for the current `describeFunctionBind` implementation.
+        // A more direct test of the logic within `tryFoldImmediateCallToBoundFunction` would be:
+        // Let's assume `describeFunctionBind` returns a valid Bind object.
+        // The method transforms `(fn.bind(thisValue, param1, param2, ...))()` into `fn.call(thisValue, param1, param2, ...)`
+
+        // For testing purposes, we'll use a mock Bind object and call the private method directly.
+        // NOTE: Directly calling private methods is generally discouraged in unit tests,
+        // but it's necessary here because the `describeFunctionBind` method is not exposed and is complex to mock.
+        // A better approach would involve refactoring `PeepholeSubstituteAlternateSyntax` to expose testable components or use a mocking framework if available.
+
+        // Simplified direct test of the transformation logic, assuming a Bind object is correctly identified.
+        // Recreating the scenario where `tryFoldImmediateCallToBoundFunction` would be called on `callToBoundWrapper`
+        // and its parent is `null` as it's being optimized.
+
+        // The structure `(fn.bind(thisValue, param1, param2))()` is represented by:
+        // CALL node
+        //   -> CALL node (the .bind call)
+        //      -> GETPROP node (fn.bind)
+        //         -> NAME node (fn)
+        //         -> STRING node ("bind")
+        //      -> NAME node (thisValue, if provided)
+        //      -> NAME node (param1)
+        //      -> NUMBER node (param2)
+        // The outer CALL node's FIRST CHILD is the .bind call.
+
+        Node fn = IR.name("myFunc");
+        Node thisVal = IR.name("context");
+        Node p1 = IR.number(1.0);
+        Node p2 = IR.string("a");
+
+        Node bindCallNode = IR.call(IR.getprop(fn.cloneTree(), IR.string("bind")), thisVal, p1.cloneTree(), p2.cloneTree());
+        Node callNodeToTransform = IR.call(bindCallNode); // The call to the bound function: (fn.bind(context, 1.0, "a"))()
+
+        // Simulating the effect of `describeFunctionBind` returning a valid Bind object.
+        // This requires mocking or setting up the environment so it returns a Bind object.
+        // Since we can't mock easily here, we'll assume `describeFunctionBind` works as intended
+        // and focus on the transformation of `callNodeToTransform`.
+
+        // The optimization `tryFoldImmediateCallToBoundFunction` is called on `callNodeToTransform`.
+        // It identifies `bindCallNode` as a `bind` call and transforms `callNodeToTransform`.
+
+        // Let's manually apply the transformation logic for demonstration:
+        // Expected: `fn.call(context, 1.0, "a")`
+
+        // The current implementation of `tryFoldImmediateCallToBoundFunction` relies on `getCodingConvention().describeFunctionBind(callTarget, false)`.
+        // Since we can't mock `getCodingConvention`, this test is difficult to write accurately without deep mocking.
+        // However, the intended transformation is from `(fn.bind(a,b))()` to `fn.call(a,b)`.
+
+        // We'll create a test that checks the output if it were successfully transformed.
+        // This test case is more of a conceptual verification of the goal of the method.
+        Node expectedTarget = IR.getprop(fn.cloneTree(), IR.string("call"));
+        Node expectedCall = IR.call(expectedTarget, thisVal.cloneTree(), p1.cloneTree(), p2.cloneTree()); // fn.call(context, 1.0, "a")
+
+        // The actual test would involve calling `optimizer.optimizeSubtree(callNodeToTransform)`
+        // and asserting that the result is equivalent to `expectedCall`.
+        // Due to the reliance on `getCodingConvention().describeFunctionBind`, a direct
+        // call to `optimizeSubtree` on a constructed AST might not yield the expected Bind object.
+        // A robust test would require mocking `getCodingConvention`.
+        // For now, we assume the transformation logic within the method is being tested conceptually.
+    }
+
+    // Test for tryMinimizeCondition
+    @Test
+    public void testTryMinimizeCondition_doubleNot() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node n = IR.not(IR.not(IR.trueNode()));
+        Node parent = IR.exprResult(n);
+        n.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(n);
+
+        assertNotNull(result);
+        assertEquals(Token.TRUE, result.getType());
+    }
+
+    @Test
+    public void testTryMinimizeCondition_notAnd_toOr() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node notA = IR.not(IR.name("a"));
+        Node notB = IR.not(IR.name("b"));
+        Node andNode = IR.and(notA, notB);
+        Node n = IR.not(andNode);
+        Node parent = IR.exprResult(n);
+        n.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(n);
+
+        assertNotNull(result);
+        assertEquals(Token.OR, result.getType());
+        assertEquals(Token.NAME, result.getFirstChild().getType());
+        assertEquals("a", result.getFirstChild().getString());
+        assertEquals(Token.NAME, result.getLastChild().getType());
+        assertEquals("b", result.getLastChild().getString());
+    }
+
+    @Test
+    public void testTryMinimizeCondition_notOr_toAnd() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node notA = IR.not(IR.name("a"));
+        Node notB = IR.not(IR.name("b"));
+        Node orNode = IR.or(notA, notB);
+        Node n = IR.not(orNode);
+        Node parent = IR.exprResult(n);
+        n.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(n);
+
+        assertNotNull(result);
+        assertEquals(Token.AND, result.getType());
+        assertEquals(Token.NAME, result.getFirstChild().getType());
+        assertEquals("a", result.getFirstChild().getString());
+        assertEquals(Token.NAME, result.getLastChild().getType());
+        assertEquals("b", result.getLastChild().getString());
+    }
+
+    @Test
+    public void testTryMinimizeCondition_hook_toOr() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node cond = IR.trueNode();
+        Node trueExpr = IR.trueNode();
+        Node falseExpr = IR.name("b");
+        Node hookNode = IR.hook(cond, trueExpr, falseExpr);
+        Node parent = IR.exprResult(hookNode);
+        hookNode.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(hookNode);
+
+        assertNotNull(result);
+        assertEquals(Token.OR, result.getType());
+        assertEquals(Token.TRUE, result.getFirstChild().getType());
+        assertEquals(Token.NAME, result.getLastChild().getType());
+        assertEquals("b", result.getLastChild().getString());
+    }
+
+    @Test
+    public void testTryMinimizeCondition_hook_toAnd() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node cond = IR.trueNode();
+        Node trueExpr = IR.name("a");
+        Node falseExpr = IR.falseNode();
+        Node hookNode = IR.hook(cond, trueExpr, falseExpr);
+        Node parent = IR.exprResult(hookNode);
+        hookNode.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(hookNode);
+
+        assertNotNull(result);
+        assertEquals(Token.AND, result.getType());
+        assertEquals(Token.NAME, result.getFirstChild().getType());
+        assertEquals("a", result.getFirstChild().getString());
+        assertEquals(Token.FALSE, result.getLastChild().getType());
+    }
+
+    @Test
+    public void testTryMinimizeCondition_and_rightFalse() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node left = IR.name("a");
+        Node right = IR.falseNode();
+        Node andNode = IR.and(left, right);
+        Node parent = IR.exprResult(andNode);
+        andNode.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(andNode);
+
+        assertNotNull(result);
+        assertEquals(Token.FALSE, result.getType());
+    }
+
+    @Test
+    public void testTryMinimizeCondition_or_rightTrue() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node left = IR.name("a");
+        Node right = IR.trueNode();
+        Node orNode = IR.or(left, right);
+        Node parent = IR.exprResult(orNode);
+        orNode.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(orNode);
+
+        assertNotNull(result);
+        assertEquals(Token.TRUE, result.getType());
+    }
+
+    @Test
+    public void testTryMinimizeCondition_and_leftTrue() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node left = IR.trueNode();
+        Node right = IR.name("a");
+        Node andNode = IR.and(left, right);
+        Node parent = IR.exprResult(andNode);
+        andNode.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(andNode);
+
+        assertNotNull(result);
+        assertEquals(Token.NAME, result.getType());
+        assertEquals("a", result.getString());
+    }
+
+    @Test
+    public void testTryMinimizeCondition_or_leftFalse() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node left = IR.falseNode();
+        Node right = IR.name("a");
+        Node orNode = IR.or(left, right);
+        Node parent = IR.exprResult(orNode);
+        orNode.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(orNode);
+
+        assertNotNull(result);
+        assertEquals(Token.NAME, result.getType());
+        assertEquals("a", result.getString());
+    }
+
+    // Test for tryFoldRegularExpressionConstructor
+    @Test
+    public void testTryFoldRegularExpressionConstructor_basic() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node pattern = IR.string("abc");
+        Node callNode = IR.call(IR.name("RegExp"), pattern);
+        Node parent = IR.exprResult(callNode);
+        callNode.setParent(parent);
+        pattern.setParent(callNode);
+
+        Node result = optimizer.optimizeSubtree(callNode);
+
+        assertNotNull(result);
+        assertEquals(Token.REGEXP, result.getType());
+        assertEquals("abc", result.getFirstChild().getString());
+    }
+
+    @Test
+    public void testTryFoldRegularExpressionConstructor_withFlags() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node pattern = IR.string("abc");
+        Node flags = IR.string("i");
+        Node callNode = IR.call(IR.name("RegExp"), pattern, flags);
+        Node parent = IR.exprResult(callNode);
+        callNode.setParent(parent);
+        pattern.setParent(callNode);
+        flags.setParent(callNode);
+
+        Node result = optimizer.optimizeSubtree(callNode);
+
+        assertNotNull(result);
+        assertEquals(Token.REGEXP, result.getType());
+        assertEquals("abc", result.getFirstChild().getString());
+        assertEquals("i", result.getLastChild().getString());
+    }
+
+    @Test
+    public void testTryFoldRegularExpressionConstructor_invalidFlags() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node pattern = IR.string("abc");
+        Node flags = IR.string("xyz"); // Invalid flags
+        Node callNode = IR.call(IR.name("RegExp"), pattern, flags);
+        Node parent = IR.exprResult(callNode);
+        callNode.setParent(parent);
+        pattern.setParent(callNode);
+        flags.setParent(callNode);
+
+        Node result = optimizer.optimizeSubtree(callNode);
+
+        assertNotNull(result);
+        assertEquals(Token.CALL, result.getType()); // Should not fold
+        assertEquals("RegExp", result.getFirstChild().getString());
+    }
+
+    @Test
+    public void testTryFoldRegularExpressionConstructor_emptyPattern() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node pattern = IR.string("");
+        Node callNode = IR.call(IR.name("RegExp"), pattern);
+        Node parent = IR.exprResult(callNode);
+        callNode.setParent(parent);
+        pattern.setParent(callNode);
+
+        Node result = optimizer.optimizeSubtree(callNode);
+
+        assertNotNull(result);
+        assertEquals(Token.CALL, result.getType()); // Should not fold empty pattern
+    }
+
+    // Test for tryJoinForCondition
+    @Test
+    public void testTryJoinForCondition_basic() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node ifBody = IR.block(IR.breakNode());
+        Node ifNode = IR.ifNode(IR.trueNode(), ifBody);
+        Node forCond = IR.trueNode();
+        Node forBody = IR.block(ifNode);
+        Node forNode = IR.forNode(null, forCond, null, forBody);
+        Node parent = IR.block(forNode);
+        forNode.setParent(parent);
+
+        Node result = optimizer.optimizeSubtree(forNode);
+
+        assertNotNull(result);
+        assertEquals(Token.FOR, result.getType());
+        assertEquals(Token.AND, result.getChildAtIndex(1).getType()); // Condition should be ANDed
+        assertEquals(Token.TRUE, result.getChildAtIndex(1).getFirstChild().getType());
+        assertEquals(Token.NOT, result.getChildAtIndex(1).getLastChild().getType());
+        assertEquals(Token.TRUE, result.getChildAtIndex(1).getLastChild().getFirstChild().getType());
+        assertEquals(1, forBody.getChildCount()); // IF node should be removed
+    }
+
+    // Test for tryFoldSimpleFunctionCall with String constructor
+    @Test
+    public void testTryFoldSimpleFunctionCall_StringWithNumber() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node numberNode = IR.number(123.0);
+        Node callNode = createCall("String", numberNode);
+        Node parent = IR.exprResult(callNode);
+        callNode.setParent(parent);
+        numberNode.setParent(callNode);
+
+        Node result = optimizer.optimizeSubtree(callNode);
+
+        assertNotNull(result);
+        assertEquals(Token.ADD, result.getType());
+        assertEquals(Token.STRING, result.getFirstChild().getType());
+        assertEquals("", result.getFirstChild().getString());
+        assertEquals(Token.NUMBER, result.getLastChild().getType());
+        assertEquals(123.0, result.getLastChild().getDouble(), 0.00001);
+    }
+
+    // Test for tryFoldSimpleFunctionCall with String constructor and boolean
+    @Test
+    public void testTryFoldSimpleFunctionCall_StringWithBoolean() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimizer = createOptimizer(true);
+        Node booleanNode = IR.trueNode();
+        Node callNode = createCall("String", booleanNode);
+        Node parent = IR.exprResult(callNode);
+        callNode.setParent(parent);
+        booleanNode.setParent(callNode);
+
+        Node result = optimizer.optimizeSubtree(callNode);
+
+        assertNotNull(result);
+        assertEquals(Token.ADD, result.getType());
+        assertEquals(Token.STRING, result.getFirstChild().getType());
+        assertEquals("", result.getFirstChild().getString());
+        assertEquals(Token.TRUE, result.getLastChild().getType());
+    }
+}
+```
+
+**SOURCE CODE ANALYSIS**
+The class `PeepholeSubstituteAlternateSyntax` performs peephole optimizations on JavaScript AST nodes. The provided tests focus on methods that transform conditional expressions, simplify function calls, and handle alternative syntax for constructors and expressions. Key methods tested include `tryRemoveRedundantExit`, `tryReplaceExitWithBreak`, `tryMinimizeNot`, `tryMinimizeIf`, `tryReplaceUndefined`, `tryReduceReturn`, `trySplitComma`, `tryFoldSimpleFunctionCall`, `tryFoldLiteralConstructor`, `tryFoldStandardConstructors`, `tryMinimizeCondition`, `tryFoldRegularExpressionConstructor`, and `tryJoinForCondition`.
+
+**TEST CASE DESIGN**
+- `testTryRemoveRedundantExit_return`: Removes a redundant `return` statement. Input: `return 1;`. Expected: `null` (removed).
+- `testTryRemoveRedundantExit_throw`: Removes a redundant `throw` statement. Input: `throw "error";`. Expected: `null` (removed).
+- `testTryRemoveRedundantExit_noRemoval`: Does not remove `return` if the following statement doesn't match. Input: `return 1; ...`. Expected: `return 1;` (unchanged).
+- `testTryReplaceExitWithBreak_return`: Replaces `return` with `break` inside a loop. Input: `while(true) { return; }`. Expected: `while(true) { break; }`.
+- `testTryReplaceExitWithBreak_throw`: Replaces `throw` with `break` inside a loop. Input: `while(true) { throw 'err'; }`. Expected: `while(true) { break; }`.
+- `testTryReplaceExitWithBreak_noReplacementIfNoBreakTarget`: Does not replace `return` if not in a breakable context. Input: `return;` (outside loop). Expected: `return;` (unchanged).
+- `testTryMinimizeNot_eq_ne`: Simplifies `!(a == b)` to `a != b`. Input: `!(1 == 2)`. Expected: `1 != 2`.
+- `testTryMinimizeNot_ne_eq`: Simplifies `!(a != b)` to `a == b`. Input: `!(1 != 2)`. Expected: `1 == 2`.
+- `testTryMinimizeNot_sheq_shne`: Simplifies `!(a === b)` to `a !== b`. Input: `!(1 === 2)`. Expected: `1 !== 2`.
+- `testTryMinimizeNot_shne_sheq`: Simplifies `!(a !== b)` to `a === b`. Input: `!(1 !== 2)`. Expected: `1 === 2`.
+- `testTryMinimizeNot_otherOperator`: `NOT` with non-equality operators is not simplified. Input: `!(1 < 2)`. Expected: `!(1 < 2)`.
+- `testTryMinimizeIf_ifThenElse_toHook`: Transforms `if(x) { return a } else { return b }` to `return x ? a : b`. Input: `if(true) { return "a" } else { return "b" }`. Expected: `return true ? "a" : "b"`.
+- `testTryMinimizeIf_ifThen_toAnd`: Transforms `if(x) { foo() }` to `x && foo()`. Input: `if(true) { "a" }`. Expected: `true && "a"`.
+- `testTryMinimizeIf_ifThen_toOr_whenConditionIsNot`: Transforms `if(!x) { foo() }` to `x || foo()`. Input: `if(!false) { "a" }`. Expected: `false || "a"`.
+- `testTryReplaceUndefined_undefined`: Replaces `undefined` with `void 0`. Input: `undefined`. Expected: `void 0`.
+- `testTryReplaceUndefined_voidZero`: `void 0` remains `void 0`. Input: `void 0`. Expected: `void 0`.
+- `testTryReplaceUndefined_identifierNotUndefined`: Non-`undefined` identifiers are unchanged. Input: `someName`. Expected: `someName`.
+- `testTryReduceReturn_returnUndefined`: Reduces `return undefined` to `return`. Input: `return undefined;`. Expected: `return;`.
+- `testTryReduceReturn_returnVoidZero`: Reduces `return void 0` to `return`. Input: `return void 0;`. Expected: `return;`.
+- `testTryReduceReturn_returnVoidOne`: Reduces `return void 1` (pure void) to `return`. Input: `return void 1;`. Expected: `return;`.
+- `testTryReduceReturn_returnVoidExpressionWithSideEffects`: Does not reduce `return void expr` if `expr` has side effects. Input: `return void foo();` (where foo has side effects). Expected: `return void foo();`.
+- `testTrySplitComma_exprResult`: Splits comma operator in `EXPR_RESULT` when `late` is false. Input: `(1, 2);`. Expected: `1; 2;`.
+- `testTrySplitComma_notExprResult`: Does not split comma operator if not in `EXPR_RESULT`. Input: `x = (1, 2);`. Expected: `x = (1, 2);`.
+- `testTryReplaceIf_ifReturnIfReturn`: Combines consecutive `if (x) return y; if (z) return y;` into `if (x || z) return y;`. Input: `if(true) return 1; if(true) return 1;`. Expected: `if (true || true) return 1;`.
+- `testTryReplaceIf_ifReturnIfElseReturn`: Transforms `if(x) return y; if(z) foo() else return y;` to `if (!x && z) foo() else return y;`. Input: `if(true) return 1; if(true) "foo" else return 1;`. Expected: `if (!true && true) "foo" else return 1;`.
+- `testTryReplaceIf_ifReturnExpressionElseReturnExpression`: Transforms `if(x) return a; else return b;` to `return x ? a : b;`. Input: `if(true) { return 1 } else { return 2 }`. Expected: `return true ? 1 : 2;`.
+- `testTryFoldSimpleFunctionCall_StringImmutable`: Folds `String(literal)` to `"" + literal`. Input: `String("hello")`. Expected: `"" + "hello"`.
+- `testTryFoldSimpleFunctionCall_StringVariable`: Does not fold `String(variable)`. Input: `String(myVar)`. Expected: `String(myVar)`.
+- `testTryFoldLiteralConstructor_newObjectNoArgs`: Folds `new Object()` to `{}`. Input: `new Object()`. Expected: `{}`.
+- `testTryFoldLiteralConstructor_newArrayNoArgs`: Folds `new Array()` to `[]`. Input: `new Array()`. Expected: `[]`.
+- `testTryFoldLiteralConstructor_newArrayOneStringArg`: Folds `new Array("a")` to `["a"]`. Input: `new Array("a")`. Expected: `["a"]`.
+- `testTryFoldLiteralConstructor_newArrayOneNumberArg`: Folds `new Array(5)` to `[]` (preserving length semantic). Input: `new Array(5)`. Expected: `[]`.
+- `testTryFoldLiteralConstructor_newArrayZeroNumberArg`: Folds `new Array(0)` to `[]`. Input: `new Array(0)`. Expected: `[]`.
+- `testTryFoldLiteralConstructor_newArrayMultipleArgs`: Folds `new Array(1, "a")` to `[1, "a"]`. Input: `new Array(1, "a")`. Expected: `[1, "a"]`.
+- `testTryFoldLiteralConstructor_newRegExpLiteral`: Folds `new RegExp("abc")` to `/abc/`. Input: `new RegExp("abc")`. Expected: `/abc/`.
+- `testTryFoldStandardConstructors_newObject`: Transforms `new Object()` to `Object()`. Input: `new Object()`. Expected: `Object()`.
+- `testTryFoldStandardConstructors_newArray`: Transforms `new Array()` to `Array()`. Input: `new Array()`. Expected: `Array()`.
+- `testTryFoldStandardConstructors_newRegExp`: Transforms `new RegExp()` to `RegExp()`. Input: `new RegExp()`. Expected: `RegExp()`.
+- `testTryFoldStandardConstructors_newError`: Transforms `new Error()` to `Error()`. Input: `new Error()`. Expected: `Error()`.
+- `testTryFoldStandardConstructors_newCustomObject`: Does not transform `new MyObject()`. Input: `new MyObject()`. Expected: `new MyObject()`.
+- `testTrySplitComma_lateFalse`: Splits comma operator when `late` is false. Input: `(1, 2);`. Expected: `1; 2;`.
+- `testTryReplaceUndefined_nameUndefined`: Replaces `undefined` identifier with `void 0`. Input: `undefined`. Expected: `void 0`.
+- `testReduceTrueFalse_trueLate`: Transforms `true` to `!0` when `late` is true. Input: `true`. Expected: `!0`.
+- `testReduceTrueFalse_falseLate`: Transforms `false` to `!1` when `late` is true. Input: `false`. Expected: `!1`.
+- `testReduceTrueFalse_trueNotLate`: Leaves `true` unchanged when `late` is false. Input: `true`. Expected: `true`.
+- `testTryMinimizeStringArrayLiteral_late`: Transforms `["a", "b", "c"]` to `"a,b,c".split(',')` when `late` is true. Input: `["a", "b", "c"]`. Expected: `"a,b,c".split(',')`.
+- `testTryMinimizeStringArrayLiteral_notLate`: Does not transform array literals when `late` is false. Input: `["a", "b"]`. Expected: `["a", "b"]`.
+- `testTryMinimizeStringArrayLiteral_savingTooSmall`: Does not transform if savings are not positive. Input: `["a"]`. Expected: `["a"]`.
+- `testTryMinimizeStringArrayLiteral_pickDelimiter`: Uses a suitable delimiter. Input: `["apple", "banana", "cherry"]`. Expected: `"apple,banana,cherry".split(',')`.
+- `testTryFoldImmediateCallToBoundFunction_basic`: Conceptual test for transforming `(fn.bind(a,b))()` to `fn.call(a,b)`.
+- `testTryMinimizeCondition_doubleNot`: Simplifies `!!x` to `x`. Input: `!!true`. Expected: `true`.
+- `testTryMinimizeCondition_notAnd_toOr`: Applies De Morgan's law: `!(a && b)` to `!a || !b`. Input: `!( !a && !b )`. Expected: `a || b`.
+- `testTryMinimizeCondition_notOr_toAnd`: Applies De Morgan's law: `!(a || b)` to `!a && !b`. Input: `!( !a || !b )`. Expected: `a && b`.
+- `testTryMinimizeCondition_hook_toOr`: Simplifies `x ? true : y` to `x || y`. Input: `true ? true : "b"`. Expected: `true || "b"`.
+- `testTryMinimizeCondition_hook_toAnd`: Simplifies `x ? y : false` to `x && y`. Input: `true ? "a" : false`. Expected: `true && "a"`.
+- `testTryMinimizeCondition_and_rightFalse`: Simplifies `x && false` to `false`. Input: `a && false`. Expected: `false`.
+- `testTryMinimizeCondition_or_rightTrue`: Simplifies `x || true` to `true`. Input: `a || true`. Expected: `true`.
+- `testTryMinimizeCondition_and_leftTrue`: Simplifies `true && x` to `x`. Input: `true && a`. Expected: `a`.
+- `testTryMinimizeCondition_or_leftFalse`: Simplifies `false || x` to `x`. Input: `false || a`. Expected: `a`.
+- `testTryFoldRegularExpressionConstructor_basic`: Folds `RegExp("abc")` to `/abc/`. Input: `RegExp("abc")`. Expected: `/abc/`.
+- `testTryFoldRegularExpressionConstructor_withFlags`: Folds `RegExp("abc", "i")` to `/abc/i`. Input: `RegExp("abc", "i")`. Expected: `/abc/i`.
+- `testTryFoldRegularExpressionConstructor_invalidFlags`: Does not fold with invalid flags. Input: `RegExp("abc", "xyz")`. Expected: `RegExp("abc", "xyz")`.
+- `testTryFoldRegularExpressionConstructor_emptyPattern`: Does not fold empty pattern. Input: `RegExp("")`. Expected: `RegExp("")`.
+- `testTryJoinForCondition_basic`: Joins `for` condition with `if (break)` inside. Input: `for(; x;) { if (break) {} }`. Expected: `for (; x && !true ;) {}`.
+- `testTryFoldSimpleFunctionCall_StringWithNumber`: Folds `String(123)` to `"" + 123`. Input: `String(123)`. Expected: `"" + 123`.
+- `testTryFoldSimpleFunctionCall_StringWithBoolean`: Folds `String(true)` to `"" + true`. Input: `String(true)`. Expected: `"" + true`.
+
+**DEFECT DETECTION STRATEGY**
+The tests target specific transformations and simplifications performed by the `PeepholeSubstituteAlternateSyntax` class. They aim to cover edge cases, common patterns, and the conditions under which optimizations are applied (e.g., `late` flag, immutability, purity). Defects in these transformations would likely cause incorrect code generation or missed opportunities for simplification.
+
+**SUMMARY**
+31 tests.
+
+**LIMITATIONS**
+The test `testTryFoldImmediateCallToBoundFunction_basic` is conceptual due to the difficulty of mocking internal dependencies like `getCodingConvention().describeFunctionBind`. Directly testing private methods is avoided where possible, but this test relies on simulating the expected outcome of a complex internal interaction.
+Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

@@ -1,0 +1,419 @@
+The compiler errors indicate that the `Tag` class is not imported or recognized. Looking at the provided API outline, `Tag` is part of `org.jsoup.nodes`. I will add the necessary import statement for `Tag`. Additionally, the `Element` constructor used in the tests requires a `Tag` object, not just a string. The `Tag` class has a static `valueOf(String)` method that can be used to create a `Tag` object from a string.
+
+```java
+package org.jsoup.safety;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import org.jsoup.helper.Validate;
+import org.jsoup.nodes.Attribute;
+import org.jsoup.nodes.Attributes;
+import org.jsoup.nodes.Element;
+import org.jsoup.nodes.Tag; // Added import for Tag
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+
+public class WhitelistTest {
+    @Test
+    public void testNoneIsEmpty() throws Exception {
+        Whitelist wl = Whitelist.none();
+        assertFalse(wl.isSafeTag("a"));
+        assertFalse(wl.isSafeAttribute("a", new Element(Tag.valueOf("a"), "", new Attributes()), new Attribute("href", "http://example.com")));
+    }
+
+    @Test
+    public void testSimpleTextTags() throws Exception {
+        Whitelist wl = Whitelist.simpleText();
+        assertTrue(wl.isSafeTag("b"));
+        assertTrue(wl.isSafeTag("em"));
+        assertTrue(wl.isSafeTag("i"));
+        assertTrue(wl.isSafeTag("strong"));
+        assertTrue(wl.isSafeTag("u"));
+        assertFalse(wl.isSafeTag("p"));
+        assertFalse(wl.isSafeTag("a"));
+    }
+
+    @Test
+    public void testSimpleTextAttributes() throws Exception {
+        Whitelist wl = Whitelist.simpleText();
+        // No attributes allowed in simpleText by default
+        assertFalse(wl.isSafeAttribute("b", new Element(Tag.valueOf("b"), "", new Attributes()), new Attribute("class", "foo")));
+    }
+
+    @Test
+    public void testBasicTags() throws Exception {
+        Whitelist wl = Whitelist.basic();
+        assertTrue(wl.isSafeTag("a"));
+        assertTrue(wl.isSafeTag("b"));
+        assertTrue(wl.isSafeTag("strong"));
+        assertTrue(wl.isSafeTag("u"));
+        assertTrue(wl.isSafeTag("blockquote"));
+        assertTrue(wl.isSafeTag("q"));
+        assertFalse(wl.isSafeTag("img"));
+        assertFalse(wl.isSafeTag("div"));
+    }
+
+    @Test
+    public void testBasicAttributes() throws Exception {
+        Whitelist wl = Whitelist.basic();
+        assertTrue(wl.isSafeAttribute("a", new Element(Tag.valueOf("a"), "", new Attributes()), new Attribute("href", "http://example.com")));
+        assertTrue(wl.isSafeAttribute("blockquote", new Element(Tag.valueOf("blockquote"), "", new Attributes()), new Attribute("cite", "http://example.com")));
+        assertTrue(wl.isSafeAttribute("q", new Element(Tag.valueOf("q"), "", new Attributes()), new Attribute("cite", "http://example.com")));
+        assertFalse(wl.isSafeAttribute("a", new Element(Tag.valueOf("a"), "", new Attributes()), new Attribute("class", "foo")));
+        assertFalse(wl.isSafeAttribute("blockquote", new Element(Tag.valueOf("blockquote"), "", new Attributes()), new Attribute("data-info", "bar")));
+    }
+
+    @Test
+    public void testBasicProtocols() throws Exception {
+        Whitelist wl = Whitelist.basic();
+        Element a = new Element(Tag.valueOf("a"), ""); // Use Tag.valueOf and empty base URI for Element constructor
+
+        // Allowed protocols
+        assertTrue(wl.isSafeAttribute("a", a, new Attribute("href", "http://example.com")));
+        assertTrue(wl.isSafeAttribute("a", a, new Attribute("href", "https://example.com")));
+        assertTrue(wl.isSafeAttribute("a", a, new Attribute("href", "ftp://example.com")));
+        assertTrue(wl.isSafeAttribute("a", a, new Attribute("href", "mailto:test@example.com")));
+
+        // Disallowed protocols
+        assertFalse(wl.isSafeAttribute("a", a, new Attribute("href", "javascript:alert('XSS')")));
+        assertFalse(wl.isSafeAttribute("a", a, new Attribute("href", "file:///etc/passwd")));
+    }
+
+    @Test
+    public void testBasicEnforcedAttributes() throws Exception {
+        Whitelist wl = Whitelist.basic();
+        Attributes enforced = wl.getEnforcedAttributes("a");
+        assertEquals("nofollow", enforced.get("rel"));
+        assertEquals(1, enforced.size());
+    }
+
+    @Test
+    public void testBasicWithImagesTags() throws Exception {
+        Whitelist wl = Whitelist.basicWithImages();
+        assertTrue(wl.isSafeTag("img"));
+        assertTrue(wl.isSafeTag("a"));
+        assertFalse(wl.isSafeTag("div"));
+    }
+
+    @Test
+    public void testBasicWithImagesAttributes() throws Exception {
+        Whitelist wl = Whitelist.basicWithImages();
+        assertTrue(wl.isSafeAttribute("img", new Element(Tag.valueOf("img"), "", new Attributes()), new Attribute("src", "http://example.com/img.jpg")));
+        assertTrue(wl.isSafeAttribute("img", new Element(Tag.valueOf("img"), "", new Attributes()), new Attribute("width", "100")));
+        assertTrue(wl.isSafeAttribute("img", new Element(Tag.valueOf("img"), "", new Attributes()), new Attribute("height", "50")));
+        assertTrue(wl.isSafeAttribute("img", new Element(Tag.valueOf("img"), "", new Attributes()), new Attribute("alt", "test")));
+        assertTrue(wl.isSafeAttribute("img", new Element(Tag.valueOf("img"), "", new Attributes()), new Attribute("title", "test")));
+        assertTrue(wl.isSafeAttribute("img", new Element(Tag.valueOf("img"), "", new Attributes()), new Attribute("align", "right")));
+        assertFalse(wl.isSafeAttribute("img", new Element(Tag.valueOf("img"), "", new Attributes()), new Attribute("onerror", "alert('XSS')")));
+    }
+
+    @Test
+    public void testBasicWithImagesProtocols() throws Exception {
+        Whitelist wl = Whitelist.basicWithImages();
+        Element img = new Element(Tag.valueOf("img"), "");
+
+        assertTrue(wl.isSafeAttribute("img", img, new Attribute("src", "http://example.com/img.jpg")));
+        assertTrue(wl.isSafeAttribute("img", img, new Attribute("src", "https://example.com/img.jpg")));
+        assertFalse(wl.isSafeAttribute("img", img, new Attribute("src", "ftp://example.com/img.jpg")));
+        assertFalse(wl.isSafeAttribute("img", img, new Attribute("src", "data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==")));
+    }
+
+    @Test
+    public void testRelaxedTags() throws Exception {
+        Whitelist wl = Whitelist.relaxed();
+        assertTrue(wl.isSafeTag("table"));
+        assertTrue(wl.isSafeTag("td"));
+        assertTrue(wl.isSafeTag("th"));
+        assertTrue(wl.isSafeTag("tr"));
+        assertTrue(wl.isSafeTag("thead"));
+        assertTrue(wl.isSafeTag("tbody"));
+        assertTrue(wl.isSafeTag("tfoot"));
+        assertTrue(wl.isSafeTag("caption"));
+        assertTrue(wl.isSafeTag("colgroup"));
+        assertTrue(wl.isSafeTag("col"));
+        assertTrue(wl.isSafeTag("div"));
+        assertTrue(wl.isSafeTag("h1"));
+        assertTrue(wl.isSafeTag("h6"));
+        assertTrue(wl.isSafeTag("img"));
+        assertTrue(wl.isSafeTag("a"));
+    }
+
+    @Test
+    public void testRelaxedAttributes() throws Exception {
+        Whitelist wl = Whitelist.relaxed();
+        assertTrue(wl.isSafeAttribute("a", new Element(Tag.valueOf("a"), "", new Attributes()), new Attribute("href", "http://example.com")));
+        assertTrue(wl.isSafeAttribute("a", new Element(Tag.valueOf("a"), "", new Attributes()), new Attribute("title", "link")));
+        assertTrue(wl.isSafeAttribute("img", new Element(Tag.valueOf("img"), "", new Attributes()), new Attribute("src", "http://example.com/img.jpg")));
+        assertTrue(wl.isSafeAttribute("img", new Element(Tag.valueOf("img"), "", new Attributes()), new Attribute("width", "100")));
+        assertTrue(wl.isSafeAttribute("img", new Element(Tag.valueOf("img"), "", new Attributes()), new Attribute("height", "50")));
+        assertTrue(wl.isSafeAttribute("td", new Element(Tag.valueOf("td"), "", new Attributes()), new Attribute("colspan", "2")));
+        assertTrue(wl.isSafeAttribute("td", new Element(Tag.valueOf("td"), "", new Attributes()), new Attribute("rowspan", "3")));
+        assertTrue(wl.isSafeAttribute("td", new Element(Tag.valueOf("td"), "", new Attributes()), new Attribute("width", "50%")));
+        assertTrue(wl.isSafeAttribute("td", new Element(Tag.valueOf("td"), "", new Attributes()), new Attribute("abbr", "test")));
+        assertTrue(wl.isSafeAttribute("td", new Element(Tag.valueOf("td"), "", new Attributes()), new Attribute("axis", "col")));
+        assertTrue(wl.isSafeAttribute("th", new Element(Tag.valueOf("th"), "", new Attributes()), new Attribute("scope", "col")));
+        assertTrue(wl.isSafeAttribute("ul", new Element(Tag.valueOf("ul"), "", new Attributes()), new Attribute("type", "circle")));
+        assertTrue(wl.isSafeAttribute("ol", new Element(Tag.valueOf("ol"), "", new Attributes()), new Attribute("start", "5")));
+        assertTrue(wl.isSafeAttribute("ol", new Element(Tag.valueOf("ol"), "", new Attributes()), new Attribute("type", "I")));
+        assertTrue(wl.isSafeAttribute("table", new Element(Tag.valueOf("table"), "", new Attributes()), new Attribute("summary", "description")));
+        assertTrue(wl.isSafeAttribute("table", new Element(Tag.valueOf("table"), "", new Attributes()), new Attribute("width", "100%")));
+        assertFalse(wl.isSafeAttribute("a", new Element(Tag.valueOf("a"), "", new Attributes()), new Attribute("target", "_blank"))); // not in relaxed
+    }
+
+    @Test
+    public void testAddTags() throws Exception {
+        Whitelist wl = Whitelist.none().addTags("p", "div");
+        assertTrue(wl.isSafeTag("p"));
+        assertTrue(wl.isSafeTag("div"));
+        assertFalse(wl.isSafeTag("a"));
+    }
+
+    @Test
+    public void testAddAttributesToAll() throws Exception {
+        Whitelist wl = Whitelist.none().addAttributes(":all", "class", "id");
+        assertTrue(wl.isSafeAttribute("p", new Element(Tag.valueOf("p"), "", new Attributes()), new Attribute("class", "my-class")));
+        assertTrue(wl.isSafeAttribute("a", new Element(Tag.valueOf("a"), "", new Attributes()), new Attribute("id", "my-id")));
+        assertFalse(wl.isSafeAttribute("p", new Element(Tag.valueOf("p"), "", new Attributes()), new Attribute("href", "http://example.com")));
+    }
+
+    @Test
+    public void testAddAttributesToSpecificTag() throws Exception {
+        Whitelist wl = Whitelist.none().addAttributes("a", "href").addAttributes("p", "class");
+        assertTrue(wl.isSafeAttribute("a", new Element(Tag.valueOf("a"), "", new Attributes()), new Attribute("href", "http://example.com")));
+        assertTrue(wl.isSafeAttribute("p", new Element(Tag.valueOf("p"), "", new Attributes()), new Attribute("class", "my-class")));
+        assertFalse(wl.isSafeAttribute("a", new Element(Tag.valueOf("a"), "", new Attributes()), new Attribute("class", "my-class")));
+        assertFalse(wl.isSafeAttribute("p", new Element(Tag.valueOf("p"), "", new Attributes()), new Attribute("href", "http://example.com")));
+    }
+
+    @Test
+    public void testAddEnforcedAttribute() throws Exception {
+        Whitelist wl = Whitelist.basic().addEnforcedAttribute("a", "target", "_blank");
+        Attributes enforced = wl.getEnforcedAttributes("a");
+        assertEquals("nofollow", enforced.get("rel"));
+        assertEquals("_blank", enforced.get("target"));
+        assertEquals(2, enforced.size());
+    }
+
+    @Test
+    public void testAddEnforcedAttributeOverridesExisting() throws Exception {
+        Whitelist wl = Whitelist.basic().addEnforcedAttribute("a", "rel", "noopener");
+        Attributes enforced = wl.getEnforcedAttributes("a");
+        assertEquals("noopener", enforced.get("rel"));
+        assertEquals(1, enforced.size());
+    }
+
+    @Test
+    public void testAddProtocols() throws Exception {
+        Whitelist wl = Whitelist.basic().addProtocols("a", "href", "tel", "sms");
+        Element a = new Element(Tag.valueOf("a"), "");
+        assertTrue(wl.isSafeAttribute("a", a, new Attribute("href", "tel:+1234567890")));
+        assertTrue(wl.isSafeAttribute("a", a, new Attribute("href", "sms:+1234567890")));
+        assertFalse(wl.isSafeAttribute("a", a, new Attribute("href", "http://example.com"))); // removed http, https
+    }
+
+    @Test
+    public void testPreserveRelativeLinksFalseByDefault() throws Exception {
+        Whitelist wl = Whitelist.basic(); // preserveRelativeLinks is false by default
+        Element a = new Element(Tag.valueOf("a"), "http://example.com/path/"); // Set base URI during construction
+        Attribute href = new Attribute("href", "/relative/path.html");
+        // The testValidProtocol method internally handles the protocol checking.
+        // If preserveRelativeLinks is false, it attempts to resolve the URL.
+        // If it can't resolve to an allowed protocol, the attribute is considered unsafe.
+        // Here, a relative path cannot be resolved to http/https/ftp/mailto, so it should be deemed unsafe.
+        assertFalse(wl.isSafeAttribute("a", a, href));
+
+        // Test with an absolute URL that has an allowed protocol
+        assertTrue(wl.isSafeAttribute("a", a, new Attribute("href", "http://example.com/absolute.html")));
+    }
+
+    @Test
+    public void testPreserveRelativeLinksTrue() throws Exception {
+        Whitelist wl = Whitelist.basic().preserveRelativeLinks(true);
+        Element a = new Element(Tag.valueOf("a"), "http://example.com/path/"); // Set base URI
+        Attribute href = new Attribute("href", "/relative/path.html");
+        // With preserveRelativeLinks(true), if the relative URL can be resolved to an allowed protocol, it's safe.
+        // The underlying mechanism in testValidProtocol *might* resolve it, but our isSafeAttribute needs to return true.
+        // The current implementation of testValidProtocol tries to resolve and if it fails to an allowed protocol, it returns false.
+        // So, even with preserveRelativeLinks(true), relative links to non-http/https/ftp/mailto bases won't pass if not explicitly defined.
+        // Let's test an absolute URL that would be preserved.
+        assertTrue(wl.isSafeAttribute("a", a, new Attribute("href", "http://example.com/absolute.html")));
+
+        // A relative link that cannot be resolved to an allowed protocol will still fail.
+        assertFalse(wl.isSafeAttribute("a", a, href));
+    }
+
+    @Test
+    public void testGetEnforcedAttributesForUnknownTag() throws Exception {
+        Whitelist wl = Whitelist.basic();
+        Attributes enforced = wl.getEnforcedAttributes("div");
+        assertTrue(enforced.isEmpty());
+    }
+
+    @Test
+    public void testIsSafeAttributeWithNoProtocolsDefined() throws Exception {
+        Whitelist wl = Whitelist.none().addTags("a").addAttributes("a", "href");
+        Element a = new Element(Tag.valueOf("a"), "", new Attributes());
+        assertTrue(wl.isSafeAttribute("a", a, new Attribute("href", "somevalue")));
+    }
+
+    @Test
+    public void testIsSafeAttributeWithNoAttributesDefinedForTag() throws Exception {
+        Whitelist wl = Whitelist.none().addTags("a"); // No attributes defined for 'a'
+        Element a = new Element(Tag.valueOf("a"), "", new Attributes());
+        assertFalse(wl.isSafeAttribute("a", a, new Attribute("href", "http://example.com")));
+    }
+
+    @Test
+    public void testIsSafeTag() throws Exception {
+        Whitelist wl = Whitelist.basic();
+        assertTrue(wl.isSafeTag("a"));
+        assertFalse(wl.isSafeTag("script"));
+    }
+
+    @Test
+    public void testTagCaseInsensitive() throws Exception {
+        Whitelist wl = Whitelist.basic();
+        assertTrue(wl.isSafeTag("A")); // Ensure case insensitivity for tag names
+        assertTrue(wl.isSafeTag("B"));
+    }
+
+    @Test
+    public void testAttributeCaseInsensitive() throws Exception {
+        Whitelist wl = Whitelist.basic().addAttributes("a", "HREF");
+        Element a = new Element(Tag.valueOf("a"), "", new Attributes());
+        assertTrue(wl.isSafeAttribute("a", a, new Attribute("href", "http://example.com"))); // lowercase
+        assertTrue(wl.isSafeAttribute("a", a, new Attribute("HREF", "http://example.com"))); // uppercase
+    }
+
+    @Test
+    public void testProtocolCaseInsensitive() throws Exception {
+        Whitelist wl = Whitelist.basic();
+        Element a = new Element(Tag.valueOf("a"), "");
+        assertTrue(wl.isSafeAttribute("a", a, new Attribute("href", "HTTP://EXAMPLE.COM"))); // uppercase protocol
+    }
+
+    @Test
+    public void testAddAttributesAppendsToExisting() throws Exception {
+        Whitelist wl = Whitelist.basic().addAttributes("a", "target").addAttributes("a", "title");
+        Attributes enforced = wl.getEnforcedAttributes("a"); // Enforced are separate
+        assertNull(enforced.get("target")); // Should not be enforced
+
+        Element a = new Element(Tag.valueOf("a"), "", new Attributes());
+        assertTrue(wl.isSafeAttribute("a", a, new Attribute("href", "http://example.com")));
+        assertTrue(wl.isSafeAttribute("a", a, new Attribute("target", "_blank")));
+        assertTrue(wl.isSafeAttribute("a", a, new Attribute("title", "my link")));
+    }
+
+    @Test
+    public void testAddEnforcedAttributeForTagNotPreviouslyConfigured() throws Exception {
+        Whitelist wl = Whitelist.none().addEnforcedAttribute("div", "id", "main");
+        Attributes enforced = wl.getEnforcedAttributes("div");
+        assertEquals("main", enforced.get("id"));
+        assertEquals(1, enforced.size());
+    }
+
+    @Test
+    public void testIsSafeAttributeWithColonInAttributeKey() throws Exception {
+        // Should not be safe as attributes with ':' are generally discouraged
+        // unless they are specifically allowed (e.g., data attributes or XML namespaces)
+        // This test assumes that such attributes are not explicitly whitelisted by default.
+        Whitelist wl = Whitelist.basic();
+        Element a = new Element(Tag.valueOf("a"), "", new Attributes());
+        assertFalse(wl.isSafeAttribute("a", a, new Attribute("data-test", "value"))); // data attributes are allowed in relaxed, not basic
+        assertFalse(wl.isSafeAttribute("a", a, new Attribute("xml:lang", "en"))); // custom XML attribute
+    }
+
+    @Test
+    public void testAllowedAttributeWithColonInKeyIfWhitelisted() throws Exception {
+        Whitelist wl = Whitelist.none().addTags("div").addAttributes("div", "data-custom");
+        Element div = new Element(Tag.valueOf("div"), "", new Attributes());
+        assertTrue(wl.isSafeAttribute("div", div, new Attribute("data-custom", "value")));
+    }
+
+    @Test
+    public void testAddTagToNone() throws Exception {
+        Whitelist wl = Whitelist.none().addTags("p");
+        assertTrue(wl.isSafeTag("p"));
+        assertFalse(wl.isSafeTag("a"));
+    }
+
+    @Test
+    public void testAddAttributeToNone() throws Exception {
+        Whitelist wl = Whitelist.none().addTags("a").addAttributes("a", "href");
+        assertTrue(wl.isSafeAttribute("a", new Element(Tag.valueOf("a"), "", new Attributes()), new Attribute("href", "http://test.com")));
+        assertFalse(wl.isSafeAttribute("a", new Element(Tag.valueOf("a"), "", new Attributes()), new Attribute("title", "test")));
+    }
+
+    @Test
+    public void testAddProtocolToNone() throws Exception {
+        Whitelist wl = Whitelist.none().addTags("a").addAttributes("a", "href").addProtocols("a", "href", "http", "https");
+        Element a = new Element(Tag.valueOf("a"), "");
+        assertTrue(wl.isSafeAttribute("a", a, new Attribute("href", "http://test.com")));
+        assertTrue(wl.isSafeAttribute("a", a, new Attribute("href", "https://test.com")));
+        assertFalse(wl.isSafeAttribute("a", a, new Attribute("href", "ftp://test.com")));
+    }
+
+    @Test
+    public void testEnforcedAttributeAddedWhenAttributeNotPresent() throws Exception {
+        Whitelist wl = Whitelist.none().addTags("a").addEnforcedAttribute("a", "rel", "nofollow");
+        Attributes enforced = wl.getEnforcedAttributes("a");
+        assertEquals("nofollow", enforced.get("rel"));
+        assertEquals(1, enforced.size());
+    }
+
+    @Test
+    public void testEnforcedAttributeReplacedWhenAttributePresent() throws Exception {
+        Whitelist wl = Whitelist.basic().addEnforcedAttribute("a", "rel", "noopener"); // basic enforces nofollow
+        Attributes enforced = wl.getEnforcedAttributes("a");
+        assertEquals("noopener", enforced.get("rel")); // Should be overridden
+        assertEquals(1, enforced.size());
+    }
+
+    @Test
+    public void testPreserveRelativeLinksWithBaseUri() throws Exception {
+        Whitelist wl = Whitelist.basic().preserveRelativeLinks(true);
+        Element a = new Element(Tag.valueOf("a"), "http://example.com/path/"); // Set base URI
+        Attribute href = new Attribute("href", "image.jpg"); // Relative URL
+        // With preserveRelativeLinks(true) and a valid base URI, relative URLs *can* be made absolute.
+        // However, the current `testValidProtocol` logic needs the resolved URL to start with an allowed protocol.
+        // "http://example.com/path/image.jpg" would be the resolved URL.
+        // Since http is an allowed protocol for 'a' href, this should pass.
+        assertTrue(wl.isSafeAttribute("a", a, href));
+
+        // If the base URI does not allow for resolution to an allowed protocol, it will fail.
+        // E.g., if baseUri was "mailto:test@example.com" and href was "relative.html", it wouldn't resolve.
+        // However, setting baseUri to something that doesn't result in http/https/ftp/mailto will be tested.
+        // For the sake of this test, we assume setBaseUri is called with a valid document base URI.
+    }
+
+     @Test
+    public void testAddAttributeToAllWithExistingAttributes() throws Exception {
+        Whitelist wl = Whitelist.basic().addAttributes(":all", "class");
+        Element p = new Element(Tag.valueOf("p"), "", new Attributes());
+        assertTrue(wl.isSafeAttribute("p", p, new Attribute("class", "foo"))); // :all should apply
+        assertTrue(wl.isSafeAttribute("a", new Element(Tag.valueOf("a"), "", new Attributes()), new Attribute("href", "http://example.com"))); // basic should still apply
+    }
+
+    @Test
+    public void testAddTagAlreadyExists() throws Exception {
+        Whitelist wl = Whitelist.basic().addTags("a", "p"); // 'a' and 'p' are already in basic
+        assertTrue(wl.isSafeTag("a"));
+        assertTrue(wl.isSafeTag("p"));
+    }
+
+    @Test
+    public void testAddAttributeAlreadyExists() throws Exception {
+        Whitelist wl = Whitelist.basic().addAttributes("a", "href"); // 'href' is already in basic for 'a'
+        assertTrue(wl.isSafeAttribute("a", new Element(Tag.valueOf("a"), "", new Attributes()), new Attribute("href", "http://example.com")));
+    }
+
+    @Test
+    public void testAddProtocolAlreadyExists() throws Exception {
+        Whitelist wl = Whitelist.basic().addProtocols("a", "href", "http"); // 'http' is already in basic for 'a' href
+        Element a = new Element(Tag.valueOf("a"), "");
+        assertTrue(wl.isSafeAttribute("a", a, new Attribute("href", "http://example.com")));
+    }
+}
+```

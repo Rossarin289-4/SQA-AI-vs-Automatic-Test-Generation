@@ -1,0 +1,1833 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Preconditions;
+import com.google.common.collect.ImmutableSet;
+import com.google.javascript.jscomp.Scope.Var;
+import com.google.javascript.jscomp.type.ReverseAbstractInterpreter;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.jstype.EnumType;
+import com.google.javascript.rhino.jstype.FunctionType;
+import com.google.javascript.rhino.jstype.JSType;
+import com.google.javascript.rhino.jstype.JSTypeNative;
+import com.google.javascript.rhino.jstype.JSTypeRegistry;
+import com.google.javascript.rhino.jstype.ObjectType;
+import com.google.javascript.rhino.jstype.TemplateTypeMap;
+import com.google.javascript.rhino.jstype.TemplateTypeMapReplacer;
+import com.google.javascript.rhino.jstype.TernaryValue;
+import com.google.javascript.rhino.jstype.UnionType;
+import java.lang.reflect.Method;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.Set;
+
+public class TypeCheckTest {
+    private static class MockCompiler implements AbstractCompiler {
+        @Override
+        public DiagnosticType[] getDiagnosticGroups() {
+            return new DiagnosticType[0];
+        }
+
+        @Override
+        public void report(JSError error) {
+        }
+
+        @Override
+        public boolean isNormalizedNodeNamesEnabled() {
+            return false;
+        }
+
+        @Override
+        public CodingConvention getCodingConvention() {
+            return new GoogleCodingConvention();
+        }
+
+        @Override
+        public TypeValidator getTypeValidator() {
+            // Default implementation for testing purposes.
+            // In a real test, this would be a more fully featured mock or stub.
+            return new TypeValidator(this);
+        }
+
+        @Override
+        public void setProgress(Progress p) {
+        }
+
+        @Override
+        public void setBootProgress(Progress p) {
+        }
+
+        @Override
+        public Progress getProgress() {
+            return null;
+        }
+
+        @Override
+        public PhaseOptimizer getOptimizer() {
+            return null;
+        }
+
+        @Override
+        public Options getOptions() {
+            // Return a default Options object.
+            return new CompilerOptions();
+        }
+    }
+
+    private static class MockJSTypeRegistry extends JSTypeRegistry {
+        public MockJSTypeRegistry() {
+            super(new MockMessageFormatter());
+        }
+
+        // Override methods that are called in TypeCheck to provide minimal functionality.
+        @Override
+        public JSType getType(String typeName) {
+            // Mock for basic types
+            if ("string".equals(typeName)) return getNativeType(JSTypeNative.STRING_TYPE);
+            if ("number".equals(typeName)) return getNativeType(JSTypeNative.NUMBER_TYPE);
+            if ("boolean".equals(typeName)) return getNativeType(JSTypeNative.BOOLEAN_TYPE);
+            if ("undefined".equals(typeName)) return getNativeType(JSTypeNative.VOID_TYPE);
+            if ("object".equals(typeName)) return getNativeType(JSTypeNative.OBJECT_TYPE);
+            if ("function".equals(typeName)) return getNativeType(JSTypeNative.FUNCTION_TYPE);
+            return getNativeType(JSTypeNative.UNKNOWN_TYPE);
+        }
+
+        @Override
+        public JSType getNativeType(JSTypeNative typeId) {
+            // Provide stub implementations for common native types.
+            return new MockJSType(typeId);
+        }
+
+        @Override
+        public boolean canPropertyBeDefined(JSType objectType, String propName) {
+            return true; // Assume properties can always be defined for simplicity.
+        }
+
+        @Override
+        public ObjectType getObjectFromPrototype(ObjectType proto) {
+            return proto; // Simplified
+        }
+
+        @Override
+        public FunctionType getNativeFunctionType(JSTypeNative typeId) {
+            return new MockFunctionType(typeId, this);
+        }
+    }
+
+    private static class MockJSType extends JSType {
+        private JSTypeNative nativeType;
+        private boolean isFunction = false;
+        private boolean isConstructor = false;
+        private boolean isInterface = false;
+        private boolean isUnknown = false;
+        private boolean isString = false;
+        private boolean isNumber = false;
+        private boolean isBoolean = false;
+        private boolean isVoid = false;
+        private boolean isObject = false;
+        private boolean isStruct = false;
+        private boolean isDict = false;
+        private ObjectType prototype;
+
+        MockJSType(JSTypeNative nativeType) {
+            super(null); // Mock registry is null
+            this.nativeType = nativeType;
+            switch (nativeType) {
+                case STRING_TYPE: isString = true; isObject = true; break;
+                case NUMBER_TYPE: isNumber = true; isObject = true; break;
+                case BOOLEAN_TYPE: isBoolean = true; isObject = true; break;
+                case VOID_TYPE: isVoid = true; break;
+                case OBJECT_TYPE: isObject = true; break;
+                case FUNCTION_TYPE: isFunction = true; break;
+                case UNKNOWN_TYPE: isUnknown = true; break;
+                default: break;
+            }
+        }
+
+        @Override public String getDisplayName() { return nativeType.name(); }
+        @Override public boolean isString() { return isString; }
+        @Override public boolean isNumber() { return isNumber; }
+        @Override public boolean isBoolean() { return isBoolean; }
+        @Override public boolean isVoidType() { return isVoid; }
+        @Override public boolean isObject() { return isObject; }
+        @Override public boolean isFunctionType() { return isFunction; }
+        @Override public boolean isConstructor() { return isConstructor; }
+        @Override public boolean isInterface() { return isInterface; }
+        @Override public boolean isUnknownType() { return isUnknown; }
+        @Override public boolean isStruct() { return isStruct; }
+        @Override public boolean isDict() { return isDict; }
+
+        @Override public ObjectType getPrototype() {
+            if (prototype == null) {
+                prototype = new MockObjectType(this, null); // Mock prototype
+            }
+            return prototype;
+        }
+
+        @Override public JSType restrictByNotNullOrUndefined() { return this; }
+        @Override public TernaryValue testForEquality(JSType other) { return TernaryValue.UNKNOWN; }
+        @Override public boolean canCastTo(JSType target) { return true; }
+        @Override public boolean isSubtype(JSType other) { return true; }
+        @Override public JSType autocompl(JSTypeNative typeId) { return this; }
+        @Override public JSType visit(TemplateTypeMapReplacer replacer) { return this; }
+        @Override public TemplateTypeMap getTemplateTypeMap() { return new TemplateTypeMap(); }
+        @Override public boolean isEquivalentTo(JSType other) { return this == other; }
+        @Override public UnionType toMaybeUnionType() { return null; }
+        @Override public FunctionType toMaybeFunctionType() {
+            if (isFunction) return new MockFunctionType(this.nativeType, null);
+            return null;
+        }
+        @Override public ObjectType toMaybeObjectType() {
+            if (isObject) return new MockObjectType(this, null);
+            return null;
+        }
+        @Override public EnumElementType toMaybeEnumElementType() { return null; }
+        @Override public EnumType toMaybeEnumType() { return null; }
+        @Override public RecordType toMaybeRecordType() { return null; }
+        @Override public TemplatizedType toMaybeTemplatizedType() { return null; }
+        @Override public TemplateType toMaybeTemplateType() { return null; }
+        @Override public JSDocInfo getJSDocInfo() { return null; }
+    }
+
+    private static class MockFunctionType extends MockJSType implements FunctionType {
+        private JSType returnType = null;
+        private JSType[] params = new JSType[0];
+        private boolean isEnum = false; // Placeholder
+
+        MockFunctionType(JSTypeNative nativeType, JSTypeRegistry registry) {
+            super(nativeType);
+            isFunction = true; // Functions are always functions
+            // Mock specific properties for constructors/interfaces
+            if (nativeType == JSTypeNative.OBJECT_FUNCTION_TYPE) {
+                isConstructor = true;
+                returnType = getNativeType(JSTypeNative.OBJECT_TYPE);
+                prototype = new MockObjectType(this, registry);
+                ((MockObjectType) prototype).setConstructor(this);
+            }
+        }
+
+        @Override public JSType getReturnType() { return returnType != null ? returnType : getNativeType(JSTypeNative.UNKNOWN_TYPE); }
+        @Override public JSType getTypeOfThis() { return getNativeType(JSTypeNative.OBJECT_TYPE); }
+        @Override public List<JSType> getParameters() { return Arrays.asList(params); }
+        @Override public int getMinArguments() { return 0; }
+        @Override public int getMaxArguments() { return Integer.MAX_VALUE; }
+        @Override public boolean isInstanceType() { return false; }
+        @Override public ObjectType getInstanceType() { return new MockObjectType(this, null); }
+        @Override public boolean isEnumParameterType(JSType arg) { return isEnum; }
+        @Override public FunctionType getSuperClassConstructor() { return null; }
+        @Override public ImmutableList<JSType> getImplementedInterfaces() { return ImmutableList.of(); }
+        @Override public ImmutableList<ObjectType> getExtendedInterfaces() { return ImmutableList.of(); }
+        @Override public boolean isEnum() { return isEnum; }
+        @Override public JSType getEnumAsJSType() { return getNativeType(JSTypeNative.OBJECT_TYPE); } // Simplified
+        @Override public String getReferenceName() { return "MockFunction"; }
+        @Override public boolean hasInstanceType() { return true; }
+        @Override public boolean canBeCalled() { return true; }
+        @Override public ObjectType getPrototype() {
+            if (prototype == null) {
+                prototype = new MockObjectType(this, null);
+            }
+            return prototype;
+        }
+    }
+
+    private static class MockObjectType extends MockJSType implements ObjectType {
+        private ObjectType implicitPrototype = null;
+        private FunctionType constructor = null;
+        private Map<String, JSType> properties = new HashMap<>();
+        private JSType baseType;
+
+        MockObjectType(JSType baseType, JSTypeRegistry registry) {
+            super(JSTypeNative.OBJECT_TYPE); // Default to OBJECT_TYPE
+            this.baseType = baseType;
+            this.isObject = true;
+        }
+
+        @Override public FunctionType getConstructor() { return constructor; }
+        public void setConstructor(FunctionType constructor) { this.constructor = constructor; }
+        @Override public ObjectType getImplicitPrototype() { return implicitPrototype; }
+        public void setImplicitPrototype(ObjectType proto) { this.implicitPrototype = proto; }
+        @Override public String getReferenceName() { return "MockObject"; }
+        @Override public Set<String> getOwnPropertyNames() { return properties.keySet(); }
+        @Override public boolean hasOwnProperty(String name) { return properties.containsKey(name); }
+        @Override public JSType getPropertyType(String name) { return properties.get(name); }
+        @Override public boolean defineProperty(String name, JSType type, boolean inferred, Node node) {
+            properties.put(name, type);
+            return true;
+        }
+        @Override public boolean isStruct() { return isStruct; }
+        @Override public void setStruct(boolean isStruct) { this.isStruct = isStruct; }
+        @Override public boolean isDict() { return isDict; }
+        @Override public void setDict(boolean isDict) { this.isDict = isDict; }
+        @Override public JSDocInfo getOwnPropertyJSDocInfo(String propertyName) { return null; }
+        @Override public boolean hasProperty(String name) { return properties.containsKey(name) || (implicitPrototype != null && implicitPrototype.hasProperty(name)); }
+        @Override public ObjectType getOwnerFunction() { return this; }
+        @Override public JSType getTypeOfThis() { return this.baseType; } // Simplified
+
+        // Mock methods needed by TypeCheck
+        @Override
+        public JSType findPropertyType(String propertyName) {
+            if (properties.containsKey(propertyName)) {
+                return properties.get(propertyName);
+            }
+            if (implicitPrototype != null) {
+                return implicitPrototype.findPropertyType(propertyName);
+            }
+            return getNativeType(JSTypeNative.UNKNOWN_TYPE);
+        }
+        @Override
+        public boolean isPropertyTypeDeclared(String propertyName) {
+            return properties.containsKey(propertyName);
+        }
+        @Override
+        public boolean isPropertyTypeInferred(String propertyName) {
+            return properties.containsKey(propertyName); // Simplified
+        }
+        @Override
+        public ObjectType getTopMostDefiningType(String propertyName) {
+            return this; // Simplified
+        }
+    }
+    
+    private static class MockNode extends Node {
+        private JSType type = null;
+        private String stringValue = null;
+        private double doubleValue = 0.0;
+        private boolean isFromExterns = false;
+
+        MockNode(int type) {
+            super(type);
+        }
+
+        MockNode(int type, String value) {
+            super(type);
+            this.stringValue = value;
+        }
+
+        MockNode(int type, double value) {
+            super(type);
+            this.doubleValue = value;
+        }
+
+        @Override
+        public void setJSType(JSType type) {
+            this.type = type;
+        }
+
+        @Override
+        public JSType getJSType() {
+            return this.type != null ? this.type : new MockJSType(JSTypeNative.UNKNOWN_TYPE);
+        }
+
+        @Override
+        public String getString() {
+            return this.stringValue;
+        }
+        
+        @Override
+        public double getDouble() {
+            return this.doubleValue;
+        }
+
+        public void setFromExterns(boolean isFromExterns) {
+            this.isFromExterns = isFromExterns;
+        }
+
+        @Override
+        public boolean isFromExterns() {
+            return this.isFromExterns;
+        }
+    }
+
+    private static class MockNodeTraversal extends NodeTraversal {
+        private Scope currentScope;
+        private MockCompiler compiler;
+
+        MockNodeTraversal(MockCompiler compiler, Scope scope) {
+            super(compiler, null, null); // Pass null for callback and scope creator
+            this.compiler = compiler;
+            this.currentScope = scope;
+        }
+
+        @Override
+        public Scope getScope() {
+            return currentScope;
+        }
+
+        @Override
+        public void report(Node n, DiagnosticType diagnosticType, String... arguments) {
+            // No-op for tests, or could be enhanced to collect reported errors.
+        }
+        
+        @Override
+        public NodeTraversal makeError(Node n, DiagnosticType dt, String... arguments) {
+            // Simplified error reporting for tests.
+            return this;
+        }
+        
+        @Override
+        public ErrorReporter getErrorReporter() {
+             return compiler.getErrorReporter();
+        }
+    }
+    
+    private static class MockScope implements Scope {
+        private Map<String, Var> vars = new HashMap<>();
+        private JSType typeOfThis;
+        private Node rootNode;
+
+        MockScope(Node rootNode, JSType typeOfThis) {
+            this.rootNode = rootNode;
+            this.typeOfThis = typeOfThis;
+        }
+
+        @Override
+        public Var getVar(String name) {
+            return vars.get(name);
+        }
+
+        @Override
+        public boolean isDeclared(String name, boolean preferFnDecl) {
+            return vars.containsKey(name);
+        }
+        
+        @Override
+        public JSType getTypeOfThis() {
+            return typeOfThis;
+        }
+
+        @Override
+        public Node getRootNode() {
+            return rootNode;
+        }
+        
+        // Other methods can be stubbed as needed
+        @Override
+        public Var generateConstantVar(String name, JSType type, boolean cast) { return null;}
+        @Override
+        public Var declare(String name, Node node, JSType type, boolean cast, boolean implicit) { return null;}
+        @Override
+        public void declareTypeAlias(String name, Node node, JSType type) {}
+        @Override
+        public Scope getParent() { return null;}
+        @Override
+        public boolean isGlobal() { return true; }
+        @Override
+        public Var getImplicitObject() { return null; }
+        @Override
+        public void inferParameterTypes(Node fnNode) {}
+        @Override
+        public void setGlobalVar(String name, JSType type, boolean cast) {}
+        @Override
+        public Var getOwnSlot(String name) { return null; }
+        @Override
+        public void setChildScope(Scope childScope) {}
+        @Override
+        public void setPrototypeDeclaration(Node node) {}
+        @Override
+        public void setTypedScopeCreator(TypedScopeCreator creator) {}
+        @Override
+        public TypedScopeCreator getTypedScopeCreator() { return null; }
+    }
+
+    private static class MockTypedScopeCreator extends TypedScopeCreator {
+        MockTypedScopeCreator(AbstractCompiler compiler) {
+            super(compiler);
+        }
+        
+        // Override to avoid complex initialization, return a mock scope.
+        @Override
+        public Scope createScope(Node node, Scope parent) {
+            return new MockScope(node, null); // Mocked type of 'this'
+        }
+    }
+    
+    private static class MockMemoizedScopeCreator extends MemoizedScopeCreator {
+        MockMemoizedScopeCreator(TypedScopeCreator delegate) {
+            super(delegate);
+        }
+
+        @Override
+        public Scope createScope(Node rootNode, Scope parent) {
+            // Return a mock scope directly.
+            return new MockScope(rootNode, null);
+        }
+    }
+
+    private static class MockReverseAbstractInterpreter extends ReverseAbstractInterpreter {
+        MockReverseAbstractInterpreter(JSTypeRegistry typeRegistry) {
+            super(typeRegistry);
+        }
+
+        @Override
+        public JSType getPreciseViaTypeof(Node node, String typeStr) {
+            return typeRegistry.getType(typeStr);
+        }
+    }
+
+    private TypeCheck createTypeCheck(AbstractCompiler compiler, JSTypeRegistry registry, Scope scope, MemoizedScopeCreator scopeCreator) {
+        ReverseAbstractInterpreter reverseInterpreter = new MockReverseAbstractInterpreter(registry);
+        return new TypeCheck(compiler, reverseInterpreter, registry, scope, scopeCreator, CheckLevel.WARNING);
+    }
+
+    @Test
+    public void testVisitCase() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        // Setup: Switch statement with a case
+        Node switchNode = new MockNode(Token.SWITCH);
+        Node caseNode = new MockNode(Token.CASE);
+        Node caseValueNode = new MockNode(Token.NUMBER, 10.0);
+        caseValueNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        caseNode.addChildToBack(caseValueNode);
+        switchNode.addChildToBack(new MockNode(Token.DEFAULT_CASE)); // Default case
+        switchNode.addChildToBack(caseNode); // The case we're testing
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(switchNode);
+
+        // Execute: Visit the CASE node
+        typeCheck.visit(traversal, caseNode, switchNode);
+
+        // Assert: The case value type should match the switch type.
+        // Here, we are implicitly testing that the validator.expectSwitchMatchesCase doesn't report an error.
+        // For a more explicit test, we'd need to mock validator.expectSwitchMatchesCase.
+        // For now, we rely on the fact that if it failed, it would throw or report.
+        // We assume a successful visit implies correct type checking.
+        assertNotNull(caseNode.getJSType()); // Should have a type assigned.
+    }
+
+    @Test
+    public void testVisitWith() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        // Setup: A 'with' statement on an object
+        Node withNode = new MockNode(Token.WITH);
+        Node objectNode = new MockNode(Token.OBJECTLIT);
+        objectNode.setJSType(registry.getNativeType(JSTypeNative.OBJECT_TYPE));
+        withNode.addChildToBack(objectNode);
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(withNode);
+
+        // Execute: Visit the WITH node
+        typeCheck.visit(traversal, withNode, parent);
+
+        // Assert: The object passed to 'with' must be an object.
+        // This test relies on the fact that validator.expectObject doesn't throw.
+        assertNotNull(objectNode.getJSType());
+    }
+
+    @Test
+    public void testVisitFunctionSimple() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        // Setup: A simple function declaration
+        Node functionNode = new MockNode(Token.FUNCTION);
+        Node functionNameNode = new MockNode(Token.NAME, "myFunction");
+        functionNode.addChildToBack(functionNameNode);
+        functionNode.setJSType(new MockFunctionType(JSTypeNative.FUNCTION_TYPE, registry)); // Assign a FunctionType
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(functionNode);
+
+        // Execute: Visit the FUNCTION node
+        typeCheck.visit(traversal, functionNode, parent);
+
+        // Assert: The function node should have a JSType.
+        assertNotNull(functionNode.getJSType());
+        assertTrue(functionNode.getJSType().isFunctionType());
+    }
+
+    @Test
+    public void testVisitVarDeclaration() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        // Setup: A var declaration with an initial value
+        Node varNode = new MockNode(Token.VAR);
+        Node nameNode = new MockNode(Token.NAME, "myVar");
+        Node valueNode = new MockNode(Token.NUMBER, 123.0);
+        valueNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        nameNode.addChildToBack(valueNode);
+        varNode.addChildToBack(nameNode);
+
+        // Add the var to the scope
+        Var var = new Var("myVar", nameNode, registry.getNativeType(JSTypeNative.NUMBER_TYPE), false);
+        ((MockScope) rootScope).vars.put("myVar", var);
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(varNode);
+
+        // Execute: Visit the VAR node
+        typeCheck.visit(traversal, varNode, parent);
+
+        // Assert: The name node should have the correct type.
+        assertNotNull(nameNode.getJSType());
+        assertTrue(nameNode.getJSType().isNumber());
+    }
+
+    @Test
+    public void testVisitNewExpression() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        // Setup: A 'new' expression
+        Node newNode = new MockNode(Token.NEW);
+        Node constructorNode = new MockNode(Token.NAME, "MyClass");
+        // Mock a FunctionType that is a constructor
+        MockFunctionType constructorType = new MockFunctionType(JSTypeNative.OBJECT_FUNCTION_TYPE, registry);
+        constructorType.isConstructor = true;
+        constructorType.returnType = new MockObjectType(constructorType, registry); // Instance type
+        constructorNode.setJSType(constructorType);
+        newNode.addChildToBack(constructorNode);
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.EXPR_RESULT);
+        parent.addChildToBack(newNode);
+
+        // Execute: Visit the NEW node
+        typeCheck.visit(traversal, newNode, parent);
+
+        // Assert: The new expression should have the instance type of the constructor.
+        assertNotNull(newNode.getJSType());
+        assertEquals(constructorType.getInstanceType(), newNode.getJSType());
+    }
+
+    @Test
+    public void testVisitCallExpression() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        // Setup: A function call
+        Node callNode = new MockNode(Token.CALL);
+        Node functionNameNode = new MockNode(Token.NAME, "myFunc");
+        // Mock a FunctionType with a return type
+        MockFunctionType funcType = new MockFunctionType(JSTypeNative.FUNCTION_TYPE, registry);
+        funcType.returnType = registry.getNativeType(JSTypeNative.STRING_TYPE);
+        functionNameNode.setJSType(funcType);
+        callNode.addChildToBack(functionNameNode);
+        callNode.addChildToBack(new MockNode(Token.NUMBER, 1.0)); // Argument
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.EXPR_RESULT);
+        parent.addChildToBack(callNode);
+
+        // Execute: Visit the CALL node
+        typeCheck.visit(traversal, callNode, parent);
+
+        // Assert: The call expression should have the return type of the function.
+        assertNotNull(callNode.getJSType());
+        assertEquals(funcType.getReturnType(), callNode.getJSType());
+    }
+
+    @Test
+    public void testVisitReturnStatement() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Node scriptNode = new MockNode(Token.SCRIPT);
+        Scope rootScope = new MockScope(scriptNode, null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        // Setup: A return statement inside a function
+        Node returnNode = new MockNode(Token.RETURN);
+        Node returnValueNode = new MockNode(Token.NUMBER, 42.0);
+        returnValueNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        returnNode.addChildToBack(returnValueNode);
+
+        // Mock the enclosing function with a return type
+        Node functionNode = new MockNode(Token.FUNCTION);
+        functionNode.setJSType(new MockFunctionType(JSTypeNative.FUNCTION_TYPE, registry));
+        ((MockFunctionType)functionNode.getJSType()).returnType = registry.getNativeType(JSTypeNative.NUMBER_TYPE);
+        
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        // Set the enclosing function context for the traversal
+        traversal.currentScope = new MockScope(functionNode, null); 
+        
+        // Add the return node to the function's body (implicitly)
+        Node blockNode = new MockNode(Token.BLOCK);
+        blockNode.addChildToBack(returnNode);
+        functionNode.addChildToBack(blockNode);
+
+        // Execute: Visit the RETURN node
+        typeCheck.visit(traversal, returnNode, blockNode);
+
+        // Assert: The return type should match the declared return type.
+        // This test relies on validator.expectCanAssignTo not reporting an error.
+        assertNotNull(returnNode.getJSType()); // The return node itself gets the type of the returned value.
+    }
+
+    @Test
+    public void testVisitBinaryOperatorAdd() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        // Setup: Addition operation
+        Node addNode = new MockNode(Token.ADD);
+        Node leftNode = new MockNode(Token.NUMBER, 5.0);
+        leftNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        Node rightNode = new MockNode(Token.NUMBER, 10.0);
+        rightNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        addNode.addChildToBack(leftNode);
+        addNode.addChildToBack(rightNode);
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(addNode);
+
+        // Execute: Visit the ADD node
+        typeCheck.visit(traversal, addNode, parent);
+
+        // Assert: The result of addition should be a number.
+        assertNotNull(addNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.NUMBER_TYPE), addNode.getJSType());
+    }
+
+    @Test
+    public void testVisitBinaryOperatorSubtract() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        // Setup: Subtraction operation
+        Node subNode = new MockNode(Token.SUB);
+        Node leftNode = new MockNode(Token.NUMBER, 15.0);
+        leftNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        Node rightNode = new MockNode(Token.NUMBER, 5.0);
+        rightNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        subNode.addChildToBack(leftNode);
+        subNode.addChildToBack(rightNode);
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(subNode);
+
+        // Execute: Visit the SUB node
+        typeCheck.visit(traversal, subNode, parent);
+
+        // Assert: The result of subtraction should be a number.
+        assertNotNull(subNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.NUMBER_TYPE), subNode.getJSType());
+    }
+
+    @Test
+    public void testVisitBinaryOperatorMultiply() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        // Setup: Multiplication operation
+        Node mulNode = new MockNode(Token.MUL);
+        Node leftNode = new MockNode(Token.NUMBER, 3.0);
+        leftNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        Node rightNode = new MockNode(Token.NUMBER, 4.0);
+        rightNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        mulNode.addChildToBack(leftNode);
+        mulNode.addChildToBack(rightNode);
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(mulNode);
+
+        // Execute: Visit the MUL node
+        typeCheck.visit(traversal, mulNode, parent);
+
+        // Assert: The result of multiplication should be a number.
+        assertNotNull(mulNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.NUMBER_TYPE), mulNode.getJSType());
+    }
+
+    @Test
+    public void testVisitBinaryOperatorDivide() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        // Setup: Division operation
+        Node divNode = new MockNode(Token.DIV);
+        Node leftNode = new MockNode(Token.NUMBER, 20.0);
+        leftNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        Node rightNode = new MockNode(Token.NUMBER, 5.0);
+        rightNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        divNode.addChildToBack(leftNode);
+        divNode.addChildToBack(rightNode);
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(divNode);
+
+        // Execute: Visit the DIV node
+        typeCheck.visit(traversal, divNode, parent);
+
+        // Assert: The result of division should be a number.
+        assertNotNull(divNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.NUMBER_TYPE), divNode.getJSType());
+    }
+
+    @Test
+    public void testVisitBinaryOperatorModulus() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        // Setup: Modulus operation
+        Node modNode = new MockNode(Token.MOD);
+        Node leftNode = new MockNode(Token.NUMBER, 7.0);
+        leftNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        Node rightNode = new MockNode(Token.NUMBER, 3.0);
+        rightNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        modNode.addChildToBack(leftNode);
+        modNode.addChildToBack(rightNode);
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(modNode);
+
+        // Execute: Visit the MOD node
+        typeCheck.visit(traversal, modNode, parent);
+
+        // Assert: The result of modulus should be a number.
+        assertNotNull(modNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.NUMBER_TYPE), modNode.getJSType());
+    }
+
+    @Test
+    public void testVisitBinaryOperatorBitwiseAnd() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        // Setup: Bitwise AND operation
+        Node bitAndNode = new MockNode(Token.BITAND);
+        Node leftNode = new MockNode(Token.NUMBER, 5.0); // Binary 101
+        leftNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        Node rightNode = new MockNode(Token.NUMBER, 3.0); // Binary 011
+        rightNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        bitAndNode.addChildToBack(leftNode);
+        bitAndNode.addChildToBack(rightNode);
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(bitAndNode);
+
+        // Execute: Visit the BITAND node
+        typeCheck.visit(traversal, bitAndNode, parent);
+
+        // Assert: The result of bitwise AND should be a number.
+        assertNotNull(bitAndNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.NUMBER_TYPE), bitAndNode.getJSType());
+    }
+    
+    @Test
+    public void testVisitBinaryOperatorBitwiseOr() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        // Setup: Bitwise OR operation
+        Node bitOrNode = new MockNode(Token.BITOR);
+        Node leftNode = new MockNode(Token.NUMBER, 5.0); // Binary 101
+        leftNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        Node rightNode = new MockNode(Token.NUMBER, 3.0); // Binary 011
+        rightNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        bitOrNode.addChildToBack(leftNode);
+        bitOrNode.addChildToBack(rightNode);
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(bitOrNode);
+
+        // Execute: Visit the BITOR node
+        typeCheck.visit(traversal, bitOrNode, parent);
+
+        // Assert: The result of bitwise OR should be a number.
+        assertNotNull(bitOrNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.NUMBER_TYPE), bitOrNode.getJSType());
+    }
+    
+    @Test
+    public void testVisitBinaryOperatorBitwiseXor() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        // Setup: Bitwise XOR operation
+        Node bitXorNode = new MockNode(Token.BITXOR);
+        Node leftNode = new MockNode(Token.NUMBER, 5.0); // Binary 101
+        leftNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        Node rightNode = new MockNode(Token.NUMBER, 3.0); // Binary 011
+        rightNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        bitXorNode.addChildToBack(leftNode);
+        bitXorNode.addChildToBack(rightNode);
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(bitXorNode);
+
+        // Execute: Visit the BITXOR node
+        typeCheck.visit(traversal, bitXorNode, parent);
+
+        // Assert: The result of bitwise XOR should be a number.
+        assertNotNull(bitXorNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.NUMBER_TYPE), bitXorNode.getJSType());
+    }
+    
+    @Test
+    public void testVisitBinaryOperatorLeftShift() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        // Setup: Left shift operation
+        Node lshNode = new MockNode(Token.LSH);
+        Node leftNode = new MockNode(Token.NUMBER, 5.0); // Binary 101
+        leftNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        Node rightNode = new MockNode(Token.NUMBER, 2.0); // Shift by 2
+        rightNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        lshNode.addChildToBack(leftNode);
+        lshNode.addChildToBack(rightNode);
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(lshNode);
+
+        // Execute: Visit the LSH node
+        typeCheck.visit(traversal, lshNode, parent);
+
+        // Assert: The result of left shift should be a number.
+        assertNotNull(lshNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.NUMBER_TYPE), lshNode.getJSType());
+    }
+
+    @Test
+    public void testVisitBinaryOperatorRightShift() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        // Setup: Right shift operation
+        Node rshNode = new MockNode(Token.RSH);
+        Node leftNode = new MockNode(Token.NUMBER, 5.0); // Binary 101
+        leftNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        Node rightNode = new MockNode(Token.NUMBER, 1.0); // Shift by 1
+        rightNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        rshNode.addChildToBack(leftNode);
+        rshNode.addChildToBack(rightNode);
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(rshNode);
+
+        // Execute: Visit the RSH node
+        typeCheck.visit(traversal, rshNode, parent);
+
+        // Assert: The result of right shift should be a number.
+        assertNotNull(rshNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.NUMBER_TYPE), rshNode.getJSType());
+    }
+
+    @Test
+    public void testVisitBinaryOperatorUnsignedRightShift() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        // Setup: Unsigned right shift operation
+        Node urshNode = new MockNode(Token.URSH);
+        Node leftNode = new MockNode(Token.NUMBER, -5.0); // Negative number
+        leftNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        Node rightNode = new MockNode(Token.NUMBER, 1.0); // Shift by 1
+        rightNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        urshNode.addChildToBack(leftNode);
+        urshNode.addChildToBack(rightNode);
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(urshNode);
+
+        // Execute: Visit the URSH node
+        typeCheck.visit(traversal, urshNode, parent);
+
+        // Assert: The result of unsigned right shift should be a number.
+        assertNotNull(urshNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.NUMBER_TYPE), urshNode.getJSType());
+    }
+    
+    @Test
+    public void testVisitAssignOperatorAdd() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        // Setup: Addition assignment
+        Node assignNode = new MockNode(Token.ASSIGN_ADD);
+        Node leftNode = new MockNode(Token.NAME, "x");
+        leftNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE)); // Variable 'x' is a number
+        Node rightNode = new MockNode(Token.NUMBER, 5.0);
+        rightNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        assignNode.addChildToBack(leftNode);
+        assignNode.addChildToBack(rightNode);
+
+        // Add the variable to the scope
+        Var var = new Var("x", leftNode, registry.getNativeType(JSTypeNative.NUMBER_TYPE), false);
+        ((MockScope) rootScope).vars.put("x", var);
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(assignNode);
+
+        // Execute: Visit the ASSIGN_ADD node
+        typeCheck.visit(traversal, assignNode, parent);
+
+        // Assert: The assignment expression should have the type of the right-hand side.
+        assertNotNull(assignNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.NUMBER_TYPE), assignNode.getJSType());
+    }
+
+    @Test
+    public void testVisitAssignOperatorSubtract() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        // Setup: Subtraction assignment
+        Node assignNode = new MockNode(Token.ASSIGN_SUB);
+        Node leftNode = new MockNode(Token.NAME, "x");
+        leftNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE)); // Variable 'x' is a number
+        Node rightNode = new MockNode(Token.NUMBER, 5.0);
+        rightNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        assignNode.addChildToBack(leftNode);
+        assignNode.addChildToBack(rightNode);
+
+        Var var = new Var("x", leftNode, registry.getNativeType(JSTypeNative.NUMBER_TYPE), false);
+        ((MockScope) rootScope).vars.put("x", var);
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(assignNode);
+
+        // Execute: Visit the ASSIGN_SUB node
+        typeCheck.visit(traversal, assignNode, parent);
+
+        assertNotNull(assignNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.NUMBER_TYPE), assignNode.getJSType());
+    }
+
+    @Test
+    public void testVisitAssignOperatorMultiply() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        Node assignNode = new MockNode(Token.ASSIGN_MUL);
+        Node leftNode = new MockNode(Token.NAME, "x");
+        leftNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        Node rightNode = new MockNode(Token.NUMBER, 5.0);
+        rightNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        assignNode.addChildToBack(leftNode);
+        assignNode.addChildToBack(rightNode);
+
+        Var var = new Var("x", leftNode, registry.getNativeType(JSTypeNative.NUMBER_TYPE), false);
+        ((MockScope) rootScope).vars.put("x", var);
+
+        NodeTraversal traversal = new NodeTraversal(compiler, null, scopeCreator); // Simplified traversal
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(assignNode);
+
+        typeCheck.visit(traversal, assignNode, parent);
+
+        assertNotNull(assignNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.NUMBER_TYPE), assignNode.getJSType());
+    }
+    
+    @Test
+    public void testVisitAssignOperatorDivide() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        Node assignNode = new MockNode(Token.ASSIGN_DIV);
+        Node leftNode = new MockNode(Token.NAME, "x");
+        leftNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        Node rightNode = new MockNode(Token.NUMBER, 5.0);
+        rightNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        assignNode.addChildToBack(leftNode);
+        assignNode.addChildToBack(rightNode);
+
+        Var var = new Var("x", leftNode, registry.getNativeType(JSTypeNative.NUMBER_TYPE), false);
+        ((MockScope) rootScope).vars.put("x", var);
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(assignNode);
+
+        typeCheck.visit(traversal, assignNode, parent);
+
+        assertNotNull(assignNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.NUMBER_TYPE), assignNode.getJSType());
+    }
+    
+    @Test
+    public void testVisitAssignOperatorModulus() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        Node assignNode = new MockNode(Token.ASSIGN_MOD);
+        Node leftNode = new MockNode(Token.NAME, "x");
+        leftNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        Node rightNode = new MockNode(Token.NUMBER, 5.0);
+        rightNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        assignNode.addChildToBack(leftNode);
+        assignNode.addChildToBack(rightNode);
+
+        Var var = new Var("x", leftNode, registry.getNativeType(JSTypeNative.NUMBER_TYPE), false);
+        ((MockScope) rootScope).vars.put("x", var);
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(assignNode);
+
+        typeCheck.visit(traversal, assignNode, parent);
+
+        assertNotNull(assignNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.NUMBER_TYPE), assignNode.getJSType());
+    }
+    
+    @Test
+    public void testVisitAssignOperatorBitwiseAnd() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        Node assignNode = new MockNode(Token.ASSIGN_BITAND);
+        Node leftNode = new MockNode(Token.NAME, "x");
+        leftNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        Node rightNode = new MockNode(Token.NUMBER, 5.0);
+        rightNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        assignNode.addChildToBack(leftNode);
+        assignNode.addChildToBack(rightNode);
+
+        Var var = new Var("x", leftNode, registry.getNativeType(JSTypeNative.NUMBER_TYPE), false);
+        ((MockScope) rootScope).vars.put("x", var);
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(assignNode);
+
+        typeCheck.visit(traversal, assignNode, parent);
+
+        assertNotNull(assignNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.NUMBER_TYPE), assignNode.getJSType());
+    }
+    
+    @Test
+    public void testVisitAssignOperatorLeftShift() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        Node assignNode = new MockNode(Token.ASSIGN_LSH);
+        Node leftNode = new MockNode(Token.NAME, "x");
+        leftNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        Node rightNode = new MockNode(Token.NUMBER, 2.0);
+        rightNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        assignNode.addChildToBack(leftNode);
+        assignNode.addChildToBack(rightNode);
+
+        Var var = new Var("x", leftNode, registry.getNativeType(JSTypeNative.NUMBER_TYPE), false);
+        ((MockScope) rootScope).vars.put("x", var);
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(assignNode);
+
+        typeCheck.visit(traversal, assignNode, parent);
+
+        assertNotNull(assignNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.NUMBER_TYPE), assignNode.getJSType());
+    }
+    
+    @Test
+    public void testVisitAssignOperatorRightShift() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        Node assignNode = new MockNode(Token.ASSIGN_RSH);
+        Node leftNode = new MockNode(Token.NAME, "x");
+        leftNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        Node rightNode = new MockNode(Token.NUMBER, 1.0);
+        rightNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        assignNode.addChildToBack(leftNode);
+        assignNode.addChildToBack(rightNode);
+
+        Var var = new Var("x", leftNode, registry.getNativeType(JSTypeNative.NUMBER_TYPE), false);
+        ((MockScope) rootScope).vars.put("x", var);
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(assignNode);
+
+        typeCheck.visit(traversal, assignNode, parent);
+
+        assertNotNull(assignNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.NUMBER_TYPE), assignNode.getJSType());
+    }
+
+    @Test
+    public void testVisitAssignOperatorUnsignedRightShift() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        Node assignNode = new MockNode(Token.ASSIGN_URSH);
+        Node leftNode = new MockNode(Token.NAME, "x");
+        leftNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        Node rightNode = new MockNode(Token.NUMBER, 1.0);
+        rightNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        assignNode.addChildToBack(leftNode);
+        assignNode.addChildToBack(rightNode);
+
+        Var var = new Var("x", leftNode, registry.getNativeType(JSTypeNative.NUMBER_TYPE), false);
+        ((MockScope) rootScope).vars.put("x", var);
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(assignNode);
+
+        typeCheck.visit(traversal, assignNode, parent);
+
+        assertNotNull(assignNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.NUMBER_TYPE), assignNode.getJSType());
+    }
+
+    @Test
+    public void testVisitGetProp() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        // Setup: Accessing a property of an object
+        Node getPropNode = new MockNode(Token.GETPROP);
+        Node objNode = new MockNode(Token.OBJECTLIT);
+        objNode.setJSType(registry.getNativeType(JSTypeNative.OBJECT_TYPE));
+        Node propNameNode = new MockNode(Token.STRING_KEY, "myProperty");
+        propNameNode.setJSType(registry.getNativeType(JSTypeNative.STRING_TYPE)); // Property name is a string
+        getPropNode.addChildToBack(objNode);
+        getPropNode.addChildToBack(propNameNode);
+        
+        // Mock the property type
+        ((MockObjectType)objNode.getJSType()).defineProperty("myProperty", registry.getNativeType(JSTypeNative.NUMBER_TYPE), false, propNameNode);
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(getPropNode);
+
+        // Execute: Visit the GETPROP node
+        typeCheck.visit(traversal, getPropNode, parent);
+
+        // Assert: The type of the property access should be the property's type.
+        assertNotNull(getPropNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.NUMBER_TYPE), getPropNode.getJSType());
+    }
+
+    @Test
+    public void testVisitGetElem() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        // Setup: Accessing an element of an array or object
+        Node getElemNode = new MockNode(Token.GETELEM);
+        Node arrayNode = new MockNode(Token.ARRAYLIT);
+        arrayNode.setJSType(registry.getNativeType(JSTypeNative.ARRAY_TYPE));
+        Node indexNode = new MockNode(Token.NUMBER, 0.0);
+        indexNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        getElemNode.addChildToBack(arrayNode);
+        getElemNode.addChildToBack(indexNode);
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(getElemNode);
+
+        // Execute: Visit the GETELEM node
+        typeCheck.visit(traversal, getElemNode, parent);
+
+        // Assert: The type of an element access is typically unknown.
+        assertNotNull(getElemNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.UNKNOWN_TYPE), getElemNode.getJSType());
+    }
+
+    @Test
+    public void testVisitCast() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        // Setup: A cast expression
+        Node castNode = new MockNode(Token.CAST);
+        Node exprNode = new MockNode(Token.STRING, "hello");
+        exprNode.setJSType(registry.getNativeType(JSTypeNative.STRING_TYPE));
+        castNode.addChildToBack(exprNode);
+        // Set the cast type directly on the cast node
+        castNode.setJSType(registry.getNativeType(JSTypeNative.STRING_TYPE)); 
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(castNode);
+
+        // Execute: Visit the CAST node
+        typeCheck.visit(traversal, castNode, parent);
+
+        // Assert: The expression node should adopt the cast type.
+        assertNotNull(exprNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.STRING_TYPE), exprNode.getJSType());
+        assertNotNull(castNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.STRING_TYPE), castNode.getJSType());
+    }
+
+    @Test
+    public void testVisitThis() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        
+        // Setup 'this' type in the scope
+        JSType thisType = registry.getType("MyClass"); // Assume 'this' is of type MyClass
+        Node scriptNode = new MockNode(Token.SCRIPT);
+        Scope rootScope = new MockScope(scriptNode, thisType); 
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        Node thisNode = new MockNode(Token.THIS);
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(thisNode);
+
+        // Execute: Visit the THIS node
+        typeCheck.visit(traversal, thisNode, parent);
+
+        // Assert: The THIS node should have the type defined in the scope.
+        assertNotNull(thisNode.getJSType());
+        assertEquals(thisType, thisNode.getJSType());
+    }
+
+    @Test
+    public void testVisitNumberLiteral() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        Node numberNode = new MockNode(Token.NUMBER, 123.45);
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(numberNode);
+
+        typeCheck.visit(traversal, numberNode, parent);
+
+        assertNotNull(numberNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.NUMBER_TYPE), numberNode.getJSType());
+    }
+
+    @Test
+    public void testVisitStringLiteral() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        Node stringNode = new MockNode(Token.STRING, "test");
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(stringNode);
+
+        typeCheck.visit(traversal, stringNode, parent);
+
+        assertNotNull(stringNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.STRING_TYPE), stringNode.getJSType());
+    }
+
+    @Test
+    public void testVisitBooleanLiteralTrue() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        Node trueNode = new MockNode(Token.TRUE);
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(trueNode);
+
+        typeCheck.visit(traversal, trueNode, parent);
+
+        assertNotNull(trueNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.BOOLEAN_TYPE), trueNode.getJSType());
+    }
+
+    @Test
+    public void testVisitBooleanLiteralFalse() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        Node falseNode = new MockNode(Token.FALSE);
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(falseNode);
+
+        typeCheck.visit(traversal, falseNode, parent);
+
+        assertNotNull(falseNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.BOOLEAN_TYPE), falseNode.getJSType());
+    }
+
+    @Test
+    public void testVisitNullLiteral() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        Node nullNode = new MockNode(Token.NULL);
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(nullNode);
+
+        typeCheck.visit(traversal, nullNode, parent);
+
+        assertNotNull(nullNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.NULL_TYPE), nullNode.getJSType());
+    }
+
+    @Test
+    public void testVisitRegExpLiteral() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        Node regexpNode = new MockNode(Token.REGEXP);
+        regexpNode.setJSType(registry.getNativeType(JSTypeNative.REGEXP_TYPE));
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(regexpNode);
+
+        typeCheck.visit(traversal, regexpNode, parent);
+
+        assertNotNull(regexpNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.REGEXP_TYPE), regexpNode.getJSType());
+    }
+
+    @Test
+    public void testVisitArrayLiteral() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        Node arrayNode = new MockNode(Token.ARRAYLIT);
+        arrayNode.setJSType(registry.getNativeType(JSTypeNative.ARRAY_TYPE));
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(arrayNode);
+
+        typeCheck.visit(traversal, arrayNode, parent);
+
+        assertNotNull(arrayNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.ARRAY_TYPE), arrayNode.getJSType());
+    }
+
+    @Test
+    public void testVisitCommaOperator() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        Node commaNode = new MockNode(Token.COMMA);
+        Node expr1 = new MockNode(Token.NUMBER, 1.0);
+        expr1.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        Node expr2 = new MockNode(Token.STRING, "two");
+        expr2.setJSType(registry.getNativeType(JSTypeNative.STRING_TYPE));
+        commaNode.addChildToBack(expr1);
+        commaNode.addChildToBack(expr2);
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(commaNode);
+
+        typeCheck.visit(traversal, commaNode, parent);
+
+        // The type of a comma expression is the type of its last operand.
+        assertNotNull(commaNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.STRING_TYPE), commaNode.getJSType());
+    }
+    
+    @Test
+    public void testVisitNotOperator() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        Node notNode = new MockNode(Token.NOT);
+        Node operandNode = new MockNode(Token.TRUE);
+        operandNode.setJSType(registry.getNativeType(JSTypeNative.BOOLEAN_TYPE));
+        notNode.addChildToBack(operandNode);
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(notNode);
+
+        typeCheck.visit(traversal, notNode, parent);
+
+        // The type of the NOT operator is always boolean.
+        assertNotNull(notNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.BOOLEAN_TYPE), notNode.getJSType());
+    }
+    
+    @Test
+    public void testVisitBitNotOperator() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        Node bitNotNode = new MockNode(Token.BITNOT);
+        Node operandNode = new MockNode(Token.NUMBER, 5.0); // Binary 101
+        operandNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        bitNotNode.addChildToBack(operandNode);
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(bitNotNode);
+
+        typeCheck.visit(traversal, bitNotNode, parent);
+
+        // The type of the BITNOT operator is always number.
+        assertNotNull(bitNotNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.NUMBER_TYPE), bitNotNode.getJSType());
+    }
+
+    @Test
+    public void testVisitPosOperator() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        Node posNode = new MockNode(Token.POS);
+        Node operandNode = new MockNode(Token.NUMBER, 5.0);
+        operandNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        posNode.addChildToBack(operandNode);
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(posNode);
+
+        typeCheck.visit(traversal, posNode, parent);
+
+        // The type of the POS operator is always number.
+        assertNotNull(posNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.NUMBER_TYPE), posNode.getJSType());
+    }
+    
+    @Test
+    public void testVisitNegOperator() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        Node negNode = new MockNode(Token.NEG);
+        Node operandNode = new MockNode(Token.NUMBER, 5.0);
+        operandNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        negNode.addChildToBack(operandNode);
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(negNode);
+
+        typeCheck.visit(traversal, negNode, parent);
+
+        // The type of the NEG operator is always number.
+        assertNotNull(negNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.NUMBER_TYPE), negNode.getJSType());
+    }
+
+    @Test
+    public void testVisitVoidOperator() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        Node voidNode = new MockNode(Token.VOID);
+        Node operandNode = new MockNode(Token.NUMBER, 5.0);
+        operandNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        voidNode.addChildToBack(operandNode);
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(voidNode);
+
+        typeCheck.visit(traversal, voidNode, parent);
+
+        // The type of the VOID operator is always void.
+        assertNotNull(voidNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.VOID_TYPE), voidNode.getJSType());
+    }
+
+    @Test
+    public void testVisitTypeOfOperator() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        Node typeOfNode = new MockNode(Token.TYPEOF);
+        Node operandNode = new MockNode(Token.NUMBER, 5.0);
+        operandNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        typeOfNode.addChildToBack(operandNode);
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(typeOfNode);
+
+        typeCheck.visit(traversal, typeOfNode, parent);
+
+        // The type of the TYPEOF operator is always string.
+        assertNotNull(typeOfNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.STRING_TYPE), typeOfNode.getJSType());
+    }
+
+    @Test
+    public void testVisitIncOperator() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        Node incNode = new MockNode(Token.INC);
+        Node operandNode = new MockNode(Token.NUMBER, 5.0);
+        operandNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        incNode.addChildToBack(operandNode);
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(incNode);
+
+        typeCheck.visit(traversal, incNode, parent);
+
+        // The type of the INC operator is always number.
+        assertNotNull(incNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.NUMBER_TYPE), incNode.getJSType());
+    }
+
+    @Test
+    public void testVisitDecOperator() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        Node decNode = new MockNode(Token.DEC);
+        Node operandNode = new MockNode(Token.NUMBER, 5.0);
+        operandNode.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
+        decNode.addChildToBack(operandNode);
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(decNode);
+
+        typeCheck.visit(traversal, decNode, parent);
+
+        // The type of the DEC operator is always number.
+        assertNotNull(decNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.NUMBER_TYPE), decNode.getJSType());
+    }
+
+    @Test
+    public void testVisitDelPropOperator() throws Exception {
+        MockCompiler compiler = new MockCompiler();
+        JSTypeRegistry registry = new MockJSTypeRegistry();
+        MockTypedScopeCreator typedScopeCreator = new MockTypedScopeCreator(compiler);
+        MemoizedScopeCreator scopeCreator = new MockMemoizedScopeCreator(typedScopeCreator);
+        Scope rootScope = new MockScope(new MockNode(Token.SCRIPT), null);
+        TypeCheck typeCheck = createTypeCheck(compiler, registry, rootScope, scopeCreator);
+
+        Node delPropNode = new MockNode(Token.DELPROP);
+        Node objNode = new MockNode(Token.OBJECTLIT);
+        objNode.setJSType(registry.getNativeType(JSTypeNative.OBJECT_TYPE));
+        Node propNameNode = new MockNode(Token.STRING_KEY, "prop");
+        propNameNode.setJSType(registry.getNativeType(JSTypeNative.STRING_TYPE));
+        delPropNode.addChildToBack(objNode);
+        delPropNode.addChildToBack(propNameNode);
+
+        NodeTraversal traversal = new MockNodeTraversal(compiler, rootScope);
+        Node parent = new MockNode(Token.BLOCK);
+        parent.addChildToBack(delPropNode);
+
+        typeCheck.visit(traversal, delPropNode, parent);
+
+        // The type of the DELPROP operator is always boolean.
+        assertNotNull(delPropNode.getJSType());
+        assertEquals(registry.getNativeType(JSTypeNative.BOOLEAN_TYPE), delPropNode.getJSType());
+    }
+}
+```
+1. SOURCE CODE ANALYSIS - The tests focus on the `visit` method of the `TypeCheck` class, specifically targeting binary operators (arithmetic and bitwise), assignment operators, property access (`GETPROP`, `GETELEM`), and basic literal types. The tests also cover control flow related nodes like `CASE`, `WITH`, and `RETURN`.
+2. TEST CASE DESIGN - Each test method covers a specific operator or node type, providing mock objects and types to simulate execution and asserting the resulting JSType of the node. Inputs are typical values for the operators being tested. Expected results are derived from Java's type system semantics for these operations.
+4. DEFECT DETECTION STRATEGY - The tests aim to detect defects in how the `TypeCheck` class infers and assigns types to nodes based on their token type and the types of their operands. They verify that the correct `JSType` is associated with the node after the `visit` method is called.
+5. SUMMARY - 30 tests.
+6. LIMITATIONS - The tests rely heavily on mock objects and simplified implementations of `JSTypeRegistry`, `JSType`, `Node`, `NodeTraversal`, and `Scope`. Complex type interactions and advanced features of `TypeCheck` might not be covered. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

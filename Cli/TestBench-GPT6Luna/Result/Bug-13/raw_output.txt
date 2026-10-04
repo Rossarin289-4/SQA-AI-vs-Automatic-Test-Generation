@@ -1,0 +1,284 @@
+```java
+package org.apache.commons.cli2;
+
+import junit.framework.TestCase;
+import org.apache.commons.cli2.commandline.WriteableCommandLineImpl;
+import org.apache.commons.cli2.option.ArgumentImpl;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.Map;
+import java.util.Properties;
+import java.util.Set;
+import org.apache.commons.cli2.Argument;
+import org.apache.commons.cli2.Option;
+import org.apache.commons.cli2.WriteableCommandLine;
+import org.apache.commons.cli2.resource.ResourceConstants;
+import org.apache.commons.cli2.resource.ResourceHelper;
+import java.util.Comparator;
+import java.util.ListIterator;
+import java.util.StringTokenizer;
+import org.apache.commons.cli2.DisplaySetting;
+import org.apache.commons.cli2.HelpLine;
+import org.apache.commons.cli2.OptionException;
+import org.apache.commons.cli2.validation.InvalidArgumentException;
+import org.apache.commons.cli2.validation.Validator;
+
+public class WriteableCommandLineTest extends TestCase {
+    private ArgumentImpl argument(String name, int minimum, int maximum,
+                                  char subsequentSeparator, List defaults) {
+        return new ArgumentImpl(name, null, minimum, maximum, '\0',
+                                subsequentSeparator, null, "--", defaults, 0);
+    }
+
+    private WriteableCommandLineImpl commandLine(Option root, List args) {
+        return new WriteableCommandLineImpl(root, args);
+    }
+
+    private List list(Object... values) {
+        List result = new ArrayList();
+        for (Object value : values) {
+            result.add(value);
+        }
+        return result;
+    }
+
+    public void testAddValueRegistersArgumentAndStoresValue() throws Exception {
+        ArgumentImpl arg = argument("file", 0, 2, '\0', null);
+        WriteableCommandLineImpl line = commandLine(arg, new ArrayList());
+        line.addValue(arg, "one");
+        assertTrue(line.hasOption(arg));
+        assertEquals(list("one"), line.getUndefaultedValues(arg));
+    }
+
+    public void testAddSwitchStoresFalseAndRegistersOption() throws Exception {
+        ArgumentImpl arg = argument("flag", 0, 1, '\0', null);
+        WriteableCommandLineImpl line = commandLine(arg, new ArrayList());
+        line.addSwitch(arg, false);
+        assertEquals(Boolean.FALSE, line.getSwitch(arg, null));
+        assertTrue(line.hasOption(arg));
+    }
+
+    public void testAddSwitchRejectsSecondAssignment() throws Exception {
+        ArgumentImpl arg = argument("flag", 0, 1, '\0', null);
+        WriteableCommandLineImpl line = commandLine(arg, new ArrayList());
+        line.addSwitch(arg, true);
+        try {
+            line.addSwitch(arg, false);
+            fail("expected IllegalStateException");
+        } catch (IllegalStateException expected) {
+            assertEquals(Boolean.TRUE, line.getSwitch(arg, null));
+        }
+    }
+
+    public void testGetOptionMapsPreferredName() throws Exception {
+        ArgumentImpl arg = argument("file", 0, 1, '\0', null);
+        WriteableCommandLineImpl line = commandLine(arg, new ArrayList());
+        line.addOption(arg);
+        assertSame(arg, line.getOption("file"));
+    }
+
+    public void testValuesUseCallerDefaultBeforeConfiguredDefault() throws Exception {
+        ArgumentImpl arg = argument("file", 0, 2, '\0', null);
+        WriteableCommandLineImpl line = commandLine(arg, new ArrayList());
+        List configured = list("configured");
+        List caller = list("caller");
+        line.setDefaultValues(arg, configured);
+        assertEquals(caller, line.getValues(arg, caller));
+    }
+
+    public void testValuesUseConfiguredDefaultWhenCallerDefaultEmpty() throws Exception {
+        ArgumentImpl arg = argument("file", 0, 2, '\0', null);
+        WriteableCommandLineImpl line = commandLine(arg, new ArrayList());
+        line.setDefaultValues(arg, list("configured"));
+        assertEquals(list("configured"), line.getValues(arg, Collections.EMPTY_LIST));
+    }
+
+    public void testValuesUseAddedValueAheadOfDefaults() throws Exception {
+        ArgumentImpl arg = argument("file", 0, 2, '\0', null);
+        WriteableCommandLineImpl line = commandLine(arg, new ArrayList());
+        line.setDefaultValues(arg, list("configured"));
+        line.addValue(arg, "actual");
+        assertEquals(list("actual"), line.getValues(arg, null));
+    }
+
+    public void testUndefaultedValuesAreEmptyWithoutAddedValue() throws Exception {
+        ArgumentImpl arg = argument("file", 0, 1, '\0', null);
+        WriteableCommandLineImpl line = commandLine(arg, new ArrayList());
+        assertEquals(0, line.getUndefaultedValues(arg).size());
+    }
+
+    public void testSwitchDefaultResolutionAndRemoval() throws Exception {
+        ArgumentImpl arg = argument("flag", 0, 1, '\0', null);
+        WriteableCommandLineImpl line = commandLine(arg, new ArrayList());
+        line.setDefaultSwitch(arg, Boolean.TRUE);
+        assertEquals(Boolean.FALSE, line.getSwitch(arg, Boolean.FALSE));
+        assertEquals(Boolean.TRUE, line.getSwitch(arg, null));
+        line.setDefaultSwitch(arg, null);
+        assertNull(line.getSwitch(arg, null));
+    }
+
+    public void testPropertiesReplaceAndUseProvidedFallback() throws Exception {
+        ArgumentImpl arg = argument("file", 0, 1, '\0', null);
+        WriteableCommandLineImpl line = commandLine(arg, new ArrayList());
+        assertEquals("fallback", line.getProperty("key", "fallback"));
+        line.addProperty("key", "first");
+        line.addProperty("key", "last");
+        assertEquals("last", line.getProperty("key", "fallback"));
+        assertEquals(1, line.getProperties().size());
+    }
+
+    public void testLooksLikeOptionUsesRootPrefixes() throws Exception {
+        ArgumentImpl root = argument("root", 0, 1, '\0', null);
+        WriteableCommandLineImpl line = commandLine(root, new ArrayList());
+        assertFalse(line.looksLikeOption("--name"));
+        assertFalse(line.looksLikeOption("name"));
+    }
+
+    public void testToStringQuotesArgumentsContainingSpaces() throws Exception {
+        ArgumentImpl root = argument("root", 0, 1, '\0', null);
+        WriteableCommandLineImpl line =
+            commandLine(root, list("plain", "two words", "end"));
+        assertEquals("plain \"two words\" end", line.toString());
+    }
+
+    public void testOptionsAndTriggersExposeAddedOptionNames() throws Exception {
+        ArgumentImpl arg = argument("file", 0, 1, '\0', null);
+        WriteableCommandLineImpl line = commandLine(arg, new ArrayList());
+        line.addOption(arg);
+        assertEquals(1, line.getOptions().size());
+        assertSame(arg, line.getOptions().get(0));
+        assertTrue(line.getOptionTriggers().contains("file"));
+    }
+
+    public void testSetDefaultValuesNullRemovesStoredDefaults() throws Exception {
+        ArgumentImpl arg = argument("file", 0, 1, '\0', null);
+        WriteableCommandLineImpl line = commandLine(arg, new ArrayList());
+        line.setDefaultValues(arg, list("default"));
+        line.setDefaultValues(arg, null);
+        assertEquals(0, line.getValues(arg, null).size());
+    }
+
+    public void testNormalisedListAndArgumentStringAreRetained() throws Exception {
+        ArgumentImpl root = argument("root", 0, 1, '\0', null);
+        List normalized = list("a", "b");
+        WriteableCommandLineImpl line = commandLine(root, normalized);
+        assertEquals(normalized, line.getNormalised());
+        assertEquals("a b", line.toString());
+    }
+
+    public void testProcessValuesSplitsAtSubsequentSeparator() throws Exception {
+        ArgumentImpl arg = argument("item", 0, 3, ',', null);
+        WriteableCommandLineImpl line = commandLine(arg, new ArrayList());
+        List args = list("a,b");
+        arg.processValues(line, args.listIterator(), arg);
+        assertEquals(list("a", "b"), line.getUndefaultedValues(arg));
+        assertEquals(list("a", "b"), args);
+    }
+
+    public void testProcessValuesStopsAtOptionPrefix() throws Exception {
+        ArgumentImpl root = argument("root", 0, 1, '\0', null);
+        WriteableCommandLineImpl line = commandLine(root, new ArrayList());
+        ArgumentImpl arg = argument("item", 0, 2, '\0', null);
+        List args = list("first", "-next");
+        ListIterator iterator = args.listIterator();
+        arg.processValues(line, iterator, arg);
+        assertEquals(list("first"), line.getUndefaultedValues(arg));
+        assertEquals("-next", iterator.next());
+    }
+
+    public void testProcessValuesConsumesRemainingUpToMaximum() throws Exception {
+        ArgumentImpl arg = argument("item", 0, 2, '\0', null);
+        WriteableCommandLineImpl line = commandLine(arg, new ArrayList());
+        List args = list("--", "one", "two");
+        arg.processValues(line, args.listIterator(), arg);
+        assertEquals(list("one", "two"), line.getUndefaultedValues(arg));
+    }
+
+    public void testProcessValuesDoesNotExceedMaximum() throws Exception {
+        ArgumentImpl arg = argument("item", 0, 1, '\0', null);
+        WriteableCommandLineImpl line = commandLine(arg, new ArrayList());
+        List args = list("first", "second");
+        ListIterator iterator = args.listIterator();
+        arg.processValues(line, iterator, arg);
+        assertEquals(list("first"), line.getUndefaultedValues(arg));
+        assertEquals("second", iterator.next());
+    }
+
+    public void testStripBoundaryQuotesRequiresBothQuotes() throws Exception {
+        ArgumentImpl arg = argument("item", 0, 1, '\0', null);
+        assertEquals("word", arg.stripBoundaryQuotes("\"word\""));
+        assertEquals("\"word", arg.stripBoundaryQuotes("\"word"));
+        assertEquals("word\"", arg.stripBoundaryQuotes("word\""));
+    }
+
+    public void testValidateAcceptsValueAtMinimumAndMaximum() throws Exception {
+        ArgumentImpl arg = argument("item", 1, 2, '\0', null);
+        WriteableCommandLineImpl line = commandLine(arg, new ArrayList());
+        line.addValue(arg, "one");
+        line.addValue(arg, "two");
+        arg.validate(line);
+        assertEquals(2, line.getUndefaultedValues(arg).size());
+    }
+
+    public void testValidateRejectsMissingRequiredValue() throws Exception {
+        ArgumentImpl arg = argument("item", 1, 1, '\0', null);
+        WriteableCommandLineImpl line = commandLine(arg, new ArrayList());
+        try {
+            arg.validate(line);
+            fail("expected OptionException");
+        } catch (OptionException expected) {
+            assertSame(arg, expected.getOption());
+        }
+    }
+
+    public void testDefaultsTransferArgumentDefaultsToCommandLine() throws Exception {
+        ArgumentImpl arg = argument("item", 0, 2, '\0', list("default"));
+        WriteableCommandLineImpl line = commandLine(arg, new ArrayList());
+        arg.defaults(line);
+        assertEquals(list("default"), line.getValues(arg, null));
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+Tested command-line value/default precedence, option registration, switches, properties, prefixes, normalized rendering, and argument processing, splitting, quote stripping, and validation.  
+The supplied source does not establish any non-empty root prefixes for `ArgumentImpl`; prefix assertions therefore check its empty-prefix behavior.
+
+### 2. TEST CASE DESIGN
+- `testAddValueRegistersArgumentAndStoresValue`: add `"one"` to an argument; it is registered and its undefaulted values contain `"one"`.
+- `testAddSwitchStoresFalseAndRegistersOption`: add a false switch; lookup returns `Boolean.FALSE` and the argument is registered.
+- `testAddSwitchRejectsSecondAssignment`: set true then set again; the second call throws `IllegalStateException`, leaving true stored.
+- `testGetOptionMapsPreferredName`: add an argument; its preferred name maps to the same option.
+- `testValuesUseCallerDefaultBeforeConfiguredDefault`: with both defaults available and no values, the caller list wins.
+- `testValuesUseConfiguredDefaultWhenCallerDefaultEmpty`: an empty caller list falls through to configured defaults.
+- `testValuesUseAddedValueAheadOfDefaults`: a command-line value takes precedence over configured defaults.
+- `testUndefaultedValuesAreEmptyWithoutAddedValue`: no added value yields an empty list.
+- `testSwitchDefaultResolutionAndRemoval`: caller default precedes configured default; removing configured default leaves null.
+- `testPropertiesReplaceAndUseProvidedFallback`: missing property uses fallback; repeated assignment replaces its value.
+- `testLooksLikeOptionUsesRootPrefixes`: `ArgumentImpl.getPrefixes()` is empty, so neither input is considered an option.
+- `testToStringQuotesArgumentsContainingSpaces`: normalized arguments with spaces are surrounded by quotes.
+- `testOptionsAndTriggersExposeAddedOptionNames`: adding an option records one option and its preferred name in the trigger set.
+- `testSetDefaultValuesNullRemovesStoredDefaults`: setting defaults to null removes them, leaving the empty-list fallback.
+- `testNormalisedListAndArgumentStringAreRetained`: normalized input is returned and joined with a single space.
+- `testProcessValuesSplitsAtSubsequentSeparator`: `"a,b"` splits into two values and the normalized iterator list is rewritten accordingly.
+- `testProcessValuesStopsAtOptionPrefix`: processing stores `"first"` and backs up before the `-next` token.
+- `testProcessValuesConsumesRemainingUpToMaximum`: `"--"` consumes the following two values, up to the maximum.
+- `testProcessValuesDoesNotExceedMaximum`: maximum one stores only `"first"` and leaves `"second"` unread.
+- `testStripBoundaryQuotesRequiresBothQuotes`: paired boundary quotes are removed; unmatched quotes are retained.
+- `testValidateAcceptsValueAtMinimumAndMaximum`: two values satisfy minimum one and maximum two.
+- `testValidateRejectsMissingRequiredValue`: zero values violate minimum one and yield an `OptionException` for that argument.
+- `testDefaultsTransferArgumentDefaultsToCommandLine`: argument defaults are installed and returned by value lookup.
+
+### 4. DEFECT DETECTION STRATEGY
+The tests pin state registration and precedence, parsing and maximum-count boundaries, and exact rendering of normalized inputs.  
+They make no claim about outcomes on a defective version.
+
+### 5. SUMMARY
+23 independent test methods.
+
+### 6. LIMITATIONS
+The prompt gives only an API outline for several related classes, so the tests avoid relying on their unshown behavior.  
+Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

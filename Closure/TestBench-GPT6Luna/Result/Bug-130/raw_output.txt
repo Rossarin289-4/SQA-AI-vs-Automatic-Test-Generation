@@ -1,0 +1,208 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Predicates;
+import com.google.common.collect.Iterables;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Sets;
+import com.google.javascript.jscomp.GlobalNamespace.Name;
+import com.google.javascript.jscomp.GlobalNamespace.Ref;
+import com.google.javascript.jscomp.GlobalNamespace.Ref.Type;
+import com.google.javascript.jscomp.ReferenceCollectingCallback;
+import com.google.javascript.jscomp.ReferenceCollectingCallback.ReferenceCollection;
+import com.google.javascript.jscomp.Scope;
+import com.google.javascript.jscomp.Scope.Var;
+import com.google.javascript.rhino.IR;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.TokenStream;
+import com.google.javascript.rhino.jstype.JSType;
+import java.util.ArrayDeque;
+import java.util.Deque;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+public class CollapsePropertiesTest {
+    @Test
+    public void testEmptyScriptProcessing() throws Exception {
+        Compiler compiler = new Compiler();
+        CollapseProperties pass = new CollapseProperties(compiler, false, false);
+        Node root = IR.script();
+        pass.process(null, root);
+        assertEquals(Token.SCRIPT, root.getType());
+        assertFalse(root.hasChildren());
+    }
+
+    @Test
+    public void testSimpleGlobalVariableProcessing() throws Exception {
+        Compiler compiler = new Compiler();
+        CollapseProperties pass = new CollapseProperties(compiler, false, false);
+        Node root = IR.script(IR.var(IR.name("v"), IR.number(1)));
+        pass.process(null, root);
+        assertEquals(Token.SCRIPT, root.getType());
+        assertEquals(Token.VAR, root.getFirstChild().getType());
+        assertEquals("v", root.getFirstChild().getFirstChild().getString());
+        assertEquals(1.0, root.getFirstChild().getFirstChild()
+                .getFirstChild().getDouble(), 0.0);
+    }
+
+    @Test
+    public void testEmptyScriptWithInliningEnabled() throws Exception {
+        Compiler compiler = new Compiler();
+        CollapseProperties pass = new CollapseProperties(compiler, false, true);
+        Node root = IR.script();
+        pass.process(null, root);
+        assertEquals(Token.SCRIPT, root.getType());
+        assertFalse(root.hasChildren());
+    }
+
+    @Test
+    public void testNestedGlobalObjectLiteralProcessing() throws Exception {
+        Compiler compiler = new Compiler();
+        CollapseProperties pass = new CollapseProperties(compiler, false, false);
+        Node root = IR.script(IR.var(IR.name("ns"),
+                IR.objectlit(IR.stringKey("item", IR.number(3)))));
+        pass.process(null, root);
+        assertEquals(Token.SCRIPT, root.getType());
+        assertNotNull(root.getFirstChild());
+        assertEquals(Token.VAR, root.getFirstChild().getType());
+    }
+
+    @Test
+    public void testGlobalPropertyReadProcessing() throws Exception {
+        Compiler compiler = new Compiler();
+        CollapseProperties pass = new CollapseProperties(compiler, false, false);
+        Node root = IR.script(
+                IR.var(IR.name("space"),
+                        IR.objectlit(IR.stringKey("value", IR.number(4)))),
+                IR.exprResult(IR.getprop(IR.name("space"), "value")));
+        pass.process(null, root);
+        assertEquals(Token.SCRIPT, root.getType());
+        assertNotNull(root.getFirstChild());
+        assertNotNull(root.getLastChild());
+    }
+
+    @Test
+    public void testGlobalPropertyAssignmentProcessing() throws Exception {
+        Compiler compiler = new Compiler();
+        CollapseProperties pass = new CollapseProperties(compiler, false, false);
+        Node root = IR.script(
+                IR.var(IR.name("space"), IR.objectlit()),
+                IR.exprResult(IR.assign(
+                        IR.getprop(IR.name("space"), "value"), IR.number(5))));
+        pass.process(null, root);
+        assertEquals(Token.SCRIPT, root.getType());
+        assertNotNull(root.getFirstChild());
+    }
+
+    @Test
+    public void testDollarInPropertyNameProcessing() throws Exception {
+        Compiler compiler = new Compiler();
+        CollapseProperties pass = new CollapseProperties(compiler, false, false);
+        Node root = IR.script(
+                IR.var(IR.name("space"),
+                        IR.objectlit(IR.stringKey("a$b", IR.number(6)))),
+                IR.exprResult(IR.getprop(IR.name("space"), "a$b")));
+        pass.process(null, root);
+        assertEquals(Token.SCRIPT, root.getType());
+        assertNotNull(root.getFirstChild());
+    }
+
+    @Test
+    public void testComputedPropertyAccessRemainsProcessable() throws Exception {
+        Compiler compiler = new Compiler();
+        CollapseProperties pass = new CollapseProperties(compiler, false, false);
+        Node root = IR.script(
+                IR.var(IR.name("space"),
+                        IR.objectlit(IR.stringKey("value", IR.number(7)))),
+                IR.exprResult(IR.getelem(IR.name("space"), IR.string("value"))));
+        pass.process(null, root);
+        assertEquals(Token.SCRIPT, root.getType());
+        assertEquals(Token.GETELEM,
+                root.getLastChild().getFirstChild().getType());
+    }
+
+    @Test
+    public void testRepeatedNamespaceDefinitionProcessing() throws Exception {
+        Compiler compiler = new Compiler();
+        CollapseProperties pass = new CollapseProperties(compiler, false, false);
+        Node root = IR.script(
+                IR.var(IR.name("space"), IR.objectlit()),
+                IR.exprResult(IR.assign(IR.name("space"), IR.objectlit())));
+        pass.process(null, root);
+        assertEquals(Token.SCRIPT, root.getType());
+        assertNotNull(root.getFirstChild());
+    }
+
+    @Test
+    public void testLocalFunctionInsidePropertyProcessing() throws Exception {
+        Compiler compiler = new Compiler();
+        CollapseProperties pass = new CollapseProperties(compiler, false, false);
+        Node fn = IR.function(IR.name(""), IR.paramList(), IR.block());
+        Node root = IR.script(IR.var(IR.name("space"),
+                IR.objectlit(IR.stringKey("run", fn))));
+        pass.process(null, root);
+        assertEquals(Token.SCRIPT, root.getType());
+        assertNotNull(root.getFirstChild());
+    }
+
+    @Test
+    public void testExternRootOverloadProcessing() throws Exception {
+        Compiler compiler = new Compiler();
+        CollapseProperties pass = new CollapseProperties(compiler, true, false);
+        Node externs = IR.script();
+        Node root = IR.script();
+        pass.process(externs, root);
+        assertEquals(Token.SCRIPT, root.getType());
+        assertFalse(root.hasChildren());
+    }
+
+    @Test
+    public void testNestedPropertyReadProcessing() throws Exception {
+        Compiler compiler = new Compiler();
+        CollapseProperties pass = new CollapseProperties(compiler, false, false);
+        Node root = IR.script(
+                IR.var(IR.name("space"), IR.objectlit(
+                        IR.stringKey("inner",
+                                IR.objectlit(IR.stringKey("value", IR.number(8)))))),
+                IR.exprResult(IR.getprop(
+                        IR.getprop(IR.name("space"), "inner"), "value")));
+        pass.process(null, root);
+        assertEquals(Token.SCRIPT, root.getType());
+        assertNotNull(root.getFirstChild());
+        assertNotNull(root.getLastChild());
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+`process` constructs a namespace, optionally inlines aliases, checks namespaces, flattens references, and rewrites declarations.
+Tests exercise both constructor flags and representative empty, simple, nested, computed-access, and reassignment inputs.
+
+### 2. TEST CASE DESIGN
+- `testEmptyScriptProcessing`: empty script, no children; processing an empty tree leaves it empty.
+- `testSimpleGlobalVariableProcessing`: `var v = 1`, retaining the variable and numeric initializer.
+- `testEmptyScriptWithInliningEnabled`: empty script with alias inlining enabled, remains empty.
+- `testNestedGlobalObjectLiteralProcessing`: object-literal namespace, root and declaration remain present.
+- `testGlobalPropertyReadProcessing`: initialized property and read, both script endpoints remain present.
+- `testGlobalPropertyAssignmentProcessing`: namespace and property assignment, script remains processable.
+- `testDollarInPropertyNameProcessing`: property containing `$`, script remains processable.
+- `testComputedPropertyAccessRemainsProcessable`: computed access, whose AST node remains `GETELEM`.
+- `testRepeatedNamespaceDefinitionProcessing`: repeated namespace assignment, root and first statement remain present.
+- `testLocalFunctionInsidePropertyProcessing`: function-valued object property, root and declaration remain present.
+- `testExternRootOverloadProcessing`: empty externs and root with extern collapsing enabled, root remains empty.
+- `testNestedPropertyReadProcessing`: nested object property read, root and script endpoints remain present.
+
+### 4. DEFECT DETECTION STRATEGY
+These tests pin basic processing completion, selected tree structure, and the explicit preservation of computed property access. No detection outcome is claimed.
+
+### 5. SUMMARY
+12 tests.
+
+### 6. LIMITATIONS
+The supplied source does not expose a compiler setup helper or direct observable outputs for most rewrite paths, so assertions are intentionally conservative. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

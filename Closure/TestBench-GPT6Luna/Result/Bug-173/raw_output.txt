@@ -1,0 +1,234 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Charsets;
+import com.google.common.base.Preconditions;
+import com.google.common.collect.Maps;
+import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.TokenStream;
+import java.io.IOException;
+import java.nio.charset.Charset;
+import java.nio.charset.CharsetEncoder;
+import java.util.Map;
+import com.google.common.base.Joiner;
+import com.google.common.collect.ImmutableSet;
+import com.google.javascript.jscomp.CodingConvention.Bind;
+import com.google.javascript.rhino.IR;
+import java.util.regex.Pattern;
+
+public class CodeGeneratorTest {
+    @Test
+    public void testSimpleNumberZero() throws Exception {
+        assertTrue(CodeGenerator.isSimpleNumber("0"));
+        assertEquals(0.0, CodeGenerator.getSimpleNumber("0"), 0.0);
+    }
+
+    @Test
+    public void testSimpleNumberPositiveDigits() throws Exception {
+        assertTrue(CodeGenerator.isSimpleNumber("123"));
+        assertEquals(123.0, CodeGenerator.getSimpleNumber("123"), 0.0);
+    }
+
+    @Test
+    public void testSimpleNumberRejectsEmptyAndLeadingZero() throws Exception {
+        assertFalse(CodeGenerator.isSimpleNumber(""));
+        assertFalse(CodeGenerator.isSimpleNumber("01"));
+        assertTrue(Double.isNaN(CodeGenerator.getSimpleNumber("01")));
+    }
+
+    @Test
+    public void testSimpleNumberRejectsNondigits() throws Exception {
+        assertFalse(CodeGenerator.isSimpleNumber("-1"));
+        assertFalse(CodeGenerator.isSimpleNumber("1.0"));
+        assertTrue(Double.isNaN(CodeGenerator.getSimpleNumber("-1")));
+    }
+
+    @Test
+    public void testSimpleNumberMaximumAcceptedBelowNodeLimit() throws Exception {
+        assertEquals(9007199254740990.0,
+                CodeGenerator.getSimpleNumber("9007199254740990"), 0.0);
+    }
+
+    @Test
+    public void testSimpleNumberNodeLimitIsNotAccepted() throws Exception {
+        assertTrue(Double.isNaN(
+                CodeGenerator.getSimpleNumber("9007199254740991")));
+    }
+
+    @Test
+    public void testSimpleNumberLongParseOverflow() throws Exception {
+        assertTrue(Double.isNaN(
+                CodeGenerator.getSimpleNumber("9223372036854775808")));
+    }
+
+    @Test
+    public void testContainsUnicodeEscapeForNonLatinCharacter() throws Exception {
+        assertTrue(PeepholeSubstituteAlternateSyntax.containsUnicodeEscape("é"));
+    }
+
+    @Test
+    public void testContainsUnicodeEscapeDoesNotMistakeLiteralSlashU() throws Exception {
+        assertFalse(PeepholeSubstituteAlternateSyntax.containsUnicodeEscape("\\u"));
+    }
+
+    @Test
+    public void testContainsUnicodeEscapeForSupplementaryCharacter() throws Exception {
+        assertTrue(PeepholeSubstituteAlternateSyntax.containsUnicodeEscape("😀"));
+    }
+
+    @Test
+    public void testLateBooleanOptimizationRewritesTrue() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimization =
+                new PeepholeSubstituteAlternateSyntax(true);
+        Node script = IR.script(IR.exprResult(IR.trueNode()));
+        Node original = script.getFirstChild().getFirstChild();
+
+        Node result = optimization.optimizeSubtree(original);
+
+        assertEquals(Token.NOT, result.getType());
+        assertEquals(Token.NUMBER, result.getFirstChild().getType());
+        assertEquals(0.0, result.getFirstChild().getDouble(), 0.0);
+    }
+
+    @Test
+    public void testEarlyBooleanOptimizationLeavesTrue() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimization =
+                new PeepholeSubstituteAlternateSyntax(false);
+        Node script = IR.script(IR.exprResult(IR.trueNode()));
+        Node original = script.getFirstChild().getFirstChild();
+
+        assertSame(original, optimization.optimizeSubtree(original));
+        assertEquals(Token.TRUE, original.getType());
+    }
+
+    @Test
+    public void testLateBooleanOptimizationRewritesFalse() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimization =
+                new PeepholeSubstituteAlternateSyntax(true);
+        Node script = IR.script(IR.exprResult(IR.falseNode()));
+        Node original = script.getFirstChild().getFirstChild();
+
+        Node result = optimization.optimizeSubtree(original);
+
+        assertEquals(Token.NOT, result.getType());
+        assertEquals(1.0, result.getFirstChild().getDouble(), 0.0);
+    }
+
+    @Test
+    public void testReturnUndefinedBecomesBareReturn() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimization =
+                new PeepholeSubstituteAlternateSyntax(false);
+        Node script = IR.script(IR.returnNode(IR.name("undefined")));
+        Node result = optimization.optimizeSubtree(script.getFirstChild());
+
+        assertEquals(Token.RETURN, result.getType());
+        assertFalse(result.hasChildren());
+    }
+
+    @Test
+    public void testReturnVoidPureExpressionBecomesBareReturn() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimization =
+                new PeepholeSubstituteAlternateSyntax(false);
+        Node script = IR.script(IR.returnNode(IR.voidNode(IR.number(1))));
+        Node result = optimization.optimizeSubtree(script.getFirstChild());
+
+        assertEquals(Token.RETURN, result.getType());
+        assertFalse(result.hasChildren());
+    }
+
+    @Test
+    public void testReturnVoidCallIsPreserved() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimization =
+                new PeepholeSubstituteAlternateSyntax(false);
+        Node script = IR.script(IR.returnNode(IR.voidNode(IR.call(IR.name("f")))));
+        Node result = optimization.optimizeSubtree(script.getFirstChild());
+
+        assertEquals(Token.RETURN, result.getType());
+        assertEquals(Token.VOID, result.getFirstChild().getType());
+    }
+
+    @Test
+    public void testNameUndefinedIsUnchangedWhenNotNormalized() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimization =
+                new PeepholeSubstituteAlternateSyntax(false);
+        Node script = IR.script(IR.exprResult(IR.name("undefined")));
+        Node original = script.getFirstChild().getFirstChild();
+
+        assertSame(original, optimization.optimizeSubtree(original));
+        assertEquals(Token.NAME, original.getType());
+    }
+
+    @Test
+    public void testObjectConstructorNotFoldedWhenNotNormalized() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimization =
+                new PeepholeSubstituteAlternateSyntax(false);
+        Node script = IR.script(IR.exprResult(IR.call(IR.name("Object"))));
+        Node original = script.getFirstChild().getFirstChild();
+
+        assertSame(original, optimization.optimizeSubtree(original));
+        assertEquals(Token.CALL, original.getType());
+    }
+
+    @Test
+    public void testArrayConstructorNotFoldedWhenNotNormalized() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimization =
+                new PeepholeSubstituteAlternateSyntax(false);
+        Node script = IR.script(IR.exprResult(IR.call(
+                IR.name("Array"), IR.string("x"))));
+        Node original = script.getFirstChild().getFirstChild();
+
+        assertSame(original, optimization.optimizeSubtree(original));
+        assertEquals(Token.CALL, original.getType());
+    }
+
+    @Test
+    public void testRegularExpressionConstructorNotFoldedWhenNotNormalized() throws Exception {
+        PeepholeSubstituteAlternateSyntax optimization =
+                new PeepholeSubstituteAlternateSyntax(false);
+        Node script = IR.script(IR.exprResult(IR.call(
+                IR.name("RegExp"), IR.string("ab"))));
+        Node original = script.getFirstChild().getFirstChild();
+
+        assertSame(original, optimization.optimizeSubtree(original));
+        assertEquals(Token.CALL, original.getType());
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+The specified target was unavailable, so method selection is exploratory. Tests cover `CodeGenerator`’s simple-number parsing and Unicode-escape detection, plus branches in `PeepholeSubstituteAlternateSyntax.optimizeSubtree`, including booleans, returns, and normalization-dependent behavior.
+
+### 2. TEST CASE DESIGN
+- `testSimpleNumberZero`: `"0"`; simple number and parsed value are 0.
+- `testSimpleNumberPositiveDigits`: `"123"`; digit-only input parses to 123.
+- `testSimpleNumberRejectsEmptyAndLeadingZero`: empty and `"01"`; neither qualifies as a simple number.
+- `testSimpleNumberRejectsNondigits`: `"-1"` and `"1.0"`; nondigits are rejected.
+- `testSimpleNumberMaximumAcceptedBelowNodeLimit`: `"9007199254740990"`; below `MAX_POSITIVE_INTEGER_NUMBER` and representable as a double.
+- `testSimpleNumberNodeLimitIsNotAccepted`: `"9007199254740991"`; the strict-less-than condition fails.
+- `testSimpleNumberLongParseOverflow`: `"9223372036854775808"`; exceeds `Long.MAX_VALUE`, so parsing falls through to NaN.
+- `testContainsUnicodeEscapeForNonLatinCharacter`: `"é"`; ASCII-default escaping writes a Unicode escape.
+- `testContainsUnicodeEscapeDoesNotMistakeLiteralSlashU`: `"\\u"`; the escaped backslash makes the `\u` sequence literal.
+- `testContainsUnicodeEscapeForSupplementaryCharacter`: `"😀"`; surrogate escapes are emitted.
+- `testLateBooleanOptimizationRewritesTrue`: true in late mode becomes `!0`.
+- `testEarlyBooleanOptimizationLeavesTrue`: true in early mode is returned unchanged.
+- `testLateBooleanOptimizationRewritesFalse`: false in late mode becomes `!1`.
+- `testReturnUndefinedBecomesBareReturn`: `return undefined`; the name is removed.
+- `testReturnVoidPureExpressionBecomesBareReturn`: `return void 1`; the operand has no side effects.
+- `testReturnVoidCallIsPreserved`: `return void f()`; a call may have side effects.
+- `testNameUndefinedIsUnchangedWhenNotNormalized`: unnormalized `undefined` does not meet the replacement precondition.
+- `testObjectConstructorNotFoldedWhenNotNormalized`: unnormalized `Object()` is not folded.
+- `testArrayConstructorNotFoldedWhenNotNormalized`: unnormalized `Array("x")` is not folded.
+- `testRegularExpressionConstructorNotFoldedWhenNotNormalized`: unnormalized `RegExp("ab")` is not folded.
+
+### 4. DEFECT DETECTION STRATEGY
+The tests pin exact simple-number thresholds, Unicode escaping behavior, and selected optimization transformations or their stated precondition-dependent no-op behavior.
+
+### 5. SUMMARY
+20 tests.
+
+### 6. LIMITATIONS
+The target method was not specified; optimization tests cover only the visible paths that can be evaluated without compiler setup. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

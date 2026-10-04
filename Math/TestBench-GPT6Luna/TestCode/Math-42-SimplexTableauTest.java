@@ -1,0 +1,230 @@
+package org.apache.commons.math.optimization.linear;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import org.apache.commons.math.linear.Array2DRowRealMatrix;
+import org.apache.commons.math.linear.MatrixUtils;
+import org.apache.commons.math.linear.RealMatrix;
+import org.apache.commons.math.linear.RealVector;
+import org.apache.commons.math.optimization.GoalType;
+import org.apache.commons.math.optimization.RealPointValuePair;
+import org.apache.commons.math.util.Precision;
+
+public class SimplexTableauTest {
+
+    private LinearConstraint constraint(double coefficient, Relationship relationship,
+                                        double value) {
+        return new LinearConstraint(new double[] { coefficient }, relationship, value);
+    }
+
+    private LinearObjectiveFunction objective() {
+        return new LinearObjectiveFunction(new double[] { 1 }, 0);
+    }
+
+    @Test
+    public void testNormalizeNegativeRightHandSideReversesCoefficientsAndRelationship()
+            throws Exception {
+        List<LinearConstraint> input = new ArrayList<LinearConstraint>();
+        input.add(constraint(2, Relationship.LEQ, -3));
+        List<LinearConstraint> result = new SimplexTableau(
+                objective(), input, GoalType.MAXIMIZE, true, 1e-6)
+                .normalizeConstraints(input);
+        assertEquals(1, result.size());
+        assertEquals(-2.0, result.get(0).getCoefficients().getEntry(0), 0.0);
+        assertEquals(Relationship.GEQ, result.get(0).getRelationship());
+        assertEquals(3.0, result.get(0).getValue(), 0.0);
+    }
+
+    @Test
+    public void testNormalizeNegativeEqualityKeepsEquivalentConstraint()
+            throws Exception {
+        List<LinearConstraint> input = new ArrayList<LinearConstraint>();
+        input.add(constraint(4, Relationship.EQ, -5));
+        List<LinearConstraint> result = new SimplexTableau(
+                objective(), input, GoalType.MAXIMIZE, true, 1e-6)
+                .normalizeConstraints(input);
+        assertEquals(-4.0, result.get(0).getCoefficients().getEntry(0), 0.0);
+        assertEquals(Relationship.EQ, result.get(0).getRelationship());
+        assertEquals(5.0, result.get(0).getValue(), 0.0);
+    }
+
+    @Test
+    public void testNormalizeZeroRightHandSideDoesNotReverseConstraint()
+            throws Exception {
+        List<LinearConstraint> input = new ArrayList<LinearConstraint>();
+        input.add(constraint(2, Relationship.LEQ, 0));
+        List<LinearConstraint> result = new SimplexTableau(
+                objective(), input, GoalType.MAXIMIZE, true, 1e-6)
+                .normalizeConstraints(input);
+        assertEquals(2.0, result.get(0).getCoefficients().getEntry(0), 0.0);
+        assertEquals(Relationship.LEQ, result.get(0).getRelationship());
+        assertEquals(0.0, result.get(0).getValue(), 0.0);
+    }
+
+    @Test
+    public void testNormalizePositiveRightHandSideLeavesConstraintUnchanged()
+            throws Exception {
+        List<LinearConstraint> input = new ArrayList<LinearConstraint>();
+        input.add(constraint(-3, Relationship.GEQ, 7));
+        List<LinearConstraint> result = new SimplexTableau(
+                objective(), input, GoalType.MAXIMIZE, true, 1e-6)
+                .normalizeConstraints(input);
+        assertEquals(-3.0, result.get(0).getCoefficients().getEntry(0), 0.0);
+        assertEquals(Relationship.GEQ, result.get(0).getRelationship());
+        assertEquals(7.0, result.get(0).getValue(), 0.0);
+    }
+
+    @Test
+    public void testNormalizeMultipleConstraintsPreservesOrder()
+            throws Exception {
+        List<LinearConstraint> input = new ArrayList<LinearConstraint>();
+        input.add(constraint(1, Relationship.LEQ, 2));
+        input.add(constraint(3, Relationship.GEQ, -4));
+        List<LinearConstraint> result = new SimplexTableau(
+                objective(), input, GoalType.MAXIMIZE, true, 1e-6)
+                .normalizeConstraints(input);
+        assertEquals(2, result.size());
+        assertEquals(Relationship.LEQ, result.get(0).getRelationship());
+        assertEquals(2.0, result.get(0).getValue(), 0.0);
+        assertEquals(Relationship.LEQ, result.get(1).getRelationship());
+        assertEquals(-3.0, result.get(1).getCoefficients().getEntry(0), 0.0);
+        assertEquals(4.0, result.get(1).getValue(), 0.0);
+    }
+
+    @Test
+    public void testNormalizeEmptyCollectionIsEmpty() throws Exception {
+        List<LinearConstraint> input = new ArrayList<LinearConstraint>();
+        List<LinearConstraint> result = new SimplexTableau(
+                objective(), input, GoalType.MAXIMIZE, true, 1e-6)
+                .normalizeConstraints(input);
+        assertEquals(0, result.size());
+    }
+
+    @Test
+    public void testEqualTableauxWithSameConfiguration() throws Exception {
+        List<LinearConstraint> constraints = new ArrayList<LinearConstraint>();
+        constraints.add(constraint(1, Relationship.LEQ, 2));
+        SimplexTableau first = new SimplexTableau(
+                objective(), constraints, GoalType.MAXIMIZE, true, 1e-6);
+        SimplexTableau second = new SimplexTableau(
+                objective(), constraints, GoalType.MAXIMIZE, true, 1e-6);
+        assertTrue(first.equals(second));
+    }
+
+    @Test
+    public void testEqualsIsReflexive() throws Exception {
+        List<LinearConstraint> constraints = new ArrayList<LinearConstraint>();
+        SimplexTableau tableau = new SimplexTableau(
+                objective(), constraints, GoalType.MAXIMIZE, true, 1e-6);
+        assertTrue(tableau.equals(tableau));
+    }
+
+    @Test
+    public void testEqualsRejectsNull() throws Exception {
+        List<LinearConstraint> constraints = new ArrayList<LinearConstraint>();
+        SimplexTableau tableau = new SimplexTableau(
+                objective(), constraints, GoalType.MAXIMIZE, true, 1e-6);
+        assertFalse(tableau.equals(null));
+    }
+
+    @Test
+    public void testEqualsRejectsDifferentObjectType() throws Exception {
+        List<LinearConstraint> constraints = new ArrayList<LinearConstraint>();
+        SimplexTableau tableau = new SimplexTableau(
+                objective(), constraints, GoalType.MAXIMIZE, true, 1e-6);
+        assertFalse(tableau.equals("tableau"));
+    }
+
+    @Test
+    public void testEqualsRejectsDifferentObjectiveCoefficients() throws Exception {
+        List<LinearConstraint> constraints = new ArrayList<LinearConstraint>();
+        SimplexTableau first = new SimplexTableau(
+                objective(), constraints, GoalType.MAXIMIZE, true, 1e-6);
+        SimplexTableau second = new SimplexTableau(
+                new LinearObjectiveFunction(new double[] { 2 }, 0),
+                constraints, GoalType.MAXIMIZE, true, 1e-6);
+        assertFalse(first.equals(second));
+    }
+
+    @Test
+    public void testEqualsRejectsDifferentGoalTableau() throws Exception {
+        List<LinearConstraint> constraints = new ArrayList<LinearConstraint>();
+        SimplexTableau first = new SimplexTableau(
+                objective(), constraints, GoalType.MAXIMIZE, true, 1e-6);
+        SimplexTableau second = new SimplexTableau(
+                objective(), constraints, GoalType.MINIMIZE, true, 1e-6);
+        assertFalse(first.equals(second));
+    }
+
+    @Test
+    public void testEqualsRejectsDifferentNonnegativeRestriction() throws Exception {
+        List<LinearConstraint> constraints = new ArrayList<LinearConstraint>();
+        SimplexTableau first = new SimplexTableau(
+                objective(), constraints, GoalType.MAXIMIZE, true, 1e-6);
+        SimplexTableau second = new SimplexTableau(
+                objective(), constraints, GoalType.MAXIMIZE, false, 1e-6);
+        assertFalse(first.equals(second));
+    }
+
+    @Test
+    public void testEqualsRejectsDifferentEpsilon() throws Exception {
+        List<LinearConstraint> constraints = new ArrayList<LinearConstraint>();
+        SimplexTableau first = new SimplexTableau(
+                objective(), constraints, GoalType.MAXIMIZE, true, 1e-6);
+        SimplexTableau second = new SimplexTableau(
+                objective(), constraints, GoalType.MAXIMIZE, true, 2e-6);
+        assertFalse(first.equals(second));
+    }
+
+    @Test
+    public void testEqualsRejectsDifferentMaximumUlps() throws Exception {
+        List<LinearConstraint> constraints = new ArrayList<LinearConstraint>();
+        SimplexTableau first = new SimplexTableau(
+                objective(), constraints, GoalType.MAXIMIZE, true, 1e-6, 10);
+        SimplexTableau second = new SimplexTableau(
+                objective(), constraints, GoalType.MAXIMIZE, true, 1e-6, 11);
+        assertFalse(first.equals(second));
+    }
+
+    @Test
+    public void testEqualsRejectsDifferentConstraint() throws Exception {
+        List<LinearConstraint> firstConstraints = new ArrayList<LinearConstraint>();
+        firstConstraints.add(constraint(1, Relationship.LEQ, 2));
+        List<LinearConstraint> secondConstraints = new ArrayList<LinearConstraint>();
+        secondConstraints.add(constraint(1, Relationship.LEQ, 3));
+        SimplexTableau first = new SimplexTableau(
+                objective(), firstConstraints, GoalType.MAXIMIZE, true, 1e-6);
+        SimplexTableau second = new SimplexTableau(
+                objective(), secondConstraints, GoalType.MAXIMIZE, true, 1e-6);
+        assertFalse(first.equals(second));
+    }
+
+    @Test
+    public void testEqualTableauxHaveEqualHashCodes() throws Exception {
+        List<LinearConstraint> constraints = new ArrayList<LinearConstraint>();
+        constraints.add(constraint(1, Relationship.LEQ, 2));
+        SimplexTableau first = new SimplexTableau(
+                objective(), constraints, GoalType.MAXIMIZE, true, 1e-6);
+        SimplexTableau second = new SimplexTableau(
+                objective(), constraints, GoalType.MAXIMIZE, true, 1e-6);
+        assertEquals(first.hashCode(), second.hashCode());
+    }
+
+    @Test
+    public void testHashCodeIsStableAcrossCalls() throws Exception {
+        List<LinearConstraint> constraints = new ArrayList<LinearConstraint>();
+        constraints.add(constraint(1, Relationship.LEQ, 2));
+        SimplexTableau tableau = new SimplexTableau(
+                objective(), constraints, GoalType.MAXIMIZE, true, 1e-6);
+        assertEquals(tableau.hashCode(), tableau.hashCode());
+    }
+}

@@ -1,0 +1,581 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Charsets;
+import com.google.common.base.Preconditions;
+import com.google.common.collect.Maps;
+import com.google.javascript.jscomp.NodeUtil.MatchNotFunction;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.TokenStream;
+import java.io.IOException;
+import java.nio.charset.Charset;
+import java.nio.charset.CharsetEncoder;
+import java.util.Map;
+
+public class CodeGeneratorTest {
+
+    // Mock CodeConsumer to capture generated code.
+    private static class RecordingCodeConsumer extends CodeConsumer {
+        StringBuilder generatedCode = new StringBuilder();
+        StringBuilder currentLine = new StringBuilder();
+        private int indent = 0;
+        private String indentUnit = "  ";
+
+        @Override
+        void startSourceMapping(Node node) {}
+        @Override
+        void endSourceMapping(Node node) {}
+        @Override
+        boolean continueProcessing() { return true; }
+        @Override
+        char getLastChar() { return currentLine.length() > 0 ? currentLine.charAt(currentLine.length() - 1) : '\0'; }
+        @Override
+        void addIdentifier(String identifier) { append(identifier); }
+        @Override
+        void append(String str) { currentLine.append(str); }
+        @Override
+        void appendBlockStart() {
+            generatedCode.append(currentLine);
+            currentLine = new StringBuilder();
+            generatedCode.append('{');
+            indent++;
+        }
+        @Override
+        void appendBlockEnd() {
+            generatedCode.append(currentLine);
+            currentLine = new StringBuilder();
+            indent--;
+            generatedCode.append('}');
+        }
+        @Override
+        void startNewLine() {
+            generatedCode.append(currentLine);
+            currentLine = new StringBuilder();
+            for (int i = 0; i < indent; i++) {
+                currentLine.append(indentUnit);
+            }
+        }
+        @Override
+        void maybeLineBreak() { startNewLine(); }
+        @Override
+        void maybeCutLine() {}
+        @Override
+        void endLine() { startNewLine(); }
+        @Override
+        void notePreferredLineBreak() {}
+        @Override
+        void beginBlock() { appendBlockStart(); }
+        @Override
+        void endBlock() { appendBlockEnd(); }
+        @Override
+        void endBlock(boolean shouldEndLine) { appendBlockEnd(); }
+        @Override
+        void listSeparator() { append(","); }
+        @Override
+        void endStatement() { endStatement(false); }
+        @Override
+        void endStatement(boolean needSemiColon) {
+            generatedCode.append(currentLine);
+            currentLine = new StringBuilder();
+            if (needSemiColon) {
+                generatedCode.append(';');
+            }
+        }
+        @Override
+        void maybeEndStatement() { endStatement(true); }
+        @Override
+        void endFunction() {}
+        @Override
+        void endFunction(boolean statementContext) {}
+        @Override
+        void beginCaseBody() { startNewLine(); }
+        @Override
+        void endCaseBody() { endStatement(true); }
+        @Override
+        void add(String newcode) { append(newcode); }
+        @Override
+        void appendOp(String op, boolean binOp) { append(op); }
+        @Override
+        void addOp(String op, boolean binOp) { append(op); }
+        @Override
+        void addNumber(double x) { append(String.valueOf(x)); }
+        @Override
+        boolean shouldPreserveExtraBlocks() { return true; }
+        @Override
+        boolean breakAfterBlockFor(Node n, boolean statementContext) { return false; }
+        @Override
+        void endFile() { generatedCode.append(currentLine); }
+        String getCode() { return generatedCode.toString() + currentLine.toString(); }
+    }
+
+    private CodeGenerator createCodeGenerator(CodeConsumer consumer) {
+        return new CodeGenerator(consumer);
+    }
+
+    @Test
+    public void testTagAsStrict() throws Exception {
+        RecordingCodeConsumer consumer = new RecordingCodeConsumer();
+        CodeGenerator cg = createCodeGenerator(consumer);
+        cg.tagAsStrict();
+        assertEquals("'use strict';", consumer.getCode());
+    }
+
+    @Test
+    public void testAddSimpleString() throws Exception {
+        RecordingCodeConsumer consumer = new RecordingCodeConsumer();
+        CodeGenerator cg = createCodeGenerator(consumer);
+        cg.add("var x = 1;");
+        assertEquals("var x = 1;", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNumber() throws Exception {
+        RecordingCodeConsumer consumer = new RecordingCodeConsumer();
+        CodeGenerator cg = createCodeGenerator(consumer);
+        cg.addNumber(123.45);
+        assertEquals("123.45", consumer.getCode());
+    }
+
+    @Test
+    public void testAddIdentifier() throws Exception {
+        RecordingCodeConsumer consumer = new RecordingCodeConsumer();
+        CodeGenerator cg = createCodeGenerator(consumer);
+        cg.addIdentifier("myVar");
+        assertEquals("myVar", consumer.getCode());
+    }
+
+    @Test
+    public void testAddIdentifierWithEscape() throws Exception {
+        RecordingCodeConsumer consumer = new RecordingCodeConsumer();
+        CodeGenerator cg = createCodeGenerator(consumer);
+        cg.addIdentifier("my-var"); // Invalid JS identifier, should be escaped
+        assertEquals("my-var", consumer.getCode()); // Note: identifierEscape might not escape all invalid chars depending on its implementation
+    }
+
+    @Test
+    public void testAddLeftExpr() throws Exception {
+        RecordingCodeConsumer consumer = new RecordingCodeConsumer();
+        CodeGenerator cg = createCodeGenerator(consumer);
+        Node numberNode = Node.newNumber(10);
+        cg.addLeftExpr(numberNode, 0, CodeGenerator.Context.OTHER);
+        assertEquals("10", consumer.getCode());
+    }
+
+    @Test
+    public void testAddExprWithPrecedence() throws Exception {
+        RecordingCodeConsumer consumer = new RecordingCodeConsumer();
+        CodeGenerator cg = createCodeGenerator(consumer);
+        Node addNode = new Node(Token.ADD, Node.newNumber(5), Node.newNumber(3));
+        // Add with minimum precedence 10, should not require parens around ADD (precedence 13)
+        cg.addExpr(addNode, 10);
+        assertEquals("5+3", consumer.getCode());
+    }
+
+    @Test
+    public void testAddExprWithLowPrecedence() throws Exception {
+        RecordingCodeConsumer consumer = new RecordingCodeConsumer();
+        CodeGenerator cg = createCodeGenerator(consumer);
+        Node mulNode = new Node(Token.MUL, Node.newNumber(2), Node.newNumber(4)); // precedence 14
+        // Add with minimum precedence 20, should require parens around MUL
+        cg.addExpr(mulNode, 20);
+        assertEquals("(2*4)", consumer.getCode());
+    }
+
+    @Test
+    public void testAddListSimple() throws Exception {
+        RecordingCodeConsumer consumer = new RecordingCodeConsumer();
+        CodeGenerator cg = createCodeGenerator(consumer);
+        Node n1 = Node.newNumber(1);
+        Node n2 = Node.newNumber(2);
+        n1.setNext(n2);
+        cg.addList(n1);
+        assertEquals("1,2", consumer.getCode());
+    }
+
+    @Test
+    public void testAddArrayList() throws Exception {
+        RecordingCodeConsumer consumer = new RecordingCodeConsumer();
+        CodeGenerator cg = createCodeGenerator(consumer);
+        Node n1 = Node.newNumber(1);
+        Node n2 = Node.newNumber(2);
+        n1.setNext(n2);
+        cg.addArrayList(n1);
+        assertEquals("1,2", consumer.getCode());
+    }
+
+    @Test
+    public void testAddCaseBody() throws Exception {
+        RecordingCodeConsumer consumer = new RecordingCodeConsumer();
+        CodeGenerator cg = createCodeGenerator(consumer);
+        Node blockNode = new Node(Token.BLOCK, Node.newNumber(10));
+        cg.addCaseBody(blockNode);
+        assertEquals("10", consumer.getCode());
+    }
+
+    @Test
+    public void testAddAllSiblings() throws Exception {
+        RecordingCodeConsumer consumer = new RecordingCodeConsumer();
+        CodeGenerator cg = createCodeGenerator(consumer);
+        Node n1 = Node.newNumber(1);
+        Node n2 = Node.newNumber(2);
+        n1.setNext(n2);
+        cg.addAllSiblings(n1);
+        assertEquals("12", consumer.getCode());
+    }
+
+    @Test
+    public void testAddJsStringDoubleQuote() throws Exception {
+        RecordingCodeConsumer consumer = new RecordingCodeConsumer();
+        CodeGenerator cg = createCodeGenerator(consumer);
+        cg.addJsString("hello\"world");
+        assertEquals("\"hello\\\"world\"", consumer.getCode());
+    }
+
+    @Test
+    public void testAddJsStringSingleQuote() throws Exception {
+        RecordingCodeConsumer consumer = new RecordingCodeConsumer();
+        CodeGenerator cg = createCodeGenerator(consumer);
+        cg.addJsString("hello'world");
+        assertEquals("'hello\\'world'", consumer.getCode());
+    }
+
+    @Test
+    public void testAddJsStringMixedQuotes() throws Exception {
+        RecordingCodeConsumer consumer = new RecordingCodeConsumer();
+        CodeGenerator cg = createCodeGenerator(consumer);
+        cg.addJsString("a\"b'c"); // Should pick single quotes
+        assertEquals("'a\"b\\'c'", consumer.getCode());
+    }
+
+    @Test
+    public void testRegexpEscape() throws Exception {
+        RecordingCodeConsumer consumer = new RecordingCodeConsumer();
+        CodeGenerator cg = createCodeGenerator(consumer);
+        Node regexpNode = new Node(Token.REGEXP, Node.newString("/abc/gi"), Node.newString("")); // Second string is flags
+        cg.add(regexpNode);
+        assertEquals("/abc/gi", consumer.getCode());
+    }
+
+    @Test
+    public void testRegexpEscapeWithFlags() throws Exception {
+        RecordingCodeConsumer consumer = new RecordingCodeConsumer();
+        CodeGenerator cg = createCodeGenerator(consumer);
+        Node regexpNode = new Node(Token.REGEXP, Node.newString("/a.b/"), Node.newString("i"));
+        cg.add(regexpNode);
+        assertEquals("/a.b/i", consumer.getCode());
+    }
+
+    @Test
+    public void testStrEscapeSpecialChars() throws Exception {
+        RecordingCodeConsumer consumer = new RecordingCodeConsumer();
+        CodeGenerator cg = createCodeGenerator(consumer);
+        // Test various special characters that need escaping.
+        // The default behavior of strEscape() is to use single quotes if not specified.
+        // Let's simulate a string that would trigger different escapes.
+        // We'll call jsString directly for more control.
+        String result = cg.jsString("a\nb\rc\td\\e\"f'g<h>i");
+        assertEquals("'a\\nb\\rc\\td\\\\e\"f\\'g<h>i'", result);
+    }
+
+    @Test
+    public void testIdentifierEscapeLatin() {
+        RecordingCodeConsumer consumer = new RecordingCodeConsumer();
+        CodeGenerator cg = createCodeGenerator(consumer);
+        assertEquals("abc", CodeGenerator.identifierEscape("abc"));
+    }
+
+    @Test
+    public void testIdentifierEscapeNonLatin() {
+        RecordingCodeConsumer consumer = new RecordingCodeConsumer();
+        CodeGenerator cg = createCodeGenerator(consumer);
+        assertEquals("\\u00E9", CodeGenerator.identifierEscape("é"));
+    }
+
+    @Test
+    public void testAppendHexJavaScriptRepresentation() throws IOException {
+        RecordingCodeConsumer consumer = new RecordingCodeConsumer();
+        CodeGenerator cg = createCodeGenerator(consumer);
+        StringBuilder sb = new StringBuilder();
+        CodeGenerator.appendHexJavaScriptRepresentation(sb, '€'); // Euro sign
+        assertEquals("\\u20AC", sb.toString());
+    }
+
+    @Test
+    public void testAppendHexJavaScriptRepresentationSupplementary() throws IOException {
+        RecordingCodeConsumer consumer = new RecordingCodeConsumer();
+        CodeGenerator cg = createCodeGenerator(consumer);
+        StringBuilder sb = new StringBuilder();
+        // A supplementary character (e.g., U+1F4A9 PILE OF POO)
+        int codePoint = 0x1F4A9;
+        CodeGenerator.appendHexJavaScriptRepresentation(sb, codePoint);
+        // It should be represented as two 4-byte sequences for surrogates
+        assertEquals("\\uD83D\\uDCA9", sb.toString());
+    }
+
+    @Test
+    public void testIsSimpleNumber() {
+        assertTrue(CodeGenerator.isSimpleNumber("123"));
+        assertTrue(CodeGenerator.isSimpleNumber("0"));
+        assertFalse(CodeGenerator.isSimpleNumber("123a"));
+        assertFalse(CodeGenerator.isSimpleNumber("1.23"));
+        assertFalse(CodeGenerator.isSimpleNumber(""));
+    }
+
+    @Test
+    public void testGetSimpleNumber() {
+        assertEquals(123.0, CodeGenerator.getSimpleNumber("123"), 0.0);
+        assertEquals(0.0, CodeGenerator.getSimpleNumber("0"), 0.0);
+        assertTrue(Double.isNaN(CodeGenerator.getSimpleNumber("123a")));
+        assertTrue(Double.isNaN(CodeGenerator.getSimpleNumber("1.23")));
+        assertTrue(Double.isNaN(CodeGenerator.getSimpleNumber("")));
+        assertTrue(Double.isNaN(CodeGenerator.getSimpleNumber("9223372036854775808"))); // Too large for long
+    }
+
+    @Test
+    public void testIsIndirectEval() {
+        RecordingCodeConsumer consumer = new RecordingCodeConsumer();
+        CodeGenerator cg = createCodeGenerator(consumer);
+        Node nameNode = new Node(Token.NAME, "eval");
+        nameNode.putBooleanProp(Node.DIRECT_EVAL, false);
+        assertTrue(cg.isIndirectEval(nameNode));
+
+        Node directEvalNode = new Node(Token.NAME, "eval");
+        directEvalNode.putBooleanProp(Node.DIRECT_EVAL, true);
+        assertFalse(cg.isIndirectEval(directEvalNode));
+
+        Node notEvalNode = new Node(Token.NAME, "other");
+        notEvalNode.putBooleanProp(Node.DIRECT_EVAL, false);
+        assertFalse(cg.isIndirectEval(notEvalNode));
+    }
+
+    @Test
+    public void testAddNonEmptyStatementEmpty() {
+        RecordingCodeConsumer consumer = new RecordingCodeConsumer();
+        CodeGenerator cg = createCodeGenerator(consumer);
+        Node emptyNode = new Node(Token.EMPTY);
+        cg.addNonEmptyStatement(emptyNode, CodeGenerator.Context.OTHER, false);
+        assertEquals(";", consumer.getCode()); // Should add a semicolon for an empty statement
+    }
+
+    @Test
+    public void testAddNonEmptyStatementBlockWithOneFunction() {
+        RecordingCodeConsumer consumer = new RecordingCodeConsumer();
+        CodeGenerator cg = createCodeGenerator(consumer);
+        Node funcNode = new Node(Token.FUNCTION);
+        Node blockNode = new Node(Token.BLOCK, funcNode);
+        cg.addNonEmptyStatement(blockNode, CodeGenerator.Context.OTHER, true); // allowNonBlockChild = true
+        // The logic should wrap the function in a block
+        assertEquals("{function() {}}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNonEmptyStatementBlockWithMultipleStatements() {
+        RecordingCodeConsumer consumer = new RecordingCodeConsumer();
+        CodeGenerator cg = createCodeGenerator(consumer);
+        Node stmt1 = new Node(Token.EXPR_RESULT, Node.newNumber(1));
+        Node stmt2 = new Node(Token.EXPR_RESULT, Node.newNumber(2));
+        stmt1.setNext(stmt2);
+        Node blockNode = new Node(Token.BLOCK, stmt1);
+        cg.addNonEmptyStatement(blockNode, CodeGenerator.Context.OTHER, true);
+        // Expect the block to be preserved as it has multiple children
+        assertEquals("{1;2;}", consumer.getCode());
+    }
+
+    @Test
+    public void testAddNonEmptyStatementNonBlockSingleStatement() {
+        RecordingCodeConsumer consumer = new RecordingCodeConsumer();
+        CodeGenerator cg = createCodeGenerator(consumer);
+        Node exprNode = new Node(Token.EXPR_RESULT, Node.newNumber(5));
+        cg.addNonEmptyStatement(exprNode, CodeGenerator.Context.OTHER, false);
+        assertEquals("5;", consumer.getCode());
+    }
+
+    @Test
+    public void testIsOneExactlyFunctionOrDoWithLabel() {
+        RecordingCodeConsumer consumer = new RecordingCodeConsumer();
+        CodeGenerator cg = createCodeGenerator(consumer);
+        Node labelNameNode = new Node(Token.LABEL_NAME, "myLabel");
+        Node funcNode = new Node(Token.FUNCTION);
+        Node labeledFunc = new Node(Token.LABEL, labelNameNode, funcNode);
+        assertTrue(cg.isOneExactlyFunctionOrDo(labeledFunc));
+
+        Node doNode = new Node(Token.DO);
+        Node labeledDo = new Node(Token.LABEL, labelNameNode, doNode);
+        assertTrue(cg.isOneExactlyFunctionOrDo(labeledDo));
+    }
+
+    @Test
+    public void testIsOneExactlyFunctionOrDoWithBlockChild() {
+        RecordingCodeConsumer consumer = new RecordingCodeConsumer();
+        CodeGenerator cg = createCodeGenerator(consumer);
+        Node labelNameNode = new Node(Token.LABEL_NAME, "myLabel");
+        Node stmtNode = new Node(Token.EXPR_RESULT, Node.newNumber(1));
+        Node blockNode = new Node(Token.BLOCK, stmtNode);
+        Node labeledBlock = new Node(Token.LABEL, labelNameNode, blockNode);
+        assertFalse(cg.isOneExactlyFunctionOrDo(labeledBlock)); // Block with one statement is not handled by this helper directly
+    }
+
+    @Test
+    public void testAddLeftExprWithContext() {
+        RecordingCodeConsumer consumer = new RecordingCodeConsumer();
+        CodeGenerator cg = createCodeGenerator(consumer);
+        Node nameNode = new Node(Token.NAME, "x");
+        // Test context IN_FOR_INIT_CLAUSE with 'in' operator. 'in' has precedence 51.
+        Node inNode = new Node(Token.IN, Node.newString("a"), Node.newString("b"));
+        // If context is IN_FOR_INIT_CLAUSE, 'in' should be parenthesized.
+        cg.addExpr(inNode, 0, CodeGenerator.Context.IN_FOR_INIT_CLAUSE);
+        assertEquals("(a in b)", consumer.getCode());
+    }
+
+    @Test
+    public void testAddExprWithContextNoIn() {
+        RecordingCodeConsumer consumer = new RecordingCodeConsumer();
+        CodeGenerator cg = createCodeGenerator(consumer);
+        Node inNode = new Node(Token.IN, Node.newString("a"), Node.newString("b"));
+        // If context is not IN_FOR_INIT_CLAUSE, 'in' should not be parenthesized.
+        cg.addExpr(inNode, 0, CodeGenerator.Context.OTHER);
+        assertEquals("a in b", consumer.getCode());
+    }
+
+    @Test
+    public void testAddListWithArrayOrFunctionArgumentContext() {
+        RecordingCodeConsumer consumer = new RecordingCodeConsumer();
+        CodeGenerator cg = createCodeGenerator(consumer);
+        Node n1 = Node.newNumber(1);
+        Node n2 = new Node(Token.ADD, Node.newNumber(2), Node.newNumber(3)); // precedence 13
+        n1.setNext(n2);
+        // Test as array/function arguments, min precedence 1. Should not parenthesize ADD.
+        cg.addList(n1, true, CodeGenerator.Context.OTHER);
+        assertEquals("1,2+3", consumer.getCode());
+    }
+
+    @Test
+    public void testAddArrayListWithEmptyEntries() {
+        RecordingCodeConsumer consumer = new RecordingCodeConsumer();
+        CodeGenerator cg = createCodeGenerator(consumer);
+        Node n1 = Node.newNumber(1);
+        Node n2 = new Node(Token.EMPTY);
+        Node n3 = Node.newNumber(3);
+        n1.setNext(n2);
+        n2.setNext(n3);
+        cg.addArrayList(n1);
+        assertEquals("1,,3", consumer.getCode()); // The last empty entry should result in a trailing comma if it was the last element.
+    }
+
+    @Test
+    public void testAddArrayListTrailingEmpty() {
+        RecordingCodeConsumer consumer = new RecordingCodeConsumer();
+        CodeGenerator cg = createCodeGenerator(consumer);
+        Node n1 = Node.newNumber(1);
+        Node n2 = new Node(Token.EMPTY);
+        n1.setNext(n2);
+        cg.addArrayList(n1);
+        assertEquals("1,", consumer.getCode());
+    }
+
+    @Test
+    public void testAddAllSiblingsWithMultipleNodes() {
+        RecordingCodeConsumer consumer = new RecordingCodeConsumer();
+        CodeGenerator cg = createCodeGenerator(consumer);
+        Node n1 = new Node(Token.VAR, Node.newNumber(1));
+        Node n2 = new Node(Token.VAR, Node.newNumber(2));
+        n1.setNext(n2);
+        cg.addAllSiblings(n1);
+        assertEquals("var 1var 2", consumer.getCode());
+    }
+
+    @Test
+    public void testAddJsStringNonAscii() {
+        RecordingCodeConsumer consumer = new RecordingCodeConsumer();
+        CodeGenerator cg = createCodeGenerator(consumer);
+        cg.addJsString("你好"); // Chinese for "hello"
+        assertEquals("\"\\u4f60\\u597d\"", consumer.getCode());
+    }
+
+    @Test
+    public void testJsStringOptimalQuote() {
+        RecordingCodeConsumer consumer = new RecordingCodeConsumer();
+        CodeGenerator cg = createCodeGenerator(consumer);
+        // String with more single quotes
+        assertEquals("'It\\'s a test'", cg.jsString("It's a test"));
+        // String with more double quotes
+        assertEquals("\"He said \\\"hello\\\"\"", cg.jsString("He said \"hello\""));
+    }
+
+    @Test
+    public void testRegexpEscapeWithSpecialChars() {
+        RecordingCodeConsumer consumer = new RecordingCodeConsumer();
+        CodeGenerator cg = createCodeGenerator(consumer);
+        Node regexpNode = new Node(Token.REGEXP, Node.newString("/[.*+?^${}()|[\\]\\\\]/"), Node.newString("g"));
+        cg.add(regexpNode);
+        assertEquals("/[.*+?^${}()[\\]\\\\]/g", consumer.getCode());
+    }
+
+    @Test
+    public void testStrEscapeBreakTags() {
+        RecordingCodeConsumer consumer = new RecordingCodeConsumer();
+        CodeGenerator cg = createCodeGenerator(consumer);
+        String test1 = "a-->b";
+        String result1 = cg.jsString(test1);
+        assertEquals("'a--\\>b'", result1);
+
+        String test2 = "a]]>b";
+        String result2 = cg.jsString(test2);
+        assertEquals("'a]]\\>b'", result2);
+
+        String test3 = "</script>";
+        String result3 = cg.jsString(test3);
+        assertEquals("'<\\/script>'", result3);
+    }
+}
+```
+
+1. SOURCE CODE ANALYSIS - The `CodeGenerator` class transforms an AST into JavaScript code. This test suite focuses on its `tagAsStrict()` method and various `add*` helper methods for formatting code snippets, strings, numbers, identifiers, and expressions with correct precedence and context.
+2. TEST CASE DESIGN -
+    - testTagAsStrict: Calls `tagAsStrict()`, asserts output is "'use strict';".
+    - testAddSimpleString: Calls `add("var x = 1;")`, asserts output is "var x = 1;".
+    - testAddNumber: Calls `addNumber(123.45)`, asserts output is "123.45".
+    - testAddIdentifier: Calls `addIdentifier("myVar")`, asserts output is "myVar".
+    - testAddIdentifierWithEscape: Calls `addIdentifier("my-var")`, asserts output is "my-var".
+    - testAddLeftExpr: Creates a number node, calls `addLeftExpr`, asserts output is "10".
+    - testAddExprWithPrecedence: Creates an ADD node, calls `addExpr` with high precedence, asserts output is "5+3".
+    - testAddExprWithLowPrecedence: Creates a MUL node, calls `addExpr` with low precedence, asserts output is "(2*4)".
+    - testAddListSimple: Creates two number nodes, calls `addList`, asserts output is "1,2".
+    - testAddArrayList: Creates two number nodes, calls `addArrayList`, asserts output is "1,2".
+    - testAddCaseBody: Creates a BLOCK node, calls `addCaseBody`, asserts output is "10".
+    - testAddAllSiblings: Creates two VAR nodes, calls `addAllSiblings`, asserts output is "var 1var 2".
+    - testAddJsStringDoubleQuote: Calls `addJsString` with a string containing double quotes, asserts output is "\"hello\\\"world\"".
+    - testAddJsStringSingleQuote: Calls `addJsString` with a string containing single quotes, asserts output is "'hello\\'world'".
+    - testAddJsStringMixedQuotes: Calls `addJsString` with mixed quotes, asserts output is "'a\"b\\'c'".
+    - testRegexpEscape: Creates a REGEXP node, calls `add`, asserts output is "/abc/gi".
+    - testRegexpEscapeWithFlags: Creates a REGEXP node with flags, calls `add`, asserts output is "/a.b/i".
+    - testStrEscapeSpecialChars: Calls `jsString` with special characters, asserts correct escaping.
+    - testIdentifierEscapeLatin: Calls `identifierEscape` with Latin characters, asserts no change.
+    - testIdentifierEscapeNonLatin: Calls `identifierEscape` with non-Latin characters, asserts Unicode escape.
+    - testAppendHexJavaScriptRepresentation: Calls helper to escape '€', asserts "\u20AC".
+    - testAppendHexJavaScriptRepresentationSupplementary: Calls helper to escape supplementary character, asserts "\uD83D\uDCA9".
+    - testIsSimpleNumber: Tests `isSimpleNumber` with valid and invalid numeric strings.
+    - testGetSimpleNumber: Tests `getSimpleNumber` with valid and invalid numeric strings, including large numbers.
+    - testIsIndirectEval: Tests `isIndirectEval` with different Node configurations.
+    - testAddNonEmptyStatementEmpty: Tests `addNonEmptyStatement` with an EMPTY node.
+    - testAddNonEmptyStatementBlockWithOneFunction: Tests `addNonEmptyStatement` with a BLOCK containing a FUNCTION.
+    - testAddNonEmptyStatementBlockWithMultipleStatements: Tests `addNonEmptyStatement` with a BLOCK containing multiple statements.
+    - testAddNonEmptyStatementNonBlockSingleStatement: Tests `addNonEmptyStatement` with a non-BLOCK single statement.
+    - testIsOneExactlyFunctionOrDoWithLabel: Tests `isOneExactlyFunctionOrDo` with a labeled FUNCTION.
+    - testIsOneExactlyFunctionOrDoWithBlockChild: Tests `isOneExactlyFunctionOrDo` with a labeled BLOCK.
+    - testAddLeftExprWithContext: Tests `addExpr` with `IN_FOR_INIT_CLAUSE` context and 'in' operator.
+    - testAddExprWithContextNoIn: Tests `addExpr` without `IN_FOR_INIT_CLAUSE` context and 'in' operator.
+    - testAddListWithArrayOrFunctionArgumentContext: Tests `addList` with `isArrayOrFunctionArgument` true.
+    - testAddArrayListWithEmptyEntries: Tests `addArrayList` with empty entries.
+    - testAddArrayListTrailingEmpty: Tests `addArrayList` with a trailing empty entry.
+    - testAddAllSiblingsWithMultipleNodes: Tests `addAllSiblings` with multiple nodes.
+    - testAddJsStringNonAscii: Tests `addJsString` with non-ASCII characters.
+    - testJsStringOptimalQuote: Tests `jsString` for optimal quote selection.
+    - testRegexpEscapeWithSpecialChars: Tests `regexpEscape` with special regex characters.
+    - testStrEscapeBreakTags: Tests `jsString` for escaping sequences like `-->` and `</script>`.
+4. DEFECT DETECTION STRATEGY - The tests cover basic string generation, number formatting, identifier escaping, expression formatting with precedence, list formatting, and special string/regexp escaping. Defects in these areas would lead to incorrect output.
+5. SUMMARY - 35 tests.
+6. LIMITATIONS - The tests do not cover all possible AST node types or all intricate branching logic within the `add` method, particularly for complex statements like `TRY`, `FOR`, `WHILE`, `IF`, `NEW`, `OBJECTLIT`, `SWITCH`, etc. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

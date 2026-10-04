@@ -1,0 +1,462 @@
+```java
+package org.mockito.internal;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.util.List;
+import org.mockito.internal.creation.MockSettingsImpl;
+import org.mockito.internal.invocation.Invocation;
+import org.mockito.internal.invocation.InvocationMatcher;
+import org.mockito.internal.invocation.MatchersBinder;
+import org.mockito.internal.progress.MockingProgress;
+import org.mockito.internal.progress.ThreadSafeMockingProgress;
+import org.mockito.internal.stubbing.InvocationContainer;
+import org.mockito.internal.stubbing.InvocationContainerImpl;
+import org.mockito.internal.stubbing.OngoingStubbingImpl;
+import org.mockito.internal.stubbing.StubbedInvocationMatcher;
+import org.mockito.internal.stubbing.VoidMethodStubbableImpl;
+import org.mockito.internal.verification.MockAwareVerificationMode;
+import org.mockito.internal.verification.VerificationDataImpl;
+import org.mockito.stubbing.Answer;
+import org.mockito.stubbing.VoidMethodStubbable;
+import org.mockito.verification.VerificationMode;
+import java.util.Arrays;
+import org.mockito.InOrder;
+import org.mockito.MockSettings;
+import org.mockito.exceptions.Reporter;
+import org.mockito.exceptions.misusing.NotAMockException;
+import org.mockito.internal.invocation.AllInvocationsFinder;
+import org.mockito.internal.progress.IOngoingStubbing;
+import org.mockito.internal.stubbing.StubberImpl;
+import org.mockito.internal.util.MockUtil;
+import org.mockito.internal.verification.VerificationModeFactory;
+import org.mockito.internal.verification.api.InOrderContext;
+import org.mockito.internal.verification.api.VerificationDataInOrder;
+import org.mockito.internal.verification.api.VerificationDataInOrderImpl;
+import org.mockito.stubbing.DeprecatedOngoingStubbing;
+import org.mockito.stubbing.OngoingStubbing;
+import org.mockito.stubbing.Stubber;
+
+public class MockHandlerTest {
+    // test methods (as many as the instructions ask for), each exactly in this form:
+    //     @Test
+    //     public void testWhatItChecks() throws Exception { ... }
+
+    @Test
+    public void testHandleWhenStubbingVoids() throws Exception {
+        MockHandler<Object> handler = new MockHandler<>();
+        Invocation invocation = createInvocation("someMethod", new Object[0]);
+        handler.handle(invocation); // This should prepare for stubbing voids
+        assertTrue(handler.invocationContainerImpl.hasAnswersForStubbing());
+    }
+
+    @Test
+    public void testHandleWhenNotStubbingVoids() throws Exception {
+        MockHandler<Object> handler = new MockHandler<>();
+        Invocation invocation = createInvocation("someMethod", new Object[0]);
+        handler.mockingProgress.validateState(); // To ensure state is set before handle
+        handler.handle(invocation);
+        assertFalse(handler.invocationContainerImpl.hasAnswersForStubbing());
+    }
+
+    @Test
+    public void testHandleWithVerificationMode() throws Exception {
+        MockHandler<Object> handler = new MockHandler<>();
+        Object mock = new Object(); // Dummy mock object
+        VerificationMode mode = VerificationModeFactory.times(1);
+        MockAwareVerificationMode mockAwareMode = new MockAwareVerificationMode(mock, mode);
+        handler.mockingProgress.verificationStarted(mockAwareMode);
+
+        Invocation invocation = createInvocation("someMethod", new Object[0]);
+        invocation.setMock(mock); // Set the mock on the invocation
+
+        // We expect the handle method to use the verification mode
+        // For this test, we just check that it doesn't throw an exception
+        // and doesn't enter the stubbing logic if verification is active.
+        try {
+            handler.handle(invocation);
+        } catch (Exception e) {
+            fail("Should not throw exception during verification handling: " + e.getMessage());
+        }
+        // The actual verification would happen within the MockAwareVerificationMode.verify() call,
+        // which is triggered inside handle(). We can't directly assert the verification outcome here
+        // without more setup for VerificationData.
+    }
+
+    @Test
+    public void testHandleWhenVerificationModeIsDifferentMock() throws Exception {
+        MockHandler<Object> handler = new MockHandler<>();
+        Object mock1 = new Object(); // Mock for verification mode
+        Object mock2 = new Object(); // Mock in the invocation
+        VerificationMode mode = VerificationModeFactory.times(1);
+        MockAwareVerificationMode mockAwareMode = new MockAwareVerificationMode(mock1, mode);
+        handler.mockingProgress.verificationStarted(mockAwareMode);
+
+        Invocation invocation = createInvocation("someMethod", new Object[0]);
+        invocation.setMock(mock2); // Different mock
+
+        // The verification mode should not be applied if the mock doesn't match.
+        // The handle method should proceed to stubbing/default answer logic.
+        // We can't fully assert this without setting up default answers or more complex stubbing.
+        // For now, we check that it doesn't throw NotAMockException or similar verification-related errors.
+        try {
+            handler.handle(invocation);
+        } catch (Exception e) {
+            fail("Should not throw exception for non-matching mock in verification mode: " + e.getMessage());
+        }
+        // This test primarily ensures the correct path is taken when mocks don't match during verification.
+    }
+
+    @Test
+    public void testHandleWhenNoVerificationModeAndNoStubbing() throws Exception {
+        MockHandler<Object> handler = new MockHandler<>();
+        // Ensure no verification mode is active and no stubbing is set up.
+        // The handle method should then return the default answer.
+        Invocation invocation = createInvocation("someMethod", new Object[0]);
+        Object defaultAnswerResult = handler.handle(invocation);
+        assertNotNull(defaultAnswerResult); // Expecting a non-null default answer
+    }
+
+    @Test
+    public void testHandleWhenStubbingAndAnswerIsFound() throws Exception {
+        MockHandler<Object> handler = new MockHandler<>();
+        Invocation invocation = createInvocation("methodWithArgs", new Object[]{"arg1", 123});
+        InvocationMatcher invocationMatcher = new InvocationMatcher(invocation);
+
+        // Manually set up a stubbed invocation
+        StubbedInvocationMatcher stubbedInvocation = new StubbedInvocationMatcher(invocationMatcher, new Answer<Object>() {
+            @Override
+            public Object answer(InvocationOnMock inv) throws Throwable {
+                return "stubbed";
+            }
+        });
+        handler.invocationContainerImpl.add(stubbedInvocation);
+
+        Object result = handler.handle(invocation);
+        assertEquals("stubbed", result);
+    }
+
+    @Test
+    public void testHandleWhenStubbingAndAnswerNotFoundReturnsDefault() throws Exception {
+        MockHandler<Object> handler = new MockHandler<>();
+        Invocation invocation = createInvocation("methodWithArgs", new Object[]{"arg1", 123});
+
+        // Ensure no matching stubbing is present.
+        // The handle method should then return the default answer.
+        Object defaultAnswerResult = handler.handle(invocation);
+        assertNotNull(defaultAnswerResult); // Expecting a non-null default answer
+    }
+
+    @Test
+    public void testVoidMethodStubbable() throws Exception {
+        MockHandler<Object> handler = new MockHandler<>();
+        Object mock = new Object();
+        VoidMethodStubbable<Object> voidStubbable = handler.voidMethodStubbable(mock);
+        assertNotNull(voidStubbable);
+        // Verify that the returned object is of the correct type and associated with the handler's container
+        assertTrue(voidStubbable instanceof VoidMethodStubbableImpl);
+        // We can't directly check the association without exposing internal state or methods.
+    }
+
+    @Test
+    public void testGetMockSettings() throws Exception {
+        MockSettingsImpl settings = new MockSettingsImpl();
+        MockHandler<Object> handler = new MockHandler<>(settings);
+        MockSettingsImpl retrievedSettings = handler.getMockSettings();
+        assertNotNull(retrievedSettings);
+        assertEquals(settings, retrievedSettings);
+    }
+
+    @Test
+    public void testSetAnswersForStubbing() throws Exception {
+        MockHandler<Object> handler = new MockHandler<>();
+        List<Answer> answers = Arrays.asList(new Answer<Object>() {
+            @Override
+            public Object answer(InvocationOnMock invocation) throws Throwable {
+                return "testAnswer";
+            }
+        });
+        handler.setAnswersForStubbing(answers);
+        assertTrue(handler.invocationContainerImpl.hasAnswersForStubbing());
+        // We can't directly assert the answers in the container without accessing internals.
+    }
+
+    @Test
+    public void testGetInvocationContainer() throws Exception {
+        MockHandler<Object> handler = new MockHandler<>();
+        InvocationContainer container = handler.getInvocationContainer();
+        assertNotNull(container);
+        assertTrue(container instanceof InvocationContainerImpl);
+    }
+
+    // MockitoCore methods are static or operate on mocks, so we test MockHandler directly for its responsibilities.
+    // The following tests are for methods that primarily delegate or manage state within MockHandler.
+
+    @Test
+    public void testHandle_when_invocationContainerImpl_hasAnswersForStubbing_returnsNull() throws Exception {
+        MockHandler<Object> handler = new MockHandler<>();
+        Invocation invocation = createInvocation("someVoidMethod", new Object[0]);
+        handler.invocationContainerImpl.setMethodForStubbing(new InvocationMatcher(invocation)); // Simulate setting method for stubbing
+
+        Object result = handler.handle(invocation);
+        assertNull(result);
+    }
+
+    @Test
+    public void testHandle_when_verificationMode_isNotNull_and_mockMatches() throws Exception {
+        MockHandler<Object> handler = new MockHandler<>();
+        Object mock = new Object();
+        VerificationMode mode = VerificationModeFactory.times(1);
+        MockAwareVerificationMode mockAwareMode = new MockAwareVerificationMode(mock, mode);
+        handler.mockingProgress.verificationStarted(mockAwareMode);
+
+        Invocation invocation = createInvocation("verifyThis", new Object[0]);
+        invocation.setMock(mock); // Set the same mock
+
+        // Mockito internal verification logic would be called here.
+        // We'll just assert that handle doesn't return a default answer.
+        Object result = handler.handle(invocation);
+        assertNull(result); // During verification, no return value is expected from handle itself.
+    }
+
+    @Test
+    public void testHandle_when_verificationMode_isNotNull_and_mockDoesNotMatch() throws Exception {
+        MockHandler<Object> handler = new MockHandler<>();
+        Object mock1 = new Object(); // Mock for verification
+        Object mock2 = new Object(); // Mock in invocation
+        VerificationMode mode = VerificationModeFactory.times(1);
+        MockAwareVerificationMode mockAwareMode = new MockAwareVerificationMode(mock1, mode);
+        handler.mockingProgress.verificationStarted(mockAwareMode);
+
+        Invocation invocation = createInvocation("verifyThis", new Object[0]);
+        invocation.setMock(mock2); // Different mock
+
+        // The verification should be skipped, and it should fall through to default answer.
+        Object result = handler.handle(invocation);
+        assertNotNull(result); // Expecting a default answer
+    }
+
+    @Test
+    public void testHandle_callsDefaultAnswerWhenNoStubbingAndNoVerification() throws Exception {
+        MockHandler<Object> handler = new MockHandler<>();
+        Invocation invocation = createInvocation("someOtherMethod", new Object[]{1, 2});
+
+        // No stubbing, no verification. Should return default answer.
+        Object result = handler.handle(invocation);
+        assertNotNull(result);
+    }
+
+    @Test
+    public void testHandle_capturesArgumentsWhenStubbed() throws Exception {
+        MockHandler<Object> handler = new MockHandler<>();
+        Invocation invocation = createInvocation("methodWithArgs", new Object[]{"arg1", 123});
+        InvocationMatcher invocationMatcher = new InvocationMatcher(invocation);
+
+        // Set up a stubbed invocation that captures arguments
+        StubbedInvocationMatcher stubbedInvocation = new StubbedInvocationMatcher(invocationMatcher, new Answer<Object>() {
+            @Override
+            public Object answer(InvocationOnMock inv) throws Throwable {
+                assertEquals("arg1", inv.getArgumentAt(0, String.class));
+                assertEquals(123, inv.getArgumentAt(1, Integer.class));
+                return "captured";
+            }
+        });
+        handler.invocationContainerImpl.add(stubbedInvocation);
+
+        Object result = handler.handle(invocation);
+        assertEquals("captured", result);
+    }
+
+    @Test
+    public void testHandle_callsAnswerWhenStubbed() throws Exception {
+        MockHandler<Object> handler = new MockHandler<>();
+        Invocation invocation = createInvocation("methodToAnswer", new Object[]{});
+        InvocationMatcher invocationMatcher = new InvocationMatcher(invocation);
+
+        // Set up a stubbed invocation with a specific answer
+        StubbedInvocationMatcher stubbedInvocation = new StubbedInvocationMatcher(invocationMatcher, new Answer<Object>() {
+            @Override
+            public Object answer(InvocationOnMock inv) throws Throwable {
+                return "specificAnswer";
+            }
+        });
+        handler.invocationContainerImpl.add(stubbedInvocation);
+
+        Object result = handler.handle(invocation);
+        assertEquals("specificAnswer", result);
+    }
+
+    @Test
+    public void testHandle_returnsDefaultAnswerWhenNoMatchingStubbing() throws Exception {
+        MockHandler<Object> handler = new MockHandler<>();
+        Invocation invocation = createInvocation("unstubbedMethod", new Object[]{});
+
+        // Ensure no stubbing matches this invocation.
+        Object result = handler.handle(invocation);
+        assertNotNull(result); // Should be the default answer
+    }
+
+    @Test
+    public void testHandle_resetsInvocationForPotentialStubbingForPartialMocks() throws Exception {
+        MockHandler<Object> handler = new MockHandler<>();
+        Invocation invocation = createInvocation("realMethod", new Object[]{"spyArg"});
+        InvocationMatcher invocationMatcher = new InvocationMatcher(invocation);
+
+        // Simulate a scenario where the default answer might internally delegate to another method.
+        // This test primarily checks that resetInvocationForPotentialStubbing is called,
+        // preventing the wrong invocation from being set for stubbing.
+        // We can't easily assert the internal state change without more complex mocking or access.
+        // The existence of the call is what we aim to indirectly verify by ensuring no exceptions.
+        try {
+            handler.handle(invocation);
+        } catch (Exception e) {
+            fail("Should not throw exception during reset for partial mocks: " + e.getMessage());
+        }
+        // The core idea is that `invocationContainerImpl.resetInvocationForPotentialStubbing(invocationMatcher)`
+        // is called before returning the default answer.
+    }
+
+    @Test
+    public void testVoidMethodStubbable_toThrow() throws Exception {
+        MockHandler<Object> handler = new MockHandler<>();
+        Object mock = new Object();
+        VoidMethodStubbable<Object> voidStubbable = handler.voidMethodStubbable(mock);
+        Throwable throwable = new RuntimeException("test exception");
+        VoidMethodStubbable<Object> result = voidStubbable.toThrow(throwable);
+        assertNotNull(result);
+        // The actual stubbing happens when the method is called and the handler processes it.
+        // We can't easily verify the `toThrow` side effect here without a full invocation flow.
+    }
+
+    @Test
+    public void testVoidMethodStubbable_toReturn() throws Exception {
+        MockHandler<Object> handler = new MockHandler<>();
+        Object mock = new Object();
+        VoidMethodStubbable<Object> voidStubbable = handler.voidMethodStubbable(mock);
+        VoidMethodStubbable<Object> result = voidStubbable.toReturn();
+        assertNotNull(result);
+        // Similar to toThrow, verification of the actual stubbing requires a full invocation.
+    }
+
+    @Test
+    public void testVoidMethodStubbable_toAnswer() throws Exception {
+        MockHandler<Object> handler = new MockHandler<>();
+        Object mock = new Object();
+        VoidMethodStubbable<Object> voidStubbable = handler.voidMethodStubbable(mock);
+        Answer<Object> answer = new Answer<Object>() {
+            @Override
+            public Object answer(InvocationOnMock inv) throws Throwable {
+                return null; // void method doesn't return anything
+            }
+        };
+        VoidMethodStubbable<Object> result = voidStubbable.toAnswer(answer);
+        assertNotNull(result);
+        // Again, the actual stubbing is verified through invocation.
+    }
+
+    @Test
+    public void testVoidMethodStubbable_on() throws Exception {
+        MockHandler<Object> handler = new MockHandler<>();
+        Object mock = new Object();
+        VoidMethodStubbable<Object> voidStubbable = handler.voidMethodStubbable(mock);
+        // The 'on()' method is called to specify which method to stub.
+        // This test focuses on ensuring 'on()' can be called and returns the mock object.
+        Object returnedMock = voidStubbable.on();
+        assertNotNull(returnedMock);
+        assertEquals(mock, returnedMock);
+    }
+
+    @Test
+    public void testMockHandlerConstructorWithMockSettings() throws Exception {
+        MockSettingsImpl settings = new MockSettingsImpl();
+        MockHandler<String> handler = new MockHandler<>(settings);
+        assertNotNull(handler);
+        assertEquals(settings, handler.getMockSettings());
+        assertNotNull(handler.invocationContainerImpl);
+        assertNotNull(handler.matchersBinder);
+        assertNotNull(handler.mockingProgress);
+    }
+
+    @Test
+    public void testMockHandlerConstructorWithOldMockHandler() throws Exception {
+        MockHandler<String> oldHandler = new MockHandler<>();
+        MockHandler<String> newHandler = new MockHandler<>(oldHandler);
+        assertNotNull(newHandler);
+        assertEquals(oldHandler.getMockSettings(), newHandler.getMockSettings());
+        // Ensure the new handler has its own containers and binders, not shared references.
+        assertNotSame(oldHandler.invocationContainerImpl, newHandler.invocationContainerImpl);
+        assertNotSame(oldHandler.matchersBinder, newHandler.matchersBinder);
+        assertNotSame(oldHandler.mockingProgress, newHandler.mockingProgress);
+    }
+
+    // Helper method to create a dummy Invocation object.
+    // In a real scenario, you'd use Mockito's internal utilities or mock objects.
+    private Invocation createInvocation(String methodName, Object[] args) {
+        // This is a simplified creation. A real Invocation would need more context.
+        // We're faking it to test MockHandler's logic which relies on Invocation methods like getMethodName, getArguments, getMock.
+        // For the purpose of testing MockHandler, we focus on the structure.
+        // We'll assume a default mock object and a simple method signature.
+        return new Invocation(
+                new Object(), // Dummy mock object
+                null, // Dummy method
+                args,
+                0, // sequence number
+                null // extra arguments
+        ) {
+            @Override
+            public String getMethodName() {
+                return methodName;
+            }
+
+            @Override
+            public Object[] getArguments() {
+                return args;
+            }
+
+            @Override
+            public boolean isVarargs() {
+                return false; // Assuming non-varargs for simplicity
+            }
+        };
+    }
+}
+```
+
+## SOURCE CODE ANALYSIS
+The tests target the `handle` method of `MockHandler`, focusing on its logic for stubbing voids, verification modes, finding answers, and using default answers. They also cover the `voidMethodStubbable` interface and the `MockHandler` constructors.
+
+## TEST CASE DESIGN
+- `testHandleWhenStubbingVoids`: Checks if `hasAnswersForStubbing` is set correctly.
+- `testHandleWhenNotStubbingVoids`: Checks `hasAnswersForStubbing` is false when not stubbing.
+- `testHandleWithVerificationMode`: Verifies `handle` works with an active `MockAwareVerificationMode`.
+- `testHandleWhenVerificationModeIsDifferentMock`: Tests the case where the mock in `Invocation` differs from the mock in `MockAwareVerificationMode`.
+- `testHandleWhenNoVerificationModeAndNoStubbing`: Ensures default answer is returned when no verification/stubbing is active.
+- `testHandleWhenStubbingAndAnswerIsFound`: Tests retrieving a stubbed answer.
+- `testHandleWhenStubbingAndAnswerNotFoundReturnsDefault`: Tests fallback to default answer when no stubbing matches.
+- `testVoidMethodStubbable`: Checks `voidMethodStubbable` returns a non-null instance.
+- `testGetMockSettings`: Verifies `getMockSettings` returns the correct `MockSettingsImpl`.
+- `testSetAnswersForStubbing`: Checks if `setAnswersForStubbing` sets the container state.
+- `testGetInvocationContainer`: Asserts `getInvocationContainer` returns an `InvocationContainerImpl`.
+- `testHandle_when_invocationContainerImpl_hasAnswersForStubbing_returnsNull`: Tests stubbing void methods return null.
+- `testHandle_when_verificationMode_isNotNull_and_mockMatches`: Tests verification flow when mock matches.
+- `testHandle_when_verificationMode_isNotNull_and_mockDoesNotMatch`: Tests skipping verification when mock does not match.
+- `testHandle_callsDefaultAnswerWhenNoStubbingAndNoVerification`: Verifies default answer logic.
+- `testHandle_capturesArgumentsWhenStubbed`: Checks argument capturing in stubbed answers.
+- `testHandle_callsAnswerWhenStubbed`: Tests direct stubbed answer execution.
+- `testHandle_returnsDefaultAnswerWhenNoMatchingStubbing`: Re-verifies default answer fallback.
+- `testHandle_resetsInvocationForPotentialStubbingForPartialMocks`: Checks internal state reset for partial mocks.
+- `testVoidMethodStubbable_toThrow`: Tests the `toThrow` behavior of `VoidMethodStubbable`.
+- `testVoidMethodStubbable_toReturn`: Tests the `toReturn` behavior of `VoidMethodStubbable`.
+- `testVoidMethodStubbable_toAnswer`: Tests the `toAnswer` behavior of `VoidMethodStubbable`.
+- `testVoidMethodStubbable_on`: Tests the `on()` method of `VoidMethodStubbable`.
+- `testMockHandlerConstructorWithMockSettings`: Tests constructor with `MockSettingsImpl`.
+- `testMockHandlerConstructorWithOldMockHandler`: Tests constructor with another `MockHandlerInterface`.
+
+## DEFECT DETECTION STRATEGY
+Tests cover the core logic of `MockHandler.handle` for stubbing, verification, and default answers. They also verify the correct initialization and usage of `VoidMethodStubbable` and `MockHandler` itself, aiming to catch issues in conditional branches and state management.
+
+## SUMMARY
+25 tests.
+
+## LIMITATIONS
+The tests rely on internal Mockito classes and simplified `Invocation` object creation. Direct verification of internal state changes (like argument capturing within `StubbedInvocationMatcher` before `answer()` is called) is not fully possible without deeper mocking or reflection, so some tests verify the presence of the calls or expected outcomes rather than direct state assertions. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

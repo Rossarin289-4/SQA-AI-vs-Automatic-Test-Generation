@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="th" xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>การใช้งานและค่าใช้จ่าย — TestBench</title>
+  <link rel="stylesheet" href="/styles.css?v=20261004-export2">
+  <script src="/theme.js"></script>
+  <script src="/modal.js"></script>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/" aria-label="กลับหน้า TestBench"><span class="brand-mark">TB</span><span>TestBench</span></a>
+  <div class="top-actions"><a class="settings-link" href="/">เริ่มการทดลอง</a><a class="settings-link" href="/history">ประวัติการทดลอง</a><a class="settings-link" href="/settings">ตั้งค่า AI providers</a><button class="theme-toggle" type="button" data-theme-toggle aria-label="เปลี่ยนเป็นโหมดมืด"><span class="theme-toggle-icon" aria-hidden="true">☾</span><span data-theme-label>โหมดมืด</span></button></div>
+</header>
+<main class="history-shell usage-shell">
+  <div class="usage-head">
+    <div><p class="kicker">USAGE &amp; COST</p><h1>การใช้งานและค่าใช้จ่าย</h1><p>ทุกการเรียก AI และเวลาสร้าง test ของ algorithm ที่บันทึกไว้ในผลการทดลอง</p></div>
+    <div class="usage-filters">
+      <div class="usage-ranges" role="group" aria-label="ช่วงเวลา">
+        <button type="button" data-range="today">วันนี้</button><button type="button" data-range="7d" class="is-active">7 วัน</button><button type="button" data-range="30d">30 วัน</button><button type="button" data-range="all">ทั้งหมด</button>
+      </div>
+      <select id="usage-project" aria-label="Project"><option value="">ทุก Project</option></select>
+    </div>
+  </div>
+  <section class="usage-cards" aria-live="polite">
+    <div class="usage-card"><small>ค่าใช้จ่ายรวม</small><b id="u-cost">—</b><span id="u-cost-note"></span></div>
+    <div class="usage-card"><small>เวลา AI</small><b id="u-ai-time">—</b><span id="u-calls"></span></div>
+    <div class="usage-card"><small>Tokens เข้า → ออก</small><b id="u-tokens">—</b><span id="u-cache"></span></div>
+    <div class="usage-card"><small>เวลา algorithm</small><b id="u-algo-time">—</b><span id="u-algo-runs"></span></div>
+  </section>
+  <h2 class="usage-title">ค่าใช้จ่ายแยกตาม AI</h2>
+  <div class="campaign-table-wrap"><table class="campaign-table usage-table"><thead><tr><th>AI</th><th class="num">คำขอ</th><th class="num">เวลา</th><th class="num">Tokens เข้า → ออก</th><th class="num">จาก cache</th><th class="num">ค่าใช้จ่าย</th></tr></thead><tbody id="u-ai-body"></tbody></table></div>
+  <h2 class="usage-title">แยกตาม Project <small>กดชื่อ Project เพื่อดูรายบัก</small></h2>
+  <div class="campaign-table-wrap"><table class="campaign-table usage-table"><thead><tr><th>Project</th><th class="num">คำขอ AI</th><th class="num">เวลา AI</th><th class="num">Tokens เข้า → ออก</th><th class="num">ค่าใช้จ่าย AI</th><th class="num">เวลา algorithm</th></tr></thead><tbody id="u-project-body"></tbody></table></div>
+  <h2 class="usage-title">เวลาสร้าง test ของ algorithm <small>algorithm ไม่คิดค่าใช้จ่าย แสดงเฉพาะเวลา</small></h2>
+  <div class="campaign-table-wrap"><table class="campaign-table usage-table"><thead><tr><th>Algorithm</th><th class="num">จำนวนครั้ง</th><th class="num">เวลารวม</th><th class="num">เฉลี่ยต่อครั้ง</th></tr></thead><tbody id="u-algo-body"></tbody></table></div>
+  <p class="campaign-note" id="u-note"></p>
+</main>
+<script th:inline="javascript">
+(() => {
+  const state = {range: '7d', project: ''};
+  let rate = /*[[${usdToThb}]]*/ 33;
+  const $ = id => document.getElementById(id);
+  const num = n => Number(n || 0).toLocaleString('en-US');
+  const compact = n => { n = Number(n || 0); if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M'; if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e5 ? 0 : 1) + 'k'; return String(n); };
+  const dur = ms => { ms = Number(ms || 0); const s = Math.round(ms / 1000); if (s < 60) return s + ' วินาที'; const m = Math.floor(s / 60); if (m < 60) return m + ' นาที ' + (s % 60) + ' วินาที'; const h = Math.floor(m / 60); return h + ' ชม. ' + (m % 60) + ' นาที'; };
+  const money = usd => { usd = Number(usd || 0); return '$' + (usd >= 1 ? usd.toFixed(2) : usd.toFixed(4)) + ' (≈ ฿' + (usd * rate).toFixed(2) + ')'; };
+  const cell = (tr, text, cls) => { const td = document.createElement('td'); td.textContent = text; if (cls) td.className = cls; tr.appendChild(td); return td; };
+  const share = a => a.tokensIn > 0 ? Math.round(100 * a.tokensCached / a.tokensIn) + '%' : '—';
+  const render = d => {
+    rate = d.usdToThb || rate;
+    const t = d.total;
+    $('u-cost').textContent = money(t.cost);
+    $('u-cost-note').textContent = t.costMissing > 0 ? t.costMissing + ' คำขอไม่มีราคา (local หรือ provider ไม่ส่งราคา) นับเป็น 0' : 'รวมเฉพาะ AI · algorithm ไม่คิดเงิน';
+    $('u-ai-time').textContent = dur(t.aiMs);
+    $('u-calls').textContent = num(t.calls) + ' คำขอ' + (t.failed ? ' · ล้มเหลว ' + t.failed : '');
+    $('u-tokens').textContent = compact(t.tokensIn) + ' → ' + compact(t.tokensOut);
+    $('u-cache').textContent = t.tokensIn > 0 ? share(t) + ' ของ input มาจาก cache' : 'ยังไม่มีข้อมูล';
+    $('u-algo-time').textContent = dur(t.algorithmMs);
+    $('u-algo-runs').textContent = num(t.algorithmRuns) + ' ครั้ง · ' + num(t.runs) + ' run';
+    // project filter options
+    const select = $('usage-project');
+    const wanted = ['', ...(d.projects || [])];
+    if (Array.from(select.options).map(o => o.value).join('|') !== wanted.join('|')) {
+      select.replaceChildren();
+      wanted.forEach(v => { const o = document.createElement('option'); o.value = v; o.textContent = v || 'ทุก Project'; select.appendChild(o); });
+    }
+    select.value = state.project;
+    const aiBody = $('u-ai-body'); aiBody.replaceChildren();
+    if (!(d.byAi || []).length) { const tr = document.createElement('tr'); cell(tr, 'ยังไม่มีการเรียก AI ในช่วงนี้').colSpan = 6; aiBody.appendChild(tr); }
+    (d.byAi || []).forEach(a => { const tr = document.createElement('tr');
+      cell(tr, a.name); cell(tr, num(a.calls) + (a.failed ? ' (ล้มเหลว ' + a.failed + ')' : ''), 'num'); cell(tr, dur(a.aiMs), 'num');
+      cell(tr, compact(a.tokensIn) + ' → ' + compact(a.tokensOut), 'num'); cell(tr, share(a), 'num');
+      cell(tr, a.costMissing === a.calls && a.calls > 0 ? 'ไม่มีราคา' : money(a.cost), 'num'); aiBody.appendChild(tr); });
+    const pBody = $('u-project-body'); pBody.replaceChildren();
+    if (!(d.byProject || []).length) { const tr = document.createElement('tr'); cell(tr, 'ยังไม่มีผลการทดลองในช่วงนี้').colSpan = 6; pBody.appendChild(tr); }
+    (d.byProject || []).forEach(p => {
+      const tr = document.createElement('tr'); tr.className = 'usage-project-row';
+      cell(tr, '▸ ' + p.name); cell(tr, num(p.calls), 'num'); cell(tr, dur(p.aiMs), 'num'); cell(tr, compact(p.tokensIn) + ' → ' + compact(p.tokensOut), 'num');
+      cell(tr, money(p.cost), 'num'); cell(tr, dur(p.algorithmMs), 'num'); pBody.appendChild(tr);
+      const subs = (p.bugs || []).map(b => { const s = document.createElement('tr'); s.className = 'usage-bug-row'; s.hidden = true;
+        cell(s, b.name); cell(s, num(b.calls), 'num'); cell(s, dur(b.aiMs), 'num'); cell(s, compact(b.tokensIn) + ' → ' + compact(b.tokensOut), 'num');
+        cell(s, money(b.cost), 'num'); cell(s, dur(b.algorithmMs), 'num'); pBody.appendChild(s); return s; });
+      tr.addEventListener('click', () => { const open = subs.length && subs[0].hidden; subs.forEach(s => { s.hidden = !open; }); tr.firstChild.textContent = (open ? '▾ ' : '▸ ') + p.name; });
+    });
+    const aBody = $('u-algo-body'); aBody.replaceChildren();
+    if (!(d.byAlgorithm || []).length) { const tr = document.createElement('tr'); cell(tr, 'ยังไม่มีการสร้าง test ด้วย algorithm ในช่วงนี้').colSpan = 4; aBody.appendChild(tr); }
+    (d.byAlgorithm || []).forEach(a => { const tr = document.createElement('tr');
+      cell(tr, a.name); cell(tr, num(a.algorithmRuns), 'num'); cell(tr, dur(a.algorithmMs), 'num');
+      cell(tr, a.algorithmRuns ? dur(a.algorithmMs / a.algorithmRuns) : '—', 'num'); aBody.appendChild(tr); });
+    $('u-note').textContent = 'ข้อมูลมาจาก metadata.json ของทุก run (ราคาเป็น USD ตามที่ provider รายงาน; ค่าเงินบาทเป็นค่าประมาณที่อัตรา ' + rate + ' บาท/USD ตั้งได้ที่ bench.usd-to-thb) · วันนี้นับตั้งแต่เที่ยงคืนเวลาไทย';
+  };
+  const load = async () => {
+    try {
+      const response = await fetch('/usage-data?range=' + encodeURIComponent(state.range) + '&project=' + encodeURIComponent(state.project), {cache: 'no-store'});
+      const data = await response.json();
+      if (data.ok) render(data);
+    } catch (_) { $('u-note').textContent = 'โหลดข้อมูลไม่สำเร็จ ลองรีเฟรชหน้านี้'; }
+  };
+  document.querySelectorAll('.usage-ranges button').forEach(button => button.addEventListener('click', () => {
+    state.range = button.dataset.range;
+    document.querySelectorAll('.usage-ranges button').forEach(b => b.classList.toggle('is-active', b === button));
+    load();
+  }));
+  $('usage-project').addEventListener('change', event => { state.project = event.target.value; load(); });
+  load();
+  setInterval(load, 15000);
+})();
+</script>
+</body>
+</html>

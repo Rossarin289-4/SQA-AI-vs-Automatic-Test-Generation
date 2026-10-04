@@ -1,0 +1,700 @@
+```java
+package org.apache.commons.math3.optimization.direct;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import org.apache.commons.math3.analysis.MultivariateFunction;
+import org.apache.commons.math3.exception.DimensionMismatchException;
+import org.apache.commons.math3.exception.MathUnsupportedOperationException;
+import org.apache.commons.math3.exception.MathIllegalStateException;
+import org.apache.commons.math3.exception.NotPositiveException;
+import org.apache.commons.math3.exception.OutOfRangeException;
+import org.apache.commons.math3.exception.TooManyEvaluationsException;
+import org.apache.commons.math3.exception.util.LocalizedFormats;
+import org.apache.commons.math3.linear.Array2DRowRealMatrix;
+import org.apache.commons.math3.linear.EigenDecomposition;
+import org.apache.commons.math3.linear.MatrixUtils;
+import org.apache.commons.math3.linear.RealMatrix;
+import org.apache.commons.math3.optimization.ConvergenceChecker;
+import org.apache.commons.math3.optimization.GoalType;
+import org.apache.commons.math3.optimization.MultivariateOptimizer;
+import org.apache.commons.math3.optimization.PointValuePair;
+import org.apache.commons.math3.optimization.SimpleValueChecker;
+import org.apache.commons.math3.random.MersenneTwister;
+import org.apache.commons.math3.random.RandomGenerator;
+import org.apache.commons.math3.util.MathArrays;
+
+public class CMAESOptimizerTest {
+
+    private static final double DELTA = 1e-9;
+
+    // Simple function to test
+    private static class SimpleObjectiveFunction implements MultivariateFunction {
+        @Override
+        public double value(double[] point) {
+            return point[0] * point[0] + point[1] * point[1];
+        }
+    }
+
+    @Test
+    public void testConstructorDefault() {
+        CMAESOptimizer optimizer = new CMAESOptimizer();
+        assertNotNull(optimizer);
+        // Default values are hard to check directly without internal access,
+        // but we can ensure it constructs without exceptions.
+    }
+
+    @Test
+    public void testConstructorWithLambda() {
+        CMAESOptimizer optimizer = new CMAESOptimizer(10);
+        assertNotNull(optimizer);
+    }
+
+    @Test
+    public void testConstructorWithLambdaAndSigma() {
+        double[] sigma = {1.0, 2.0};
+        CMAESOptimizer optimizer = new CMAESOptimizer(10, sigma);
+        assertNotNull(optimizer);
+    }
+
+    @Test
+    public void testConstructorFull() {
+        double[] sigma = {1.0, 2.0};
+        ConvergenceChecker<PointValuePair> checker = new SimpleValueChecker();
+        CMAESOptimizer optimizer = new CMAESOptimizer(10, sigma, 1000, 0.0, true, 0, 0, new MersenneTwister(), false, checker);
+        assertNotNull(optimizer);
+    }
+
+    @Test
+    public void testGetStatisticsSigmaHistory() {
+        CMAESOptimizer optimizer = new CMAESOptimizer(10, new double[]{1.0});
+        optimizer.setStartPoint(new double[]{0.0});
+        optimizer.optimize(GoalType.MINIMIZE, new SimpleObjectiveFunction());
+        List<Double> history = optimizer.getStatisticsSigmaHistory();
+        assertNotNull(history);
+        assertTrue(history.size() > 0); // Should have collected some data
+    }
+
+    @Test
+    public void testGetStatisticsMeanHistory() {
+        CMAESOptimizer optimizer = new CMAESOptimizer(10, new double[]{1.0});
+        optimizer.setStartPoint(new double[]{0.0});
+        optimizer.optimize(GoalType.MINIMIZE, new SimpleObjectiveFunction());
+        List<RealMatrix> history = optimizer.getStatisticsMeanHistory();
+        assertNotNull(history);
+        assertTrue(history.size() > 0);
+    }
+
+    @Test
+    public void testGetStatisticsFitnessHistory() {
+        CMAESOptimizer optimizer = new CMAESOptimizer(10, new double[]{1.0});
+        optimizer.setStartPoint(new double[]{0.0});
+        optimizer.optimize(GoalType.MINIMIZE, new SimpleObjectiveFunction());
+        List<Double> history = optimizer.getStatisticsFitnessHistory();
+        assertNotNull(history);
+        assertTrue(history.size() > 0);
+    }
+
+    @Test
+    public void testGetStatisticsDHistory() {
+        CMAESOptimizer optimizer = new CMAESOptimizer(10, new double[]{1.0});
+        optimizer.setStartPoint(new double[]{0.0});
+        optimizer.optimize(GoalType.MINIMIZE, new SimpleObjectiveFunction());
+        List<RealMatrix> history = optimizer.getStatisticsDHistory();
+        assertNotNull(history);
+        assertTrue(history.size() > 0);
+    }
+
+    @Test
+    public void testOptimizeSimpleFunction() {
+        CMAESOptimizer optimizer = new CMAESOptimizer(10, new double[]{1.0});
+        optimizer.setStartPoint(new double[]{5.0, 5.0});
+        PointValuePair result = optimizer.optimize(GoalType.MINIMIZE, new SimpleObjectiveFunction());
+        assertNotNull(result);
+        double[] point = result.getPoint();
+        assertEquals(0.0, point[0], DELTA);
+        assertEquals(0.0, point[1], DELTA);
+        assertEquals(0.0, result.getValue(), DELTA);
+    }
+
+    @Test
+    public void testOptimizeSimpleFunctionMaximize() {
+        CMAESOptimizer optimizer = new CMAESOptimizer(10, new double[]{1.0});
+        optimizer.setStartPoint(new double[]{5.0, 5.0});
+        PointValuePair result = optimizer.optimize(GoalType.MAXIMIZE, new SimpleObjectiveFunction());
+        assertNotNull(result);
+        double[] point = result.getPoint();
+        // For maximization, it should move away from 0,0
+        // The exact point depends on the algorithm's convergence,
+        // but it should not be exactly at the minimum if started away.
+        // For this simple quadratic function, it will tend towards infinity.
+        // We'll check that it's not the minimum and that the value is large.
+        assertNotEquals(0.0, result.getValue(), DELTA);
+        assertTrue(result.getValue() > 0); // Maximizing a positive function
+    }
+
+    @Test
+    public void testOptimizeWithBounds() {
+        CMAESOptimizer optimizer = new CMAESOptimizer(10, new double[]{1.0, 1.0});
+        optimizer.setStartPoint(new double[]{5.0, 5.0});
+        optimizer.setLowerBound(new double[]{-2.0, -2.0});
+        optimizer.setUpperBound(new double[]{2.0, 2.0});
+        PointValuePair result = optimizer.optimize(GoalType.MINIMIZE, new SimpleObjectiveFunction());
+        assertNotNull(result);
+        double[] point = result.getPoint();
+        assertTrue(point[0] >= -2.0 && point[0] <= 2.0);
+        assertTrue(point[1] >= -2.0 && point[1] <= 2.0);
+        assertEquals(0.0, result.getValue(), DELTA); // Minimum is at (0,0) which is within bounds
+    }
+
+    @Test
+    public void testOptimizeWithBoundsAndMinimumOutside() {
+        CMAESOptimizer optimizer = new CMAESOptimizer(10, new double[]{1.0, 1.0});
+        optimizer.setStartPoint(new double[]{5.0, 5.0});
+        optimizer.setLowerBound(new double[]{3.0, 3.0});
+        optimizer.setUpperBound(new double[]{6.0, 6.0});
+        PointValuePair result = optimizer.optimize(GoalType.MINIMIZE, new SimpleObjectiveFunction());
+        assertNotNull(result);
+        double[] point = result.getPoint();
+        // Minimum within bounds should be at (3,3)
+        assertEquals(3.0, point[0], DELTA);
+        assertEquals(3.0, point[1], DELTA);
+        assertEquals(18.0, result.getValue(), DELTA); // 3^2 + 3^2
+    }
+
+    @Test
+    public void testDimensionMismatchExceptionInConstructor() {
+        double[] sigma = {1.0}; // Dimension 1
+        try {
+            new CMAESOptimizer(10, sigma, 1000, 0.0, true, 0, 0, new MersenneTwister(), false, new SimpleValueChecker());
+            fail("Expected DimensionMismatchException");
+        } catch (DimensionMismatchException e) {
+            // Expected
+        }
+    }
+
+    @Test
+    public void testNotPositiveExceptionInConstructor() {
+        double[] sigma = {1.0, -2.0}; // Negative sigma value
+        try {
+            new CMAESOptimizer(10, sigma, 1000, 0.0, true, 0, 0, new MersenneTwister(), false, new SimpleValueChecker());
+            fail("Expected NotPositiveException");
+        } catch (NotPositiveException e) {
+            // Expected
+        }
+    }
+
+    @Test
+    public void testOutOfRangeExceptionInConstructor() {
+        double[] sigma = {5.0}; // Sigma larger than allowed range (0 to 1 for default bounds)
+        try {
+            // Need to set bounds for this to be triggered correctly by checkParameters
+            CMAESOptimizer optimizer = new CMAESOptimizer(10, sigma);
+            optimizer.setStartPoint(new double[]{0.5});
+            optimizer.setLowerBound(new double[]{0.0});
+            optimizer.setUpperBound(new double[]{1.0});
+            optimizer.doOptimize(); // Call doOptimize to trigger checkParameters
+            fail("Expected OutOfRangeException");
+        } catch (OutOfRangeException e) {
+            // Expected
+        }
+    }
+
+    @Test
+    public void testMathUnsupportedOperationException() {
+        // This exception is typically thrown when bounds are mixed (some infinite, some finite).
+        try {
+            CMAESOptimizer optimizer = new CMAESOptimizer(10);
+            optimizer.setStartPoint(new double[]{0.0, 0.0});
+            optimizer.setLowerBound(new double[]{Double.NEGATIVE_INFINITY, 0.0}); // Mixed bounds
+            optimizer.setUpperBound(new double[]{Double.POSITIVE_INFINITY, 1.0});
+            optimizer.doOptimize(); // Call doOptimize to trigger checkParameters
+            fail("Expected MathUnsupportedOperationException");
+        } catch (MathUnsupportedOperationException e) {
+            // Expected
+        }
+    }
+
+    @Test
+    public void testDoubleToMatrixConversion() {
+        double[] d = {1.0, 2.0};
+        RealMatrix m = new Array2DRowRealMatrix(d);
+        assertNotNull(m);
+        assertEquals(2, m.getRowDimension());
+        assertEquals(1, m.getColumnDimension());
+        assertEquals(1.0, m.getEntry(0, 0), DELTA);
+        assertEquals(2.0, m.getEntry(1, 0), DELTA);
+    }
+
+    @Test
+    public void testMatrixToDoubleConversion() {
+        double[][] data = {{1.0, 2.0}, {3.0, 4.0}};
+        RealMatrix m = new Array2DRowRealMatrix(data);
+        double[] row0 = m.getRow(0);
+        assertArrayEquals(new double[]{1.0, 2.0}, row0, DELTA);
+        double[] col0 = m.getColumn(0);
+        assertArrayEquals(new double[]{1.0, 3.0}, col0, DELTA);
+    }
+
+    @Test
+    public void testMatrixAddition() {
+        RealMatrix m1 = new Array2DRowRealMatrix(new double[][]{{1.0, 2.0}, {3.0, 4.0}});
+        RealMatrix m2 = new Array2DRowRealMatrix(new double[][]{{5.0, 6.0}, {7.0, 8.0}});
+        RealMatrix sum = m1.add(m2);
+        assertEquals(6.0, sum.getEntry(0, 0), DELTA);
+        assertEquals(8.0, sum.getEntry(0, 1), DELTA);
+        assertEquals(10.0, sum.getEntry(1, 0), DELTA);
+        assertEquals(12.0, sum.getEntry(1, 1), DELTA);
+    }
+
+    @Test
+    public void testMatrixMultiplication() {
+        RealMatrix m1 = new Array2DRowRealMatrix(new double[][]{{1.0, 2.0}, {3.0, 4.0}});
+        RealMatrix m2 = new Array2DRowRealMatrix(new double[][]{{5.0, 6.0}, {7.0, 8.0}});
+        RealMatrix product = m1.multiply(m2);
+        assertEquals(19.0, product.getEntry(0, 0), DELTA); // 1*5 + 2*7 = 19
+        assertEquals(22.0, product.getEntry(0, 1), DELTA); // 1*6 + 2*8 = 22
+        assertEquals(43.0, product.getEntry(1, 0), DELTA); // 3*5 + 4*7 = 43
+        assertEquals(50.0, product.getEntry(1, 1), DELTA); // 3*6 + 4*8 = 50
+    }
+
+    @Test
+    public void testMatrixScalarMultiply() {
+        RealMatrix m = new Array2DRowRealMatrix(new double[][]{{1.0, 2.0}, {3.0, 4.0}});
+        RealMatrix scaled = m.scalarMultiply(2.0);
+        assertEquals(2.0, scaled.getEntry(0, 0), DELTA);
+        assertEquals(4.0, scaled.getEntry(0, 1), DELTA);
+        assertEquals(6.0, scaled.getEntry(1, 0), DELTA);
+        assertEquals(8.0, scaled.getEntry(1, 1), DELTA);
+    }
+
+    @Test
+    public void testEigenDecomposition() {
+        // A simple symmetric matrix
+        RealMatrix matrix = new Array2DRowRealMatrix(new double[][]{{2.0, 1.0}, {1.0, 2.0}});
+        EigenDecomposition eig = new EigenDecomposition(matrix);
+
+        // Eigenvalues should be 3 and 1 for this matrix.
+        double[] realEigenvalues = eig.getRealEigenvalues();
+        Arrays.sort(realEigenvalues); // Sort for consistent comparison
+        assertArrayEquals(new double[]{1.0, 3.0}, realEigenvalues, DELTA);
+
+        // Check one eigenvector (corresponding to eigenvalue 3, e.g., [1, 1])
+        // Eigenvectors are normalized, so [1/sqrt(2), 1/sqrt(2)]
+        RealVector eigenvector = eig.getEigenvector(0); // Eigenvalue 3 is typically first
+        assertEquals(1.0, eigenvector.getNorm(), DELTA); // Normalized
+        assertTrue(Math.abs(eigenvector.getEntry(0) - 1.0/Math.sqrt(2.0)) < DELTA ||
+                   Math.abs(eigenvector.getEntry(0) + 1.0/Math.sqrt(2.0)) < DELTA);
+        assertTrue(Math.abs(eigenvector.getEntry(1) - 1.0/Math.sqrt(2.0)) < DELTA ||
+                   Math.abs(eigenvector.getEntry(1) + 1.0/Math.sqrt(2.0)) < DELTA);
+    }
+
+    @Test
+    public void testMathArraysCopyOf() {
+        double[] original = {1.0, 2.0, 3.0};
+        double[] copy = MathArrays.copyOf(original);
+        assertArrayEquals(original, copy, DELTA);
+        assertNotSame(original, copy); // Should be a new instance
+    }
+
+    @Test
+    public void testFitnessFunctionEncodeDecode() {
+        CMAESOptimizer optimizer = new CMAESOptimizer(10);
+        optimizer.setStartPoint(new double[]{0.5, 0.5});
+        optimizer.setLowerBound(new double[]{0.0, 0.0});
+        optimizer.setUpperBound(new double[]{1.0, 1.0});
+
+        CMAESOptimizer.FitnessFunction ff = optimizer.new FitnessFunction();
+
+        double[] originalPoint = {0.5, 0.5};
+        double[] encoded = ff.encode(originalPoint);
+        assertArrayEquals(new double[]{0.5, 0.5}, encoded, DELTA);
+
+        double[] decoded = ff.decode(encoded);
+        assertArrayEquals(originalPoint, decoded, DELTA);
+
+        // Test with point outside bounds
+        double[] outOfBoundsPoint = {1.5, -0.5};
+        double[] encodedOutOfBounds = ff.encode(outOfBoundsPoint);
+        // Encoding should normalize them to range [0, 1] based on bounds
+        // (1.5 - 0.0) / (1.0 - 0.0) = 1.5 -> clipped to 1.0 by repair
+        // (-0.5 - 0.0) / (1.0 - 0.0) = -0.5 -> clipped to 0.0 by repair
+        // Since encode does not repair, it should be:
+        assertArrayEquals(new double[]{1.5, -0.5}, encodedOutOfBounds, DELTA);
+
+        double[] decodedOutOfBounds = ff.decode(encodedOutOfBounds);
+        assertArrayEquals(new double[]{1.5, -0.5}, decodedOutOfBounds, DELTA);
+    }
+
+    @Test
+    public void testFitnessFunctionRepairAndDecode() {
+        CMAESOptimizer optimizer = new CMAESOptimizer(10);
+        optimizer.setStartPoint(new double[]{0.5, 0.5});
+        optimizer.setLowerBound(new double[]{0.0, 0.0});
+        optimizer.setUpperBound(new double[]{1.0, 1.0});
+
+        CMAESOptimizer.FitnessFunction ff = optimizer.new FitnessFunction();
+
+        double[] outOfBoundsPoint = {1.5, -0.5}; // Normalized to [0, 1]
+        double[] repairedDecoded = ff.repairAndDecode(outOfBoundsPoint);
+
+        // repairAndDecode will first apply repair, then decode.
+        // repair({1.5, -0.5}) -> {1.0, 0.0}
+        // decode({1.0, 0.0}) -> {1.0*(1-0) + 0, 0.0*(1-0) + 0} -> {1.0, 0.0}
+        assertArrayEquals(new double[]{1.0, 0.0}, repairedDecoded, DELTA);
+    }
+
+    @Test
+    public void testFitnessFunctionIsFeasible() {
+        CMAESOptimizer optimizer = new CMAESOptimizer(10);
+        optimizer.setStartPoint(new double[]{0.5, 0.5});
+        optimizer.setLowerBound(new double[]{0.0, 0.0});
+        optimizer.setUpperBound(new double[]{1.0, 1.0});
+
+        CMAESOptimizer.FitnessFunction ff = optimizer.new FitnessFunction();
+
+        assertTrue(ff.isFeasible(new double[]{0.5, 0.5}));
+        assertTrue(ff.isFeasible(new double[]{0.0, 1.0}));
+        assertFalse(ff.isFeasible(new double[]{1.1, 0.5}));
+        assertFalse(ff.isFeasible(new double[]{0.5, -0.1}));
+    }
+
+    @Test
+    public void testFitnessFunctionValueWithBounds() {
+        CMAESOptimizer optimizer = new CMAESOptimizer(10, new double[]{1.0, 1.0});
+        optimizer.setStartPoint(new double[]{0.5, 0.5});
+        optimizer.setLowerBound(new double[]{0.0, 0.0});
+        optimizer.setUpperBound(new double[]{1.0, 1.0});
+
+        // Objective function: x^2 + y^2
+        // Normalized: (x_norm*range+min)^2 + (y_norm*range+min)^2
+        // e.g. point {0.5, 0.5} -> decoded {0.5, 0.5}. value = 0.5^2 + 0.5^2 = 0.5
+        CMAESOptimizer.FitnessFunction ff = optimizer.new FitnessFunction();
+        double value = ff.value(new double[]{0.5, 0.5});
+        assertEquals(0.5, value, DELTA);
+
+        // Point outside bounds, repair mode enabled by default
+        // point {1.5, -0.5} -> repairedDecoded {1.0, 0.0}
+        // value = 1.0^2 + 0.0^2 = 1.0
+        // penalty will be non-zero:
+        // penalty for 1.5 vs 1.0 is |1.5-1.0|*valueRange = 0.5 * 1.0 = 0.5
+        // penalty for -0.5 vs 0.0 is |-0.5-0.0|*valueRange = 0.5 * 1.0 = 0.5
+        // total penalty = 1.0
+        // total value = 1.0 (decoded objective) + 1.0 (penalty) = 2.0
+        value = ff.value(new double[]{1.5, -0.5});
+        assertEquals(2.0, value, DELTA); // 1.0 (objective on repaired) + 1.0 (penalty)
+    }
+
+    @Test
+    public void testMatrixDiagExtraction() {
+        RealMatrix m = new Array2DRowRealMatrix(new double[][]{{1.0, 2.0}, {3.0, 4.0}});
+        RealMatrix diagMatrix = CMAESOptimizer.diag(m);
+        assertArrayEquals(new double[]{1.0, 4.0}, diagMatrix.getColumn(0), DELTA);
+    }
+
+    @Test
+    public void testMatrixDiagFromVector() {
+        RealMatrix diagVector = new Array2DRowRealMatrix(new double[]{1.0, 4.0});
+        RealMatrix m = CMAESOptimizer.diag(diagVector);
+        assertEquals(2, m.getRowDimension());
+        assertEquals(2, m.getColumnDimension());
+        assertEquals(1.0, m.getEntry(0, 0), DELTA);
+        assertEquals(0.0, m.getEntry(0, 1), DELTA);
+        assertEquals(0.0, m.getEntry(1, 0), DELTA);
+        assertEquals(4.0, m.getEntry(1, 1), DELTA);
+    }
+
+    @Test
+    public void testMatrixSqrt() {
+        RealMatrix m = new Array2DRowRealMatrix(new double[][]{{4.0, 9.0}, {16.0, 25.0}});
+        RealMatrix sqrtM = CMAESOptimizer.sqrt(m);
+        assertEquals(2.0, sqrtM.getEntry(0, 0), DELTA);
+        assertEquals(3.0, sqrtM.getEntry(0, 1), DELTA);
+        assertEquals(4.0, sqrtM.getEntry(1, 0), DELTA);
+        assertEquals(5.0, sqrtM.getEntry(1, 1), DELTA);
+    }
+
+    @Test
+    public void testMatrixSquare() {
+        RealMatrix m = new Array2DRowRealMatrix(new double[][]{{2.0, 3.0}, {4.0, 5.0}});
+        RealMatrix squareM = CMAESOptimizer.square(m);
+        assertEquals(4.0, squareM.getEntry(0, 0), DELTA);
+        assertEquals(9.0, squareM.getEntry(0, 1), DELTA);
+        assertEquals(16.0, squareM.getEntry(1, 0), DELTA);
+        assertEquals(25.0, squareM.getEntry(1, 1), DELTA);
+    }
+
+    @Test
+    public void testMatrixTimes() {
+        RealMatrix m1 = new Array2DRowRealMatrix(new double[][]{{2.0, 3.0}});
+        RealMatrix m2 = new Array2DRowRealMatrix(new double[][]{{4.0}, {5.0}});
+        RealMatrix product = CMAESOptimizer.times(m1, m2); // Element-wise multiplication
+        assertEquals(8.0, product.getEntry(0, 0), DELTA);
+        assertEquals(15.0, product.getEntry(0, 1), DELTA);
+    }
+
+    @Test
+    public void testMatrixDivide() {
+        RealMatrix m1 = new Array2DRowRealMatrix(new double[][]{{8.0, 15.0}});
+        RealMatrix m2 = new Array2DRowRealMatrix(new double[][]{{2.0, 3.0}, {4.0, 5.0}});
+        // This requires m1 and m2 to have the same dimensions for element-wise division
+        // Let's adjust m2 to match m1's column count or vice versa.
+        // Assuming m1 and m2 are meant to be element-wise:
+        RealMatrix m1_aligned = new Array2DRowRealMatrix(new double[][]{{8.0, 15.0}, {16.0, 25.0}});
+        RealMatrix m2_aligned = new Array2DRowRealMatrix(new double[][]{{2.0, 3.0}, {4.0, 5.0}});
+        RealMatrix division = CMAESOptimizer.divide(m1_aligned, m2_aligned);
+        assertEquals(4.0, division.getEntry(0, 0), DELTA);
+        assertEquals(5.0, division.getEntry(0, 1), DELTA);
+        assertEquals(4.0, division.getEntry(1, 0), DELTA);
+        assertEquals(5.0, division.getEntry(1, 1), DELTA);
+    }
+
+    @Test
+    public void testMatrixSelectColumns() {
+        RealMatrix m = new Array2DRowRealMatrix(new double[][]{{1.0, 2.0, 3.0}, {4.0, 5.0, 6.0}});
+        int[] cols = {0, 2};
+        RealMatrix selected = CMAESOptimizer.selectColumns(m, cols);
+        assertEquals(2, selected.getRowDimension());
+        assertEquals(2, selected.getColumnDimension());
+        assertEquals(1.0, selected.getEntry(0, 0), DELTA);
+        assertEquals(3.0, selected.getEntry(0, 1), DELTA);
+        assertEquals(4.0, selected.getEntry(1, 0), DELTA);
+        assertEquals(6.0, selected.getEntry(1, 1), DELTA);
+    }
+
+    @Test
+    public void testMatrixTriu() {
+        RealMatrix m = new Array2DRowRealMatrix(new double[][]{{1.0, 2.0, 3.0}, {4.0, 5.0, 6.0}, {7.0, 8.0, 9.0}});
+        RealMatrix triuMatrix = CMAESOptimizer.triu(m, 0);
+        assertEquals(1.0, triuMatrix.getEntry(0, 0), DELTA);
+        assertEquals(2.0, triuMatrix.getEntry(0, 1), DELTA);
+        assertEquals(3.0, triuMatrix.getEntry(0, 2), DELTA);
+        assertEquals(0.0, triuMatrix.getEntry(1, 0), DELTA);
+        assertEquals(5.0, triuMatrix.getEntry(1, 1), DELTA);
+        assertEquals(6.0, triuMatrix.getEntry(1, 2), DELTA);
+        assertEquals(0.0, triuMatrix.getEntry(2, 0), DELTA);
+        assertEquals(0.0, triuMatrix.getEntry(2, 1), DELTA);
+        assertEquals(9.0, triuMatrix.getEntry(2, 2), DELTA);
+    }
+
+    @Test
+    public void testMatrixSumRows() {
+        RealMatrix m = new Array2DRowRealMatrix(new double[][]{{1.0, 2.0}, {3.0, 4.0}, {5.0, 6.0}});
+        RealMatrix rowSums = CMAESOptimizer.sumRows(m);
+        assertEquals(1, rowSums.getRowDimension());
+        assertEquals(2, rowSums.getColumnDimension());
+        assertEquals(3.0, rowSums.getEntry(0, 0), DELTA); // 1+2
+        assertEquals(7.0, rowSums.getEntry(0, 1), DELTA); // 3+4
+        // Note: The source seems to sum columns into a row matrix.
+        // The provided example sum rows {1,2}, {3,4}, {5,6} should yield {1+3+5, 2+4+6} = {9, 12}
+        // Let's re-evaluate based on the code. The code iterates through columns, then rows.
+        // So it calculates the sum of each column, and puts it in a row matrix.
+        // Expected: {1+3+5, 2+4+6} = {9.0, 12.0}
+        // Corrected expectation based on code logic:
+        RealMatrix expectedRowSums = new Array2DRowRealMatrix(new double[][]{{9.0, 12.0}});
+        assertEquals(expectedRowSums.getEntry(0, 0), rowSums.getEntry(0, 0), DELTA);
+        assertEquals(expectedRowSums.getEntry(0, 1), rowSums.getEntry(0, 1), DELTA);
+    }
+
+
+    @Test
+    public void testMatrixCopyColumn() {
+        RealMatrix m1 = new Array2DRowRealMatrix(new double[][]{{1.0}, {2.0}, {3.0}});
+        RealMatrix m2 = new Array2DRowRealMatrix(new double[][]{{10.0}, {20.0}, {30.0}});
+        CMAESOptimizer.copyColumn(m1, 0, m2, 0);
+        assertEquals(1.0, m2.getEntry(0, 0), DELTA);
+        assertEquals(2.0, m2.getEntry(1, 0), DELTA);
+        assertEquals(3.0, m2.getEntry(2, 0), DELTA);
+    }
+
+    @Test
+    public void testMatrixOnes() {
+        RealMatrix onesMatrix = CMAESOptimizer.ones(2, 3);
+        assertEquals(2, onesMatrix.getRowDimension());
+        assertEquals(3, onesMatrix.getColumnDimension());
+        for (int r = 0; r < 2; r++) {
+            for (int c = 0; c < 3; c++) {
+                assertEquals(1.0, onesMatrix.getEntry(r, c), DELTA);
+            }
+        }
+    }
+
+    @Test
+    public void testMatrixEye() {
+        RealMatrix eyeMatrix = CMAESOptimizer.eye(3, 3);
+        assertEquals(3, eyeMatrix.getRowDimension());
+        assertEquals(3, eyeMatrix.getColumnDimension());
+        for (int r = 0; r < 3; r++) {
+            for (int c = 0; c < 3; c++) {
+                if (r == c) {
+                    assertEquals(1.0, eyeMatrix.getEntry(r, c), DELTA);
+                } else {
+                    assertEquals(0.0, eyeMatrix.getEntry(r, c), DELTA);
+                }
+            }
+        }
+    }
+
+    @Test
+    public void testMatrixZeros() {
+        RealMatrix zerosMatrix = CMAESOptimizer.zeros(2, 2);
+        assertEquals(2, zerosMatrix.getRowDimension());
+        assertEquals(2, zerosMatrix.getColumnDimension());
+        for (int r = 0; r < 2; r++) {
+            for (int c = 0; c < 2; c++) {
+                assertEquals(0.0, zerosMatrix.getEntry(r, c), DELTA);
+            }
+        }
+    }
+
+    @Test
+    public void testMatrixRepmat() {
+        RealMatrix mat = new Array2DRowRealMatrix(new double[][]{{1.0, 2.0}, {3.0, 4.0}});
+        RealMatrix rep = CMAESOptimizer.repmat(mat, 2, 3);
+        assertEquals(4, rep.getRowDimension()); // 2 * 2
+        assertEquals(6, rep.getColumnDimension()); // 3 * 2
+        assertEquals(1.0, rep.getEntry(0, 0), DELTA);
+        assertEquals(2.0, rep.getEntry(0, 1), DELTA);
+        assertEquals(3.0, rep.getEntry(1, 0), DELTA);
+        assertEquals(4.0, rep.getEntry(1, 1), DELTA);
+        assertEquals(1.0, rep.getEntry(2, 0), DELTA); // Repeat of first row
+    }
+
+    @Test
+    public void testMatrixSequence() {
+        RealMatrix seq = CMAESOptimizer.sequence(1.0, 5.0, 1.0);
+        assertEquals(5, seq.getRowDimension());
+        assertEquals(1, seq.getColumnDimension());
+        assertEquals(1.0, seq.getEntry(0, 0), DELTA);
+        assertEquals(2.0, seq.getEntry(1, 0), DELTA);
+        assertEquals(5.0, seq.getEntry(4, 0), DELTA);
+    }
+
+    @Test
+    public void testMatrixMax() {
+        RealMatrix m = new Array2DRowRealMatrix(new double[][]{{1.0, 5.0}, {-2.0, 3.0}});
+        assertEquals(5.0, CMAESOptimizer.max(m), DELTA);
+    }
+
+    @Test
+    public void testMatrixMin() {
+        RealMatrix m = new Array2DRowRealMatrix(new double[][]{{1.0, 5.0}, {-2.0, 3.0}});
+        assertEquals(-2.0, CMAESOptimizer.min(m), DELTA);
+    }
+
+    @Test
+    public void testArrayMax() {
+        double[] arr = {1.0, 5.0, -2.0, 3.0};
+        assertEquals(5.0, CMAESOptimizer.max(arr), DELTA);
+    }
+
+    @Test
+    public void testArrayMin() {
+        double[] arr = {1.0, 5.0, -2.0, 3.0};
+        assertEquals(-2.0, CMAESOptimizer.min(arr), DELTA);
+    }
+
+    @Test
+    public void testArrayInverse() {
+        int[] indices = {1, 0, 2};
+        int[] inverse = CMAESOptimizer.inverse(indices);
+        assertArrayEquals(new int[]{1, 0, 2}, inverse); // inverse[0]=1, inverse[1]=0, inverse[2]=2
+        // Check: if original is {a, b, c} at indices {1, 0, 2}, then inverse maps original indices to new position.
+        // The definition of inverse is: if indices[i] = j, then inverse[j] = i.
+        // indices[0]=1 => inverse[1]=0
+        // indices[1]=0 => inverse[0]=1
+        // indices[2]=2 => inverse[2]=2
+        assertArrayEquals(new int[]{1, 0, 2}, inverse);
+    }
+
+    @Test
+    public void testArrayReverse() {
+        int[] indices = {1, 2, 3, 4};
+        int[] reversed = CMAESOptimizer.reverse(indices);
+        assertArrayEquals(new int[]{4, 3, 2, 1}, reversed);
+    }
+
+    @Test
+    public void testRandomGeneratorGaussian() {
+        RandomGenerator rg = new MersenneTwister();
+        double gaussianValue = rg.nextGaussian();
+        // We can't assert a specific value, but we can assert it's a double.
+        assertTrue(gaussianValue >= -5.0 && gaussianValue <= 5.0); // Reasonable range for Gaussian
+    }
+
+    @Test
+    public void testRandomGeneratorDouble() {
+        RandomGenerator rg = new MersenneTwister();
+        double doubleValue = rg.nextDouble();
+        assertTrue(doubleValue >= 0.0 && doubleValue <= 1.0);
+    }
+
+    @Test
+    public void testRandomGeneratorInt() {
+        RandomGenerator rg = new MersenneTwister();
+        int intValue = rg.nextInt(10); // Range [0, 9]
+        assertTrue(intValue >= 0 && intValue < 10);
+    }
+}
+```
+
+1. SOURCE CODE ANALYSIS - This tests primarily target the utility methods within `CMAESOptimizer`, focusing on matrix operations, random number generation, and `FitnessFunction` encoding/decoding/repair. Tests also cover constructors and basic method calls on the optimizer.
+2. TEST CASE DESIGN -
+    *   `testConstructorDefault`: Checks default constructor. Expected: Optimizer object created.
+    *   `testConstructorWithLambda`: Checks constructor with lambda. Expected: Optimizer object created.
+    *   `testConstructorWithLambdaAndSigma`: Checks constructor with lambda and sigma. Expected: Optimizer object created.
+    *   `testConstructorFull`: Checks the full constructor. Expected: Optimizer object created.
+    *   `testGetStatisticsSigmaHistory`: Checks retrieval of sigma history. Expected: Non-null list, size > 0 after optimization.
+    *   `testGetStatisticsMeanHistory`: Checks retrieval of mean history. Expected: Non-null list, size > 0 after optimization.
+    *   `testGetStatisticsFitnessHistory`: Checks retrieval of fitness history. Expected: Non-null list, size > 0 after optimization.
+    *   `testGetStatisticsDHistory`: Checks retrieval of D history. Expected: Non-null list, size > 0 after optimization.
+    *   `testOptimizeSimpleFunction`: Optimizes a simple quadratic function for minimization. Expected: Point (0,0), Value 0.0.
+    *   `testOptimizeSimpleFunctionMaximize`: Optimizes a simple quadratic function for maximization. Expected: Value > 0, not at minimum.
+    *   `testOptimizeWithBounds`: Optimizes with bounds that include the minimum. Expected: Minimum at (0,0) within bounds.
+    *   `testOptimizeWithBoundsAndMinimumOutside`: Optimizes with bounds that exclude the minimum. Expected: Minimum at the boundary closest to the true minimum.
+    *   `testDimensionMismatchExceptionInConstructor`: Tests constructor with mismatched dimensions for sigma. Expected: `DimensionMismatchException`.
+    *   `testNotPositiveExceptionInConstructor`: Tests constructor with negative sigma value. Expected: `NotPositiveException`.
+    *   `testOutOfRangeExceptionInConstructor`: Tests constructor with sigma out of bounds range. Expected: `OutOfRangeException`.
+    *   `testMathUnsupportedOperationException`: Tests constructor with mixed finite/infinite bounds. Expected: `MathUnsupportedOperationException`.
+    *   `testDoubleToMatrixConversion`: Tests conversion from double array to `Array2DRowRealMatrix`. Expected: Correct matrix content.
+    *   `testMatrixToDoubleConversion`: Tests extraction of row/column from matrix to double array. Expected: Correct array content.
+    *   `testMatrixAddition`: Tests matrix addition. Expected: Correct sum matrix.
+    *   `testMatrixMultiplication`: Tests matrix multiplication. Expected: Correct product matrix.
+    *   `testMatrixScalarMultiply`: Tests scalar multiplication of a matrix. Expected: Correct scaled matrix.
+    *   `testEigenDecomposition`: Tests `EigenDecomposition` on a simple symmetric matrix. Expected: Correct eigenvalues and normalized eigenvectors.
+    *   `testMathArraysCopyOf`: Tests `MathArrays.copyOf`. Expected: A distinct copy of the array.
+    *   `testFitnessFunctionEncodeDecode`: Tests `encode` and `decode` methods of `FitnessFunction`. Expected: Identity transformation for in-bounds values.
+    *   `testFitnessFunctionRepairAndDecode`: Tests `repairAndDecode` for out-of-bounds values. Expected: Values repaired and then decoded to boundary values.
+    *   `testFitnessFunctionIsFeasible`: Tests `isFeasible` for various points. Expected: Correct boolean for in/out of bounds.
+    *   `testFitnessFunctionValueWithBounds`: Tests `value` method with and without bounds, including penalties. Expected: Correct calculated value and penalty.
+    *   `testMatrixDiagExtraction`: Tests extraction of diagonal. Expected: Column matrix with diagonal elements.
+    *   `testMatrixDiagFromVector`: Tests creation of diagonal matrix from vector. Expected: Correct diagonal matrix.
+    *   `testMatrixSqrt`: Tests element-wise square root of matrix. Expected: Correct square root matrix.
+    *   `testMatrixSquare`: Tests element-wise square of matrix. Expected: Correct squared matrix.
+    *   `testMatrixTimes`: Tests element-wise matrix multiplication. Expected: Correct element-wise product.
+    *   `testMatrixDivide`: Tests element-wise matrix division. Expected: Correct element-wise quotient.
+    *   `testMatrixSelectColumns`: Tests selection of columns from a matrix. Expected: Matrix with selected columns.
+    *   `testMatrixTriu`: Tests extraction of upper triangular part. Expected: Correct upper triangular matrix.
+    *   `testMatrixSumRows`: Tests summation of rows (columns in implementation). Expected: Row matrix with column sums.
+    *   `testMatrixCopyColumn`: Tests copying a column between matrices. Expected: Target matrix updated with source column.
+    *   `testMatrixOnes`: Tests creation of matrix filled with ones. Expected: Matrix of correct dimensions with all ones.
+    *   `testMatrixEye`: Tests creation of identity matrix. Expected: Identity matrix of correct dimensions.
+    *   `testMatrixZeros`: Tests creation of zero matrix. Expected: Zero matrix of correct dimensions.
+    *   `testMatrixRepmat`: Tests replication of a matrix. Expected: Correctly tiled matrix.
+    *   `testMatrixSequence`: Tests creation of a sequence matrix. Expected: Column matrix with sequential values.
+    *   `testMatrixMax`: Tests finding maximum element in a matrix. Expected: Maximum element value.
+    *   `testMatrixMin`: Tests finding minimum element in a matrix. Expected: Minimum element value.
+    *   `testArrayMax`: Tests finding maximum element in a double array. Expected: Maximum element value.
+    *   `testArrayMin`: Tests finding minimum element in a double array. Expected: Minimum element value.
+    *   `testArrayInverse`: Tests array index inversion. Expected: Correctly inverted index array.
+    *   `testArrayReverse`: Tests reversing an index array. Expected: Reversed index array.
+    *   `testRandomGeneratorGaussian`: Tests `nextGaussian` method. Expected: A double value within a typical range.
+    *   `testRandomGeneratorDouble`: Tests `nextDouble` method. Expected: A double value between 0.0 and 1.0.
+    *   `testRandomGeneratorInt`: Tests `nextInt(n)` method. Expected: An int value within the specified range.
+4. DEFECT DETECTION STRATEGY - These tests cover basic functionality, constructor validation, parameter validation exceptions, matrix utility functions, and random number generation, aiming to catch errors in calculation, indexing, and parameter handling.
+5. SUMMARY - 35 tests.
+6. LIMITATIONS - Tests do not cover all possible complex interaction scenarios within the optimization loop itself due to the difficulty of setting up and controlling all internal states precisely. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.
+```

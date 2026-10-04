@@ -1,0 +1,676 @@
+```java
+package org.apache.commons.compress.archivers.zip;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.ByteBuffer;
+import java.nio.channels.SeekableByteChannel;
+import java.util.Calendar;
+import java.util.EnumSet;
+import java.util.HashMap;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+import java.util.zip.Deflater;
+import java.util.zip.ZipException;
+import org.apache.commons.compress.archivers.ArchiveEntry;
+import org.apache.commons.compress.archivers.ArchiveOutputStream;
+import org.apache.commons.compress.utils.IOUtils;
+import java.util.Date;
+import java.math.BigInteger;
+
+public class ZipArchiveOutputStreamTest {
+
+    private static final String TEST_FILE_NAME = "test.txt";
+    private static final String TEST_FILE_COMMENT = "This is a test file.";
+    private static final long TEST_TIME = 123456789L;
+    private static final int TEST_EXTERNAL_ATTRIBUTES = 0x640000; // Example Unix permissions
+
+    private byte[] getFileContent() {
+        return "This is the content of the test file.".getBytes();
+    }
+
+    @Test
+    public void testCreateNewZipArchiveOutputStreamWithOutputStream() throws IOException {
+        OutputStream out = new ByteArrayOutputStream();
+        ZipArchiveOutputStream zos = new ZipArchiveOutputStream(out);
+        assertNotNull(zos);
+        zos.close();
+    }
+
+    @Test
+    public void testCreateNewZipArchiveOutputStreamWithFile() throws IOException {
+        File tempFile = File.createTempFile("test", ".zip");
+        tempFile.deleteOnExit();
+        OutputStream out = null;
+        SeekableByteChannel channel = null;
+        try {
+            out = new FileOutputStream(tempFile);
+            channel = Files.newByteChannel(tempFile.toPath(),
+                    EnumSet.of(java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.WRITE,
+                            java.nio.file.StandardOpenOption.READ,
+                            java.nio.file.StandardOpenOption.TRUNCATE_EXISTING));
+            ZipArchiveOutputStream zos = new ZipArchiveOutputStream(tempFile);
+            assertNotNull(zos);
+        } finally {
+            // Clean up temporary file
+            if (tempFile.exists()) {
+                tempFile.delete();
+            }
+            IOUtils.closeQuietly(out);
+            IOUtils.closeQuietly(channel);
+        }
+    }
+
+    @Test
+    public void testCreateNewZipArchiveOutputStreamWithSeekableByteChannel() throws IOException {
+        SeekableByteChannel channel = new org.apache.commons.compress.utils.SeekableInMemoryByteChannel();
+        ZipArchiveOutputStream zos = new ZipArchiveOutputStream(channel);
+        assertNotNull(zos);
+        zos.close();
+    }
+
+    @Test
+    public void testIsSeekableWhenChannelIsNull() {
+        OutputStream out = new ByteArrayOutputStream();
+        ZipArchiveOutputStream zos = new ZipArchiveOutputStream(out);
+        assertFalse(zos.isSeekable());
+        zos.closeQuietly();
+    }
+
+    @Test
+    public void testIsSeekableWhenChannelIsNotNull() throws IOException {
+        SeekableByteChannel channel = new org.apache.commons.compress.utils.SeekableInMemoryByteChannel();
+        ZipArchiveOutputStream zos = new ZipArchiveOutputStream(channel);
+        assertTrue(zos.isSeekable());
+        zos.close();
+    }
+
+    @Test
+    public void testSetEncodingAndGetEncoding() {
+        OutputStream out = new ByteArrayOutputStream();
+        ZipArchiveOutputStream zos = new ZipArchiveOutputStream(out);
+        zos.setEncoding("UTF-8");
+        assertEquals("UTF-8", zos.getEncoding());
+        zos.setEncoding(null);
+        assertNull(zos.getEncoding());
+        zos.closeQuietly();
+    }
+
+    @Test
+    public void testSetUseLanguageEncodingFlag() {
+        OutputStream out = new ByteArrayOutputStream();
+        ZipArchiveOutputStream zos = new ZipArchiveOutputStream(out);
+        zos.setUseLanguageEncodingFlag(true);
+        // No direct getter to assert, rely on internal behavior reflected in subsequent tests if possible.
+        // For now, just check that it can be called.
+        zos.closeQuietly();
+    }
+
+    @Test
+    public void testSetCreateUnicodeExtraFields() {
+        OutputStream out = new ByteArrayOutputStream();
+        ZipArchiveOutputStream zos = new ZipArchiveOutputStream(out);
+        zos.setCreateUnicodeExtraFields(ZipArchiveOutputStream.UnicodeExtraFieldPolicy.ALWAYS);
+        // No direct getter to assert, rely on internal behavior.
+        zos.closeQuietly();
+    }
+
+    @Test
+    public void testSetFallbackToUTF8() {
+        OutputStream out = new ByteArrayOutputStream();
+        ZipArchiveOutputStream zos = new ZipArchiveOutputStream(out);
+        zos.setFallbackToUTF8(true);
+        // No direct getter to assert, rely on internal behavior.
+        zos.closeQuietly();
+    }
+
+    @Test
+    public void testSetUseZip64() {
+        OutputStream out = new ByteArrayOutputStream();
+        ZipArchiveOutputStream zos = new ZipArchiveOutputStream(out);
+        zos.setUseZip64(Zip64Mode.Always);
+        // No direct getter to assert, rely on internal behavior.
+        zos.closeQuietly();
+    }
+
+    @Test
+    public void testFinishEmptyArchive() throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        ZipArchiveOutputStream zos = new ZipArchiveOutputStream(baos);
+        zos.finish();
+        // Check for EOCD signature and basic structure.
+        // A more thorough check would involve parsing the output.
+        byte[] result = baos.toByteArray();
+        assertTrue("Archive should not be empty", result.length > 0);
+        // Check for End of Central Directory signature
+        assertTrue("EOCD signature not found",
+                result[result.length - 4] == (byte) 0x50 &&
+                result[result.length - 3] == (byte) 0x4B &&
+                result[result.length - 2] == (byte) 0x05 &&
+                result[result.length - 1] == (byte) 0x06);
+        zos.close();
+    }
+
+    @Test
+    public void testPutArchiveEntryAndCloseArchiveEntry() throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        ZipArchiveOutputStream zos = new ZipArchiveOutputStream(baos);
+        ZipArchiveEntry entry = new ZipArchiveEntry(TEST_FILE_NAME);
+        entry.setTime(TEST_TIME);
+        entry.setExternalAttributes(TEST_EXTERNAL_ATTRIBUTES);
+
+        zos.putArchiveEntry(entry);
+        byte[] content = getFileContent();
+        zos.write(content, 0, content.length);
+        zos.closeArchiveEntry();
+        zos.finish();
+
+        byte[] result = baos.toByteArray();
+        assertTrue("Archive should contain data", result.length > 0);
+        // Basic check: presence of LFH, data, and EOCD
+        assertTrue("LFH signature not found", result[0] == (byte) 0x50 && result[1] == (byte) 0x4B && result[2] == (byte) 0x03 && result[3] == (byte) 0x04);
+        assertTrue("EOCD signature not found", result[result.length - 4] == (byte) 0x50 && result[result.length - 3] == (byte) 0x4B && result[result.length - 2] == (byte) 0x05 && result[result.length - 1] == (byte) 0x06);
+        zos.close();
+    }
+
+    @Test
+    public void testPutArchiveEntryAndWriteAndClose() throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        ZipArchiveOutputStream zos = new ZipArchiveOutputStream(baos);
+        ZipArchiveEntry entry = new ZipArchiveEntry(TEST_FILE_NAME);
+        entry.setTime(TEST_TIME);
+
+        zos.putArchiveEntry(entry);
+        byte[] content = getFileContent();
+        zos.write(content, 0, content.length);
+        zos.close(); // This implicitly calls closeArchiveEntry and finish
+
+        byte[] result = baos.toByteArray();
+        assertTrue("Archive should contain data", result.length > 0);
+        zos.close();
+    }
+
+    @Test
+    public void testWriteEmptyEntry() throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        ZipArchiveOutputStream zos = new ZipArchiveOutputStream(baos);
+        ZipArchiveEntry entry = new ZipArchiveEntry("empty.txt");
+        zos.putArchiveEntry(entry);
+        // Write zero bytes
+        zos.write(new byte[0], 0, 0);
+        zos.closeArchiveEntry();
+        zos.finish();
+
+        byte[] result = baos.toByteArray();
+        assertTrue("Archive should contain data for empty entry", result.length > 0);
+        zos.close();
+    }
+
+    @Test
+    public void testSetComment() throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        ZipArchiveOutputStream zos = new ZipArchiveOutputStream(baos);
+        zos.setComment(TEST_FILE_COMMENT);
+        zos.finish();
+        // The comment is written at the end of the EOCD record.
+        // A full parse is needed to verify, but we can check its presence in the output.
+        byte[] result = baos.toByteArray();
+        assertTrue("Archive should contain comment data", result.length > 0);
+        // A rudimentary check: if the comment is present in the byte stream.
+        // This is not a robust check without parsing.
+        // For now, we trust that setComment affects the internal state for finish().
+        zos.close();
+    }
+
+    @Test
+    public void testSetLevel() throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        ZipArchiveOutputStream zos = new ZipArchiveOutputStream(baos);
+        zos.setLevel(Deflater.BEST_COMPRESSION);
+        ZipArchiveEntry entry = new ZipArchiveEntry("compressed.txt");
+        zos.putArchiveEntry(entry);
+        zos.write(getFileContent());
+        zos.closeArchiveEntry();
+        zos.finish();
+        // Verify if the compression level setting has an effect (e.g., by checking compressed size, though this is complex)
+        // For now, just check that it can be set and doesn't throw exceptions.
+        zos.close();
+    }
+
+    @Test
+    public void testSetMethodStored() throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        ZipArchiveOutputStream zos = new ZipArchiveOutputStream(baos);
+        zos.setMethod(STORED); // STORED = 0
+        ZipArchiveEntry entry = new ZipArchiveEntry("stored.txt");
+        entry.setSize(getFileContent().length); // Size must be known for STORED
+        entry.setCrc(IOUtils.calculateCrc32(getFileContent())); // CRC must be known for STORED
+
+        zos.putArchiveEntry(entry);
+        zos.write(getFileContent());
+        zos.closeArchiveEntry();
+        zos.finish();
+
+        byte[] result = baos.toByteArray();
+        assertTrue("Archive should contain data for stored entry", result.length > 0);
+        // Verify method code in LFH and CFH if parsing is implemented.
+        zos.close();
+    }
+
+    @Test
+    public void testSetMethodStoredNonSeekableKnownSize() throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        ZipArchiveOutputStream zos = new ZipArchiveOutputStream(baos);
+        zos.setMethod(STORED);
+        ZipArchiveEntry entry = new ZipArchiveEntry("stored_known.txt");
+        byte[] content = getFileContent();
+        entry.setSize(content.length);
+        entry.setCrc(IOUtils.calculateCrc32(content));
+
+        zos.putArchiveEntry(entry);
+        zos.write(content);
+        zos.closeArchiveEntry();
+        zos.finish();
+
+        byte[] result = baos.toByteArray();
+        assertTrue("Archive should contain data for stored entry", result.length > 0);
+        zos.close();
+    }
+
+    @Test
+    public void testCanWriteEntryDataForDeflated() {
+        OutputStream out = new ByteArrayOutputStream();
+        ZipArchiveOutputStream zos = new ZipArchiveOutputStream(out);
+        ZipArchiveEntry entry = new ZipArchiveEntry("deflated.txt");
+        entry.setMethod(DEFLATED);
+        assertTrue(zos.canWriteEntryData(entry));
+        zos.closeQuietly();
+    }
+
+    @Test
+    public void testCanWriteEntryDataForStored() {
+        OutputStream out = new ByteArrayOutputStream();
+        ZipArchiveOutputStream zos = new ZipArchiveOutputStream(out);
+        ZipArchiveEntry entry = new ZipArchiveEntry("stored.txt");
+        entry.setMethod(STORED);
+        assertTrue(zos.canWriteEntryData(entry));
+        zos.closeQuietly();
+    }
+
+    @Test
+    public void testCreateArchiveEntryWithFile() throws IOException {
+        File tempFile = File.createTempFile("test", ".txt");
+        tempFile.deleteOnExit();
+        // Write some content to the temp file
+        try (OutputStream fos = new FileOutputStream(tempFile)) {
+            fos.write(getFileContent());
+        }
+
+        OutputStream out = new ByteArrayOutputStream();
+        ZipArchiveOutputStream zos = new ZipArchiveOutputStream(out);
+        ArchiveEntry archiveEntry = zos.createArchiveEntry(tempFile, tempFile.getName());
+        assertNotNull(archiveEntry);
+        assertTrue(archiveEntry instanceof ZipArchiveEntry);
+        assertEquals(tempFile.getName(), archiveEntry.getName());
+        assertEquals(tempFile.length(), archiveEntry.getSize());
+        assertEquals(tempFile.lastModified(), archiveEntry.getLastModifiedDate().getTime());
+        assertFalse(archiveEntry.isDirectory());
+        zos.closeQuietly();
+        tempFile.delete();
+    }
+
+    @Test
+    public void testCreateArchiveEntryForDirectory() throws IOException {
+        File tempDir = new File("temp_dir_for_test");
+        tempDir.mkdir();
+        tempDir.deleteOnExit();
+
+        OutputStream out = new ByteArrayOutputStream();
+        ZipArchiveOutputStream zos = new ZipArchiveOutputStream(out);
+        ArchiveEntry archiveEntry = zos.createArchiveEntry(tempDir, tempDir.getName() + "/");
+        assertNotNull(archiveEntry);
+        assertTrue(archiveEntry instanceof ZipArchiveEntry);
+        assertEquals(tempDir.getName() + "/", archiveEntry.getName());
+        assertEquals(0, archiveEntry.getSize()); // Directories typically have size 0
+        assertFalse(archiveEntry.isDirectory()); // This might be tricky depending on File.isDirectory() behavior on the OS
+        // Testing directory creation with a File object for directory might be OS dependent.
+        // A better approach for directory entry is by name.
+        zos.closeQuietly();
+        tempDir.delete();
+    }
+
+    @Test
+    public void testWriteToFinishedStreamThrowsException() throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        ZipArchiveOutputStream zos = new ZipArchiveOutputStream(baos);
+        zos.finish();
+        assertThrows(IOException.class, () -> zos.write(new byte[1]));
+        zos.close();
+    }
+
+    @Test
+    public void testCloseArchiveEntryOnUnclosedEntryThrowsException() throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        ZipArchiveOutputStream zos = new ZipArchiveOutputStream(baos);
+        assertThrows(IOException.class, () -> zos.closeArchiveEntry());
+        zos.closeQuietly();
+    }
+
+    @Test
+    public void testPutArchiveEntryOnFinishedStreamThrowsException() throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        ZipArchiveOutputStream zos = new ZipArchiveOutputStream(baos);
+        zos.finish();
+        ZipArchiveEntry entry = new ZipArchiveEntry("test.txt");
+        assertThrows(IOException.class, () -> zos.putArchiveEntry(entry));
+        zos.close();
+    }
+
+    @Test
+    public void testWriteWithUnknownEntryThrowsException() throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        ZipArchiveOutputStream zos = new ZipArchiveOutputStream(baos);
+        assertThrows(IllegalStateException.class, () -> zos.write(new byte[1]));
+        zos.closeQuietly();
+    }
+
+    @Test
+    public void testZip64ModeNeverWithLargeEntry() throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        ZipArchiveOutputStream zos = new ZipArchiveOutputStream(baos);
+        zos.setUseZip64(Zip64Mode.Never);
+
+        ZipArchiveEntry entry = new ZipArchiveEntry("large.bin");
+        // Size slightly larger than 4GB, requires Zip64
+        entry.setSize(ZIP64_MAGIC + 1);
+        entry.setCompressedSize(ZIP64_MAGIC + 1); // Dummy value, actual compressed size would be smaller
+        entry.setMethod(STORED); // STORED is important here as compressed size == uncompressed size for simplicity
+
+        // This should throw Zip64RequiredException
+        assertThrows(Zip64RequiredException.class, () -> {
+            zos.putArchiveEntry(entry);
+            // Writing content is not strictly necessary to trigger the exception during putArchiveEntry or closeArchiveEntry
+            // but writing zero bytes might be needed for closeArchiveEntry to evaluate.
+            zos.write(new byte[0]);
+            zos.closeArchiveEntry();
+            zos.finish();
+        });
+        zos.closeQuietly();
+    }
+
+    @Test
+    public void testZip64ModeAlwaysWithLargeEntry() throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        ZipArchiveOutputStream zos = new ZipArchiveOutputStream(baos);
+        zos.setUseZip64(Zip64Mode.Always);
+
+        ZipArchiveEntry entry = new ZipArchiveEntry("large.bin");
+        entry.setSize(ZIP64_MAGIC + 1); // Size > 4GB
+        entry.setCompressedSize(ZIP64_MAGIC + 1);
+        entry.setMethod(STORED);
+
+        zos.putArchiveEntry(entry);
+        zos.write(new byte[0]); // Write minimal data
+        zos.closeArchiveEntry();
+        zos.finish();
+
+        byte[] result = baos.toByteArray();
+        assertTrue("Archive should be created with Zip64 for large entry", result.length > 0);
+        // A proper verification would involve parsing the zip file to check for Zip64 extra fields and correct offsets/sizes.
+        zos.close();
+    }
+
+    @Test
+    public void testZip64ModeAsNeededWithLargeEntry() throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        ZipArchiveOutputStream zos = new ZipArchiveOutputStream(baos);
+        zos.setUseZip64(Zip64Mode.AsNeeded);
+
+        ZipArchiveEntry entry = new ZipArchiveEntry("large.bin");
+        entry.setSize(ZIP64_MAGIC + 1);
+        entry.setCompressedSize(ZIP64_MAGIC + 1);
+        entry.setMethod(STORED);
+
+        zos.putArchiveEntry(entry);
+        zos.write(new byte[0]);
+        zos.closeArchiveEntry();
+        zos.finish();
+
+        byte[] result = baos.toByteArray();
+        assertTrue("Archive should be created with Zip64 for large entry in AsNeeded mode", result.length > 0);
+        // Again, requires parsing to confirm Zip64 usage.
+        zos.close();
+    }
+
+    @Test
+    public void testAddRawArchiveEntry() throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        ZipArchiveOutputStream zos = new ZipArchiveOutputStream(baos);
+
+        ZipArchiveEntry originalEntry = new ZipArchiveEntry("raw_entry.txt");
+        byte[] content = getFileContent();
+        originalEntry.setSize(content.length);
+        originalEntry.setCrc(IOUtils.calculateCrc32(content));
+        originalEntry.setMethod(STORED);
+
+        // Simulate a raw stream of a different entry
+        InputStream rawStream = new ByteArrayInputStream(content);
+
+        zos.addRawArchiveEntry(originalEntry, rawStream);
+        zos.finish();
+
+        byte[] result = baos.toByteArray();
+        assertTrue("Archive should contain data from raw entry", result.length > 0);
+        // Verification would need parsing.
+        zos.close();
+    }
+
+    @Test
+    public void testAddRawArchiveEntryWithDeflatedContent() throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        ZipArchiveOutputStream zos = new ZipArchiveOutputStream(baos);
+
+        // Prepare a compressed entry
+        ZipArchiveEntry originalEntry = new ZipArchiveEntry("raw_deflated_entry.txt");
+        byte[] content = getFileContent();
+        ByteArrayOutputStream compressedContentStream = new ByteArrayOutputStream();
+        Deflater deflater = new Deflater();
+        deflater.setInput(content);
+        deflater.finish();
+        byte[] buffer = new byte[1024];
+        while (!deflater.finished()) {
+            int len = deflater.deflate(buffer);
+            compressedContentStream.write(buffer, 0, len);
+        }
+        deflater.end();
+        byte[] compressedBytes = compressedContentStream.toByteArray();
+
+        // Set values that would be present in a compressed entry
+        originalEntry.setSize(content.length);
+        originalEntry.setCompressedSize(compressedBytes.length);
+        originalEntry.setCrc(IOUtils.calculateCrc32(content));
+        originalEntry.setMethod(DEFLATED);
+
+        InputStream rawStream = new ByteArrayInputStream(compressedBytes);
+
+        zos.addRawArchiveEntry(originalEntry, rawStream);
+        zos.finish();
+
+        byte[] result = baos.toByteArray();
+        assertTrue("Archive should contain data from raw deflated entry", result.length > 0);
+        // Verification would need parsing.
+        zos.close();
+    }
+
+    @Test
+    public void testPutArchiveEntryWithNullEntryName() throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        ZipArchiveOutputStream zos = new ZipArchiveOutputStream(baos);
+        ZipArchiveEntry entry = new ZipArchiveEntry(null); // Null name
+        // The behavior for null name might vary, likely an exception.
+        // Based on ZipArchiveEntry(String name) constructor, it should throw NullPointerException.
+        assertThrows(NullPointerException.class, () -> zos.putArchiveEntry(entry));
+        zos.closeQuietly();
+    }
+
+    @Test
+    public void testPutArchiveEntryWithEmptyStringEntryName() throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        ZipArchiveOutputStream zos = new ZipArchiveOutputStream(baos);
+        ZipArchiveEntry entry = new ZipArchiveEntry(""); // Empty name
+        entry.setTime(TEST_TIME);
+
+        zos.putArchiveEntry(entry);
+        zos.write(getFileContent());
+        zos.closeArchiveEntry();
+        zos.finish();
+
+        byte[] result = baos.toByteArray();
+        assertTrue("Archive should contain data for empty entry name", result.length > 0);
+        zos.close();
+    }
+
+    @Test
+    public void testPutArchiveEntryWithDirectoryEntry() throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        ZipArchiveOutputStream zos = new ZipArchiveOutputStream(baos);
+        ZipArchiveEntry entry = new ZipArchiveEntry("my_directory/");
+        entry.setMethod(STORED); // Directory entries usually use STORED
+
+        zos.putArchiveEntry(entry);
+        // Directories typically have no content written
+        zos.closeArchiveEntry();
+        zos.finish();
+
+        byte[] result = baos.toByteArray();
+        assertTrue("Archive should contain data for directory entry", result.length > 0);
+        // Verify directory bit in external attributes if possible, or simply check its presence.
+        zos.close();
+    }
+
+    @Test
+    public void testSetLevelWithInvalidLevel() {
+        OutputStream out = new ByteArrayOutputStream();
+        ZipArchiveOutputStream zos = new ZipArchiveOutputStream(out);
+        assertThrows(IllegalArgumentException.class, () -> zos.setLevel(Deflater.BEST_COMPRESSION + 1));
+        assertThrows(IllegalArgumentException.class, () -> zos.setLevel(Deflater.DEFAULT_COMPRESSION - 1));
+        zos.closeQuietly();
+    }
+
+    @Test
+    public void testPutArchiveEntryWithDefaultMethodAndTime() throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        ZipArchiveOutputStream zos = new ZipArchiveOutputStream(baos);
+        ZipArchiveEntry entry = new ZipArchiveEntry("default_fields.txt");
+
+        zos.putArchiveEntry(entry); // Method and time should be set to defaults
+        byte[] content = getFileContent();
+        zos.write(content, 0, content.length);
+        zos.closeArchiveEntry();
+        zos.finish();
+
+        byte[] result = baos.toByteArray();
+        assertTrue("Archive should contain data with default fields", result.length > 0);
+        // Verification requires parsing to check method and time fields.
+        zos.close();
+    }
+
+    @Test
+    public void testPutArchiveEntryWithCustomMethodAndTime() throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        ZipArchiveOutputStream zos = new ZipArchiveOutputStream(baos);
+        zos.setMethod(STORED); // Set default method to STORED
+        zos.setLevel(Deflater.NO_COMPRESSION); // Ensure no compression
+
+        ZipArchiveEntry entry = new ZipArchiveEntry("custom_fields.txt");
+        entry.setMethod(DEFLATED); // Override default for this entry
+        entry.setTime(1678886400000L); // Set a specific time
+
+        byte[] content = getFileContent();
+        entry.setSize(content.length);
+        entry.setCrc(IOUtils.calculateCrc32(content));
+
+        zos.putArchiveEntry(entry);
+        zos.write(content, 0, content.length);
+        zos.closeArchiveEntry();
+        zos.finish();
+
+        byte[] result = baos.toByteArray();
+        assertTrue("Archive should contain data with custom fields", result.length > 0);
+        // Verification requires parsing to check method and time fields.
+        zos.close();
+    }
+
+    // Helper to close quietly
+    private void closeQuietly(ArchiveOutputStream stream) {
+        if (stream != null) {
+            try {
+                stream.close();
+            } catch (IOException ignored) {
+            }
+        }
+    }
+}
+```
+
+```java
+// SOURCE CODE ANALYSIS
+// The tests cover the constructors, setters for encoding, compression level, method, Zip64 mode,
+// and methods for adding entries and writing data. Specifically, tests focus on `putArchiveEntry`,
+// `write`, `closeArchiveEntry`, `finish`, `close`, and `addRawArchiveEntry`.
+
+// TEST CASE DESIGN
+// testCreateNewZipArchiveOutputStreamWithOutputStream: Constructs ZipArchiveOutputStream with OutputStream.
+// testCreateNewZipArchiveOutputStreamWithFile: Constructs ZipArchiveOutputStream with File.
+// testCreateNewZipArchiveOutputStreamWithSeekableByteChannel: Constructs ZipArchiveOutputStream with SeekableByteChannel.
+// testIsSeekableWhenChannelIsNull: Checks isSeekable() when no channel is used.
+// testIsSeekableWhenChannelIsNotNull: Checks isSeekable() when a channel is used.
+// testSetEncodingAndGetEncoding: Tests setting and getting the encoding.
+// testSetUseLanguageEncodingFlag: Tests setUseLanguageEncodingFlag.
+// testSetCreateUnicodeExtraFields: Tests setCreateUnicodeExtraFields.
+// testSetFallbackToUTF8: Tests setFallbackToUTF8.
+// testSetUseZip64: Tests setUseZip64.
+// testFinishEmptyArchive: Tests finishing an empty archive.
+// testPutArchiveEntryAndCloseArchiveEntry: Tests adding an entry, writing content, and closing it.
+// testPutArchiveEntryAndWriteAndClose: Tests adding an entry, writing content, and closing the stream.
+// testWriteEmptyEntry: Tests writing an empty entry.
+// testSetComment: Tests setting the archive comment.
+// testSetLevel: Tests setting the compression level.
+// testSetMethodStored: Tests setting the method to STORED.
+// testSetMethodStoredNonSeekableKnownSize: Tests STORED method with known size on non-seekable stream.
+// testCanWriteEntryDataForDeflated: Checks canWriteEntryData for DEFLATED.
+// testCanWriteEntryDataForStored: Checks canWriteEntryData for STORED.
+// testCreateArchiveEntryWithFile: Tests creating an archive entry from a File.
+// testCreateArchiveEntryForDirectory: Tests creating an archive entry for a directory.
+// testWriteToFinishedStreamThrowsException: Checks exception on writing to finished stream.
+// testCloseArchiveEntryOnUnclosedEntryThrowsException: Checks exception on closing entry not yet opened.
+// testPutArchiveEntryOnFinishedStreamThrowsException: Checks exception on adding entry to finished stream.
+// testWriteWithUnknownEntryThrowsException: Checks exception on writing with no current entry.
+// testZip64ModeNeverWithLargeEntry: Tests Zip64Mode.Never with an entry exceeding 4GB.
+// testZip64ModeAlwaysWithLargeEntry: Tests Zip64Mode.Always with an entry exceeding 4GB.
+// testZip64ModeAsNeededWithLargeEntry: Tests Zip64Mode.AsNeeded with an entry exceeding 4GB.
+// testAddRawArchiveEntry: Tests adding a raw archive entry.
+// testAddRawArchiveEntryWithDeflatedContent: Tests adding a raw deflated entry.
+// testPutArchiveEntryWithNullEntryName: Tests putting an entry with a null name.
+// testPutArchiveEntryWithEmptyStringEntryName: Tests putting an entry with an empty name.
+// testPutArchiveEntryWithDirectoryEntry: Tests putting a directory entry.
+// testSetLevelWithInvalidLevel: Tests setting an invalid compression level.
+// testPutArchiveEntryWithDefaultMethodAndTime: Tests entry creation with default method and time.
+// testPutArchiveEntryWithCustomMethodAndTime: Tests entry creation with custom method and time.
+
+// DEFECT DETECTION STRATEGY
+// Tests aim to cover basic functionality and edge cases such as large file sizes (Zip64), different compression methods (STORED, DEFLATED), entry types (files, directories, empty), and error conditions (writing to finished stream, invalid parameters). This strategy aims to reveal defects in handling file sizes, compression, entry management, and stream state transitions.
+
+// SUMMARY
+// 35 tests.
+
+// LIMITATIONS
+// Parsing the generated ZIP archives to verify internal structures (like compression method, sizes, CRC, timestamps, and Zip64 extensions) is not performed within these tests, relying instead on expected exceptions or basic output presence.
+// Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.
+```

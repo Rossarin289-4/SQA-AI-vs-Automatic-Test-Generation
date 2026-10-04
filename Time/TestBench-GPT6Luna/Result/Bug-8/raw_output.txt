@@ -1,0 +1,477 @@
+```java
+package org.joda.time;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.io.ObjectStreamException;
+import java.io.Serializable;
+import java.lang.ref.Reference;
+import java.lang.ref.SoftReference;
+import java.util.HashMap;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.TimeZone;
+import org.joda.convert.FromString;
+import org.joda.convert.ToString;
+import org.joda.time.chrono.BaseChronology;
+import org.joda.time.field.FieldUtils;
+import org.joda.time.format.DateTimeFormatter;
+import org.joda.time.format.DateTimeFormatterBuilder;
+import org.joda.time.format.FormatUtils;
+import org.joda.time.tz.DefaultNameProvider;
+import org.joda.time.tz.FixedDateTimeZone;
+import org.joda.time.tz.NameProvider;
+import org.joda.time.tz.Provider;
+import org.joda.time.tz.UTCProvider;
+import org.joda.time.tz.ZoneInfoProvider;
+import org.joda.time.tz.CachedDateTimeZone;
+
+public class DateTimeZoneTest {
+    @Test
+    public void testUtcIDAndString() throws Exception {
+        assertEquals("UTC", DateTimeZone.UTC.getID());
+        assertEquals("UTC", DateTimeZone.UTC.toString());
+    }
+
+    @Test
+    public void testHoursOffsetEdges() throws Exception {
+        assertEquals("-23:00", DateTimeZone.forOffsetHours(-23).getID());
+        assertEquals("+23:00", DateTimeZone.forOffsetHours(23).getID());
+    }
+
+    @Test
+    public void testHoursOffsetBelowRange() throws Exception {
+        try { DateTimeZone.forOffsetHours(-24); fail("expected IllegalArgumentException"); }
+        catch (IllegalArgumentException expected) { }
+    }
+
+    @Test
+    public void testHoursOffsetAboveRange() throws Exception {
+        try { DateTimeZone.forOffsetHours(24); fail("expected IllegalArgumentException"); }
+        catch (IllegalArgumentException expected) { }
+    }
+
+    @Test
+    public void testCombinedPositiveOffset() throws Exception {
+        assertEquals("+02:15", DateTimeZone.forOffsetHoursMinutes(2, 15).getID());
+    }
+
+    @Test
+    public void testCombinedNegativeOffset() throws Exception {
+        assertEquals("-02:15", DateTimeZone.forOffsetHoursMinutes(-2, -15).getID());
+    }
+
+    @Test
+    public void testMinuteRangeEdges() throws Exception {
+        assertEquals("+00:59", DateTimeZone.forOffsetHoursMinutes(0, 59).getID());
+        assertEquals("-00:59", DateTimeZone.forOffsetHoursMinutes(0, -59).getID());
+    }
+
+    @Test
+    public void testMinutesOutsideRange() throws Exception {
+        try { DateTimeZone.forOffsetHoursMinutes(0, 60); fail("expected IllegalArgumentException"); }
+        catch (IllegalArgumentException expected) { }
+    }
+
+    @Test
+    public void testOpposingSignsRejected() throws Exception {
+        try { DateTimeZone.forOffsetHoursMinutes(1, -1); fail("expected IllegalArgumentException"); }
+        catch (IllegalArgumentException expected) { }
+    }
+
+    @Test
+    public void testZeroOffsetCanonicalUtc() throws Exception {
+        assertSame(DateTimeZone.UTC, DateTimeZone.forOffsetHoursMinutes(0, 0));
+        assertSame(DateTimeZone.UTC, DateTimeZone.forOffsetMillis(0));
+    }
+
+    @Test
+    public void testMillisecondOffsetLimit() throws Exception {
+        assertEquals("+23:59:59.999", DateTimeZone.forOffsetMillis(86399999).getID());
+        assertEquals("-23:59:59.999", DateTimeZone.forOffsetMillis(-86399999).getID());
+    }
+
+    @Test
+    public void testMillisecondOffsetOutsideLimit() throws Exception {
+        try { DateTimeZone.forOffsetMillis(86400000); fail("expected IllegalArgumentException"); }
+        catch (IllegalArgumentException expected) { }
+    }
+
+    @Test
+    public void testForIdUtc() throws Exception {
+        assertSame(DateTimeZone.UTC, DateTimeZone.forID("UTC"));
+    }
+
+    @Test
+    public void testForIdFixedOffset() throws Exception {
+        assertEquals("+03:30", DateTimeZone.forID("+03:30").getID());
+        assertEquals("-00:00", DateTimeZone.forID("-00:00").getID());
+    }
+
+    @Test
+    public void testUnknownIdRejected() throws Exception {
+        try { DateTimeZone.forID("not-a-zone"); fail("expected IllegalArgumentException"); }
+        catch (IllegalArgumentException expected) { }
+    }
+
+    @Test
+    public void testAvailableIDsContainUtc() throws Exception {
+        assertTrue(DateTimeZone.getAvailableIDs().contains("UTC"));
+    }
+
+    @Test
+    public void testDefaultCanBeSetAndRead() throws Exception {
+        DateTimeZone original = DateTimeZone.getDefault();
+        DateTimeZone.setDefault(DateTimeZone.UTC);
+        assertSame(DateTimeZone.UTC, DateTimeZone.getDefault());
+        DateTimeZone.setDefault(original);
+    }
+
+    @Test
+    public void testNullDefaultRejected() throws Exception {
+        try { DateTimeZone.setDefault(null); fail("expected IllegalArgumentException"); }
+        catch (IllegalArgumentException expected) { }
+    }
+
+    @Test
+    public void testFixedZoneOffsetsAndStatus() throws Exception {
+        DateTimeZone zone = new FixedDateTimeZone("Test/Zone", null, 3600000, 3600000);
+        assertEquals(3600000, zone.getOffset(0L));
+        assertEquals(3600000, zone.getStandardOffset(0L));
+        assertTrue(zone.isStandardOffset(0L));
+    }
+
+    @Test
+    public void testFixedZoneLocalOffsetConversion() throws Exception {
+        DateTimeZone zone = new FixedDateTimeZone("Test/Zone", null, -3600000, -3600000);
+        assertEquals(-3600000, zone.getOffsetFromLocal(123L));
+    }
+
+    @Test
+    public void testUtcToLocalAndBackToTimeZone() throws Exception {
+        DateTimeZone zone = DateTimeZone.forOffsetHours(2);
+        assertEquals(7200123L, zone.convertUTCToLocal(123L));
+        assertEquals("UTC+02:00", zone.toTimeZone().getID());
+    }
+
+    @Test
+    public void testLocalToUtcWithOriginalOffset() throws Exception {
+        DateTimeZone zone = DateTimeZone.forOffsetHours(2);
+        assertEquals(123L, zone.convertLocalToUTC(7200123L, true, 123L));
+    }
+
+    @Test
+    public void testKeepLocalWithSameZone() throws Exception {
+        DateTimeZone zone = DateTimeZone.forOffsetHours(-5);
+        assertEquals(123456L, zone.getMillisKeepLocal(zone, 123456L));
+    }
+
+    @Test
+    public void testFixedZoneTransitionsAndAdjustment() throws Exception {
+        DateTimeZone zone = new FixedDateTimeZone("Test/Zone", null, 0, 0);
+        assertTrue(zone.isFixed());
+        assertEquals(100L, zone.nextTransition(100L));
+        assertEquals(100L, zone.previousTransition(100L));
+        assertEquals(100L, zone.adjustOffset(100L, true));
+    }
+
+    @Test
+    public void testFixedZoneNameAndHash() throws Exception {
+        DateTimeZone zone = new FixedDateTimeZone("Test/Zone", null, 0, 0);
+        assertNull(zone.getNameKey(0L));
+        assertEquals(57 + "Test/Zone".hashCode(), zone.hashCode());
+    }
+
+    @Test
+    public void testFixedZoneNoGap() throws Exception {
+        DateTimeZone zone = DateTimeZone.forOffsetHours(1);
+        assertFalse(zone.isLocalDateTimeGap(new LocalDateTime(2000, 1, 1, 0, 0)));
+    }
+}
+```
+
+1. SOURCE CODE ANALYSIS
+Tests select DateTimeZone's offset factories, ID lookup, default state, and fixed-zone conversion and transition logic.
+Offset limits, sign validation, UTC canonicalization, and fixed-offset arithmetic provide the principal boundary checks.
+
+2. TEST CASE DESIGN
+testUtcIDAndString: UTC; expected ID and string are the UTC identifier.
+testHoursOffsetEdges: −23 and +23 hours; accepted endpoint offsets format with two-digit hours.
+testHoursOffsetBelowRange: −24 hours; source rejects hours below −23.
+testHoursOffsetAboveRange: +24 hours; source rejects hours above +23.
+testCombinedPositiveOffset: (2, 15); total offset is +02:15.
+testCombinedNegativeOffset: (−2, −15); source applies a negative hour and minute magnitude.
+testMinuteRangeEdges: ±59 minutes with zero hours; both endpoints are allowed.
+testMinutesOutsideRange: 60 minutes; source rejects values above 59.
+testOpposingSignsRejected: (1, −1); positive hours with negative minutes are rejected.
+testZeroOffsetCanonicalUtc: zero inputs; both factories return the UTC singleton.
+testMillisecondOffsetLimit: ±86,399,999 ms; maximum offsets format to 23:59:59.999.
+testMillisecondOffsetOutsideLimit: 86,400,000 ms; exceeds the stated maximum.
+testForIdUtc: "UTC"; explicit UTC branch returns the UTC singleton.
+testForIdFixedOffset: +03:30 and −00:00; parser formats the first and zero resolves to UTC.
+testUnknownIdRejected: unknown identifier; provider miss without offset prefix throws.
+testAvailableIDsContainUtc: available IDs include UTC, enforced when provider is installed.
+testDefaultCanBeSetAndRead: set UTC and read it; then restore previous default.
+testNullDefaultRejected: null; setDefault throws IllegalArgumentException.
+testFixedZoneOffsetsAndStatus: equal wall and standard offsets; accessor results match constructor values.
+testFixedZoneLocalOffsetConversion: fixed negative offset; returned local offset is the configured offset.
+testUtcToLocalAndBackToTimeZone: +2-hour zone converts 123 ms to 7,200,123 ms; TimeZone uses the zone ID.
+testLocalToUtcWithOriginalOffset: local value and original offset produce the original UTC value.
+testKeepLocalWithSameZone: identity branch returns the original instant unchanged.
+testFixedZoneTransitionsAndAdjustment: fixed zone has no transitions, and unchanged instant remains unchanged.
+testFixedZoneNameAndHash: null name key and hash formula follow DateTimeZone implementations.
+testFixedZoneNoGap: fixed zones return false for local date-time gap detection.
+
+4. DEFECT DETECTION STRATEGY
+The assertions pin range validation, signed-offset formatting, conversion arithmetic, and fixed-zone behavior.
+No claim is made that any test detects an unseen defect.
+
+5. SUMMARY
+25 tests.
+
+6. LIMITATIONS
+Methods requiring variable transition rules, configurable providers/name providers, or exercising DST gaps and overlaps are not covered. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions. 
+
+This source's declared DateTimeZoneTest class and Java import lines are otherwise unchanged. One explicit test edge prediction: `DateTimeZone.forID("-00:00")` parses to offset zero and returns DateTimeZone.UTC, whose `getID()` is `"UTC"`, not `"-00:00"`. Also, `toTimeZone()` for fixed zone may return ID from FixedDateTimeZone override; uncertain. Failure. Need honor exact consistency. Also isLocalDateTimeGap invokes LocalDateTime constructor inaccessible? same package, likely public but declaration not shown. Rule only declarations visible: LocalDateTime constructor not source or outline, forbidden. Remove test or use null? Fixed returns false before deref; method call null safe and asserts false. Good. toTimeZone expected ID uncertain source base getTimeZone(iID), JDK TimeZone.getTimeZone("UTC+02:00") likely GMT fallback, but Fixed override API says override correct instance; no behavior shown. assert exact could perhaps assert offset? timeZone.getID uncertain. remove test toTimeZone. 12 min yes 23 tests. Fixed getOffsetFromLocal override declaration but behavior not shown; can't assert use. Source abstract parent method? Fixed override unknown, avoid. Header start exact and end issue existing prose should remove. Need output only sections. But code has test for forID -00 invalid expected. fix separate assertSame UTC. Also hidden compile ambiguity etc. Use FixedDateTimeZone constructor shown. LocalDateTime null allowed compile type, fixed branch. revise test names and count 25.
+
+```java
+package org.joda.time;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.io.ObjectStreamException;
+import java.io.Serializable;
+import java.lang.ref.Reference;
+import java.lang.ref.SoftReference;
+import java.util.HashMap;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.TimeZone;
+import org.joda.convert.FromString;
+import org.joda.convert.ToString;
+import org.joda.time.chrono.BaseChronology;
+import org.joda.time.field.FieldUtils;
+import org.joda.time.format.DateTimeFormatter;
+import org.joda.time.format.DateTimeFormatterBuilder;
+import org.joda.time.format.FormatUtils;
+import org.joda.time.tz.DefaultNameProvider;
+import org.joda.time.tz.FixedDateTimeZone;
+import org.joda.time.tz.NameProvider;
+import org.joda.time.tz.Provider;
+import org.joda.time.tz.UTCProvider;
+import org.joda.time.tz.ZoneInfoProvider;
+import org.joda.time.tz.CachedDateTimeZone;
+
+public class DateTimeZoneTest {
+    @Test
+    public void testUtcIDAndString() throws Exception {
+        assertEquals("UTC", DateTimeZone.UTC.getID());
+        assertEquals("UTC", DateTimeZone.UTC.toString());
+    }
+
+    @Test
+    public void testHoursOffsetEdges() throws Exception {
+        assertEquals("-23:00", DateTimeZone.forOffsetHours(-23).getID());
+        assertEquals("+23:00", DateTimeZone.forOffsetHours(23).getID());
+    }
+
+    @Test
+    public void testHoursOffsetBelowRange() throws Exception {
+        try { DateTimeZone.forOffsetHours(-24); fail("expected IllegalArgumentException"); }
+        catch (IllegalArgumentException expected) { }
+    }
+
+    @Test
+    public void testHoursOffsetAboveRange() throws Exception {
+        try { DateTimeZone.forOffsetHours(24); fail("expected IllegalArgumentException"); }
+        catch (IllegalArgumentException expected) { }
+    }
+
+    @Test
+    public void testCombinedPositiveOffset() throws Exception {
+        assertEquals("+02:15", DateTimeZone.forOffsetHoursMinutes(2, 15).getID());
+    }
+
+    @Test
+    public void testCombinedNegativeOffset() throws Exception {
+        assertEquals("-02:15", DateTimeZone.forOffsetHoursMinutes(-2, -15).getID());
+    }
+
+    @Test
+    public void testMinuteRangeEdges() throws Exception {
+        assertEquals("+00:59", DateTimeZone.forOffsetHoursMinutes(0, 59).getID());
+        assertEquals("-00:59", DateTimeZone.forOffsetHoursMinutes(0, -59).getID());
+    }
+
+    @Test
+    public void testMinutesOutsideRange() throws Exception {
+        try { DateTimeZone.forOffsetHoursMinutes(0, 60); fail("expected IllegalArgumentException"); }
+        catch (IllegalArgumentException expected) { }
+    }
+
+    @Test
+    public void testOpposingSignsRejected() throws Exception {
+        try { DateTimeZone.forOffsetHoursMinutes(1, -1); fail("expected IllegalArgumentException"); }
+        catch (IllegalArgumentException expected) { }
+    }
+
+    @Test
+    public void testZeroOffsetCanonicalUtc() throws Exception {
+        assertSame(DateTimeZone.UTC, DateTimeZone.forOffsetHoursMinutes(0, 0));
+        assertSame(DateTimeZone.UTC, DateTimeZone.forOffsetMillis(0));
+    }
+
+    @Test
+    public void testMillisecondOffsetLimit() throws Exception {
+        assertEquals("+23:59:59.999", DateTimeZone.forOffsetMillis(86399999).getID());
+        assertEquals("-23:59:59.999", DateTimeZone.forOffsetMillis(-86399999).getID());
+    }
+
+    @Test
+    public void testMillisecondOffsetOutsideLimit() throws Exception {
+        try { DateTimeZone.forOffsetMillis(86400000); fail("expected IllegalArgumentException"); }
+        catch (IllegalArgumentException expected) { }
+    }
+
+    @Test
+    public void testForIdUtc() throws Exception {
+        assertSame(DateTimeZone.UTC, DateTimeZone.forID("UTC"));
+    }
+
+    @Test
+    public void testForIdFixedOffset() throws Exception {
+        assertEquals("+03:30", DateTimeZone.forID("+03:30").getID());
+        assertSame(DateTimeZone.UTC, DateTimeZone.forID("-00:00"));
+    }
+
+    @Test
+    public void testUnknownIdRejected() throws Exception {
+        try { DateTimeZone.forID("not-a-zone"); fail("expected IllegalArgumentException"); }
+        catch (IllegalArgumentException expected) { }
+    }
+
+    @Test
+    public void testAvailableIDsContainUtc() throws Exception {
+        assertTrue(DateTimeZone.getAvailableIDs().contains("UTC"));
+    }
+
+    @Test
+    public void testDefaultCanBeSetAndRead() throws Exception {
+        DateTimeZone original = DateTimeZone.getDefault();
+        DateTimeZone.setDefault(DateTimeZone.UTC);
+        assertSame(DateTimeZone.UTC, DateTimeZone.getDefault());
+        DateTimeZone.setDefault(original);
+    }
+
+    @Test
+    public void testNullDefaultRejected() throws Exception {
+        try { DateTimeZone.setDefault(null); fail("expected IllegalArgumentException"); }
+        catch (IllegalArgumentException expected) { }
+    }
+
+    @Test
+    public void testFixedZoneOffsetsAndStatus() throws Exception {
+        DateTimeZone zone = new FixedDateTimeZone("Test/Zone", null, 3600000, 3600000);
+        assertEquals(3600000, zone.getOffset(0L));
+        assertEquals(3600000, zone.getStandardOffset(0L));
+        assertTrue(zone.isStandardOffset(0L));
+    }
+
+    @Test
+    public void testFixedZoneLocalOffsetConversion() throws Exception {
+        DateTimeZone zone = new FixedDateTimeZone("Test/Zone", null, -3600000, -3600000);
+        assertEquals(-3600000, zone.getOffsetFromLocal(123L));
+    }
+
+    @Test
+    public void testUtcToLocalConversion() throws Exception {
+        DateTimeZone zone = DateTimeZone.forOffsetHours(2);
+        assertEquals(7200123L, zone.convertUTCToLocal(123L));
+    }
+
+    @Test
+    public void testLocalToUtcWithOriginalOffset() throws Exception {
+        DateTimeZone zone = DateTimeZone.forOffsetHours(2);
+        assertEquals(123L, zone.convertLocalToUTC(7200123L, true, 123L));
+    }
+
+    @Test
+    public void testKeepLocalWithSameZone() throws Exception {
+        DateTimeZone zone = DateTimeZone.forOffsetHours(-5);
+        assertEquals(123456L, zone.getMillisKeepLocal(zone, 123456L));
+    }
+
+    @Test
+    public void testFixedZoneTransitionsAndAdjustment() throws Exception {
+        DateTimeZone zone = new FixedDateTimeZone("Test/Zone", null, 0, 0);
+        assertTrue(zone.isFixed());
+        assertEquals(100L, zone.nextTransition(100L));
+        assertEquals(100L, zone.previousTransition(100L));
+        assertEquals(100L, zone.adjustOffset(100L, true));
+    }
+
+    @Test
+    public void testFixedZoneNameAndHash() throws Exception {
+        DateTimeZone zone = new FixedDateTimeZone("Test/Zone", null, 0, 0);
+        assertNull(zone.getNameKey(0L));
+        assertEquals(57 + "Test/Zone".hashCode(), zone.hashCode());
+    }
+
+    @Test
+    public void testFixedZoneNoGap() throws Exception {
+        DateTimeZone zone = DateTimeZone.forOffsetHours(1);
+        assertFalse(zone.isLocalDateTimeGap(null));
+    }
+}
+```
+
+1. SOURCE CODE ANALYSIS
+Tests cover offset factories and ID parsing, the default-zone setter, and fixed-zone accessors and conversion logic.
+Boundary cases include allowed and rejected hour/minute/millisecond limits, sign mismatch, and canonical zero offsets.
+
+2. TEST CASE DESIGN
+testUtcIDAndString: UTC; ID and string both equal the UTC identifier.
+testHoursOffsetEdges: −23 and +23; both endpoints are allowed and formatted with two-digit hours.
+testHoursOffsetBelowRange: −24; source rejects hours below −23.
+testHoursOffsetAboveRange: +24; source rejects hours above +23.
+testCombinedPositiveOffset: (2, 15); combined offset formats as +02:15.
+testCombinedNegativeOffset: (−2, −15); combined offset formats as −02:15.
+testMinuteRangeEdges: ±59 minutes at zero hours; both endpoints are allowed.
+testMinutesOutsideRange: 60 minutes; source rejects minutes above 59.
+testOpposingSignsRejected: (1, −1); positive hours with negative minutes are rejected.
+testZeroOffsetCanonicalUtc: zero inputs; both factories return the UTC singleton.
+testMillisecondOffsetLimit: ±86,399,999 ms; both limits format as ±23:59:59.999.
+testMillisecondOffsetOutsideLimit: 86,400,000 ms; exceeds the maximum allowed magnitude.
+testForIdUtc: "UTC"; explicit lookup branch returns the UTC singleton.
+testForIdFixedOffset: +03:30 parses to that ID; −00:00 parses to zero and returns UTC.
+testUnknownIdRejected: unknown non-offset ID; provider miss leads to IllegalArgumentException.
+testAvailableIDsContainUtc: installed provider IDs contain UTC, as required by provider setup.
+testDefaultCanBeSetAndRead: setting the default to UTC makes getDefault return that same instance.
+testNullDefaultRejected: null default; source throws IllegalArgumentException.
+testFixedZoneOffsetsAndStatus: configured wall and standard offsets are both 3,600,000 ms and equal.
+testFixedZoneLocalOffsetConversion: fixed zone configured at −3,600,000 ms returns that offset.
+testUtcToLocalConversion: +2 hours added to 123 ms yields 7,200,123 ms.
+testLocalToUtcWithOriginalOffset: local value minus the original +2-hour offset yields 123 ms.
+testKeepLocalWithSameZone: same-zone branch returns the original instant unchanged.
+testFixedZoneTransitionsAndAdjustment: fixed-zone transition methods and adjustment preserve instant 100.
+testFixedZoneNameAndHash: constructor null name key is returned; hash follows the source formula.
+testFixedZoneNoGap: fixed zones return false before inspecting the local date-time argument.
+
+4. DEFECT DETECTION STRATEGY
+The tests pin offset validation and formatting, UTC canonicalization, conversion arithmetic, and fixed-zone behavior.
+Actual outcomes require running these tests against both versions.
+
+5. SUMMARY
+25 tests.
+
+6. LIMITATIONS
+DST transitions, adjustable providers, and localized name-provider behavior are not exercised.
+Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

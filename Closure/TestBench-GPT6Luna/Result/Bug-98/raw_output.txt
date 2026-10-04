@@ -1,0 +1,231 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Predicate;
+import com.google.common.base.Predicates;
+import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.javascript.jscomp.NodeTraversal.ScopedCallback;
+import com.google.javascript.jscomp.Scope.Var;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import java.util.ArrayDeque;
+import java.util.Deque;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+public class ReferenceCollectingCallbackTest {
+    @Test
+    public void testEmptyCollectionIsNotWellDefined() throws Exception {
+        assertFalse(new ReferenceCollectingCallback.ReferenceCollection().isWellDefined());
+    }
+
+    @Test
+    public void testEmptyCollectionIsNeverAssigned() throws Exception {
+        assertTrue(new ReferenceCollectingCallback.ReferenceCollection().isNeverAssigned());
+    }
+
+    @Test
+    public void testEmptyCollectionIsNotAssignedOnce() throws Exception {
+        assertFalse(new ReferenceCollectingCallback.ReferenceCollection().isAssignedOnceInLifetime());
+    }
+
+    @Test
+    public void testEmptyCollectionIsNotEscaped() throws Exception {
+        assertFalse(new ReferenceCollectingCallback.ReferenceCollection().isEscaped());
+    }
+
+    @Test
+    public void testEmptyCollectionHasNoInitializingReference() throws Exception {
+        assertNull(new ReferenceCollectingCallback.ReferenceCollection().getInitializingReference());
+    }
+
+    @Test
+    public void testEmptyCollectionHasNoConstantInitializingReference() throws Exception {
+        assertNull(new ReferenceCollectingCallback.ReferenceCollection().getInitializingReferenceForConstants());
+    }
+
+    @Test
+    public void testEmptyCollectionDoesNotStartWithAssigningDeclaration() throws Exception {
+        assertFalse(new ReferenceCollectingCallback.ReferenceCollection().firstReferenceIsAssigningDeclaration());
+    }
+
+    @Test
+    public void testBasicBlockRootIsItsOwnParentlessBlock() throws Exception {
+        Node root = new Node(Token.SCRIPT);
+        ReferenceCollectingCallback.BasicBlock block =
+                new ReferenceCollectingCallback.BasicBlock(null, root);
+        assertNull(block.getParent());
+        assertTrue(block.provablyExecutesBefore(block));
+    }
+
+    @Test
+    public void testBasicBlockDoesNotExecuteBeforeUnrelatedBlock() throws Exception {
+        ReferenceCollectingCallback.BasicBlock first =
+                new ReferenceCollectingCallback.BasicBlock(null, new Node(Token.SCRIPT));
+        ReferenceCollectingCallback.BasicBlock second =
+                new ReferenceCollectingCallback.BasicBlock(null, new Node(Token.SCRIPT));
+        assertFalse(first.provablyExecutesBefore(second));
+    }
+
+    @Test
+    public void testNestedBlockFollowsItsParent() throws Exception {
+        ReferenceCollectingCallback.BasicBlock outer =
+                new ReferenceCollectingCallback.BasicBlock(null, new Node(Token.SCRIPT));
+        Node childRoot = new Node(Token.BLOCK);
+        childRoot.addChildToBack(new Node(Token.EMPTY));
+        ReferenceCollectingCallback.BasicBlock inner =
+                new ReferenceCollectingCallback.BasicBlock(outer, childRoot);
+        assertSame(outer, inner.getParent());
+        assertTrue(outer.provablyExecutesBefore(inner));
+    }
+
+    @Test
+    public void testConditionalBlockStartsAfterFirstChild() throws Exception {
+        Node conditional = new Node(Token.IF);
+        Node condition = new Node(Token.NAME);
+        Node branch = new Node(Token.BLOCK);
+        conditional.addChildToBack(condition);
+        conditional.addChildToBack(branch);
+        assertFalse(new ReferenceCollectingCallback(null, ReferenceCollectingCallback.DO_NOTHING_BEHAVIOR)
+                .shouldTraverse(null, condition, conditional));
+    }
+
+    @Test
+    public void testShouldTraverseUnconditionallyReturnsTrueForNonBoundary() throws Exception {
+        ReferenceCollectingCallback callback =
+                new ReferenceCollectingCallback(null, ReferenceCollectingCallback.DO_NOTHING_BEHAVIOR);
+        assertTrue(callback.shouldTraverse(null, new Node(Token.SCRIPT), null));
+    }
+
+    @Test
+    public void testGetReferenceCollectionForUnknownVariableIsNull() throws Exception {
+        ReferenceCollectingCallback callback =
+                new ReferenceCollectingCallback(null, ReferenceCollectingCallback.DO_NOTHING_BEHAVIOR);
+        assertNull(callback.getReferenceCollection(null));
+    }
+
+    @Test
+    public void testProcessEmptyRootCompletes() throws Exception {
+        ReferenceCollectingCallback callback =
+                new ReferenceCollectingCallback(null, ReferenceCollectingCallback.DO_NOTHING_BEHAVIOR);
+        callback.process(null, new Node(Token.SCRIPT));
+        assertNull(callback.getReferenceCollection(null));
+    }
+
+    @Test
+    public void testDeclarationClassificationForReferenceWithVarParent() throws Exception {
+        Node name = Node.newString(Token.NAME, "v");
+        Node parent = new Node(Token.VAR, name);
+        Node root = new Node(Token.SCRIPT);
+        root.addChildToBack(parent);
+        ReferenceCollectingCallback.Reference ref =
+                new ReferenceCollectingCallback.Reference(name, parent,
+                        null, new ReferenceCollectingCallback.BasicBlock(null, root));
+        assertTrue(ref.isVarDeclaration());
+        assertTrue(ref.isDeclaration());
+        assertFalse(ref.isInitializingDeclaration());
+    }
+
+    @Test
+    public void testInitializedVarIsLvalue() throws Exception {
+        Node name = Node.newString(Token.NAME, "v");
+        name.addChildToBack(Node.newNumber(1));
+        Node parent = new Node(Token.VAR, name);
+        Node root = new Node(Token.SCRIPT);
+        root.addChildToBack(parent);
+        ReferenceCollectingCallback.Reference ref =
+                new ReferenceCollectingCallback.Reference(name, parent,
+                        null, new ReferenceCollectingCallback.BasicBlock(null, root));
+        assertTrue(ref.isInitializingDeclaration());
+        assertTrue(ref.isLvalue());
+        assertSame(name.getFirstChild(), ref.getAssignedValue());
+    }
+
+    @Test
+    public void testSimpleNameAssignmentIsLvalue() throws Exception {
+        Node name = Node.newString(Token.NAME, "v");
+        Node assignment = new Node(Token.ASSIGN, name, Node.newNumber(2));
+        Node root = new Node(Token.SCRIPT);
+        root.addChildToBack(assignment);
+        ReferenceCollectingCallback.Reference ref =
+                new ReferenceCollectingCallback.Reference(name, assignment,
+                        null, new ReferenceCollectingCallback.BasicBlock(null, root));
+        assertTrue(ref.isSimpleAssignmentToName());
+        assertTrue(ref.isLvalue());
+        assertSame(assignment.getSecondChild(), ref.getAssignedValue());
+    }
+
+    @Test
+    public void testDeclarationReferenceReportsNameAndParent() throws Exception {
+        Node name = Node.newString(Token.NAME, "v");
+        Node parent = new Node(Token.VAR, name);
+        Node root = new Node(Token.SCRIPT);
+        root.addChildToBack(parent);
+        ReferenceCollectingCallback.Reference ref =
+                new ReferenceCollectingCallback.Reference(name, parent,
+                        null, new ReferenceCollectingCallback.BasicBlock(null, root));
+        assertSame(name, ref.getNameNode());
+        assertSame(parent, ref.getParent());
+        assertSame(root, ref.getGrandparent());
+    }
+
+    @Test
+    public void testFunctionRootIsFunctionBlock() throws Exception {
+        Node function = new Node(Token.FUNCTION);
+        ReferenceCollectingCallback.BasicBlock block =
+                new ReferenceCollectingCallback.BasicBlock(null, function);
+        assertTrue(block.isFunction);
+        assertFalse(block.isLoop);
+    }
+
+    @Test
+    public void testCaseNodeIsTraversedAsBoundary() throws Exception {
+        ReferenceCollectingCallback callback =
+                new ReferenceCollectingCallback(null, ReferenceCollectingCallback.DO_NOTHING_BEHAVIOR);
+        Node switchNode = new Node(Token.SWITCH);
+        Node caseNode = new Node(Token.CASE);
+        assertTrue(callback.shouldTraverse(null, caseNode, switchNode));
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+Method selection is exploratory because no target method is specified. The tests focus on reference-collection predicates, `Reference` classification, `BasicBlock` ordering, and basic traversal/lookup behavior.
+
+The callback’s traversal methods require a configured compiler and traversal context for meaningful reference collection; the tests avoid assuming behavior that the provided declarations do not establish.
+
+### 2. TEST CASE DESIGN
+- Empty collection: `isWellDefined()` is false because the source returns false for size zero.
+- Empty collection: `isNeverAssigned()` is true because no reference assigns a value.
+- Empty collection: `isAssignedOnceInLifetime()` is false because there is no assignment.
+- Empty collection: `isEscaped()` is false because no differing scopes occur.
+- Empty collection: `getInitializingReference()` is null because there is no first reference.
+- Empty collection: `getInitializingReferenceForConstants()` is null because there is no candidate.
+- Empty collection: `firstReferenceIsAssigningDeclaration()` is false because the size is zero.
+- Parentless basic block: parent is null and it provably precedes itself by identity.
+- Unrelated basic blocks: ordering is false because neither is an ancestor of the other.
+- Nested basic block: its parent is the supplied outer block, which provably precedes it.
+- Non-boundary traversal: returns true as specified by `shouldTraverse`.
+- Unknown variable lookup: returns null from the empty reference map.
+- Empty-root processing: after traversal, lookup remains null for the null key.
+- Uninitialized `var`: classified as a declaration and var declaration, but not initializing.
+- Initialized `var`: classified as initializing and lvalue; assigned value is its initializer.
+- Simple assignment: recognized as simple assignment and lvalue; assigned value is the right child.
+- `Reference` accessors: return the exact supplied name, parent, and grandparent nodes.
+- Function-root block: `isFunction` is true and `isLoop` is false.
+- Case node: `shouldTraverse` returns true; the method pushes a boundary and continues traversal.
+
+### 4. DEFECT DETECTION STRATEGY
+The tests pin straightforward empty-collection results and structural classifications that follow directly from the supplied source. Traversal-sensitive behavior is intentionally limited where compiler setup and traversal context are not specified.
+
+### 5. SUMMARY
+19 tests.
+
+### 6. LIMITATIONS
+No target method or faulty implementation is supplied. Several methods are package-private or require realistic compiler traversal state; the provided API does not make a meaningful, fully configured reference collection straightforward to construct. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

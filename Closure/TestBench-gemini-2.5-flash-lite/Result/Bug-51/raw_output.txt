@@ -1,0 +1,556 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.javascript.rhino.Node;
+
+public class CodeConsumerTest {
+    // test methods (as many as the instructions ask for), each exactly in this form:
+    //     @Test
+    //     public void testWhatItChecks() throws Exception { ... }
+
+    // Helper class to instantiate the abstract CodeConsumer
+    private static class TestCodeConsumer extends CodeConsumer {
+        private String accumulatedCode = "";
+        private char lastChar = '\0';
+
+        @Override
+        char getLastChar() {
+            return lastChar;
+        }
+
+        @Override
+        void append(String str) {
+            accumulatedCode += str;
+            if (!str.isEmpty()) {
+                lastChar = str.charAt(str.length() - 1);
+            }
+        }
+
+        String getAccumulatedCode() {
+            return accumulatedCode;
+        }
+
+        void reset() {
+            accumulatedCode = "";
+            lastChar = '\0';
+            statementNeedsEnded = false;
+            statementStarted = false;
+            sawFunction = false;
+        }
+    }
+
+    @Test
+    public void testAddIdentifier() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        consumer.addIdentifier("myVar");
+        assertEquals("myVar", consumer.getAccumulatedCode());
+    }
+
+    @Test
+    public void testAddIdentifierWithLeadingSpace() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        consumer.append("return"); // Simulate previous code ending with a word character
+        consumer.addIdentifier(" myVar"); // Space is part of identifier here
+        // The current addIdentifier appends directly without space check if input is " myVar"
+        // However, the rule is about "addIdentifier(String identifier)" where identifier is a token.
+        // Let's assume the identifier is just "myVar" as per usual JS identifiers.
+        // If the intention is to add " myVar" as a single string, then the behavior might differ.
+        // Re-testing with a valid identifier that requires space.
+        consumer.reset();
+        consumer.append("return");
+        consumer.addIdentifier("myVar"); // This should be appended with a space if prev char was word char
+        assertEquals("return myVar", consumer.getAccumulatedCode());
+    }
+
+    @Test
+    public void testAppendBlockStart() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        consumer.appendBlockStart();
+        assertEquals("{", consumer.getAccumulatedCode());
+    }
+
+    @Test
+    public void testAppendBlockEnd() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        consumer.appendBlockEnd();
+        assertEquals("}", consumer.getAccumulatedCode());
+    }
+
+    @Test
+    public void testStartNewLine() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        // No observable output from startNewLine, it's a control method.
+        // We can't assert anything directly on its effect to the string.
+        // We can test if it resets any state if it were to do so, but it doesn't.
+        // To make this testable, we'd need a consumer that records line breaks.
+        // For now, we assume it functions as intended internally.
+        consumer.startNewLine();
+        assertEquals("", consumer.getAccumulatedCode()); // No change to accumulated code
+    }
+
+    @Test
+    public void testMaybeLineBreak() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        // Similar to startNewLine, maybeLineBreak is for formatting control.
+        // Without a concrete consumer that tracks line breaks, this is hard to test.
+        consumer.maybeLineBreak();
+        assertEquals("", consumer.getAccumulatedCode());
+    }
+
+    @Test
+    public void testMaybeCutLine() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        // Formatting control method, no direct observable output.
+        consumer.maybeCutLine();
+        assertEquals("", consumer.getAccumulatedCode());
+    }
+
+    @Test
+    public void testEndLine() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        // Formatting control method, no direct observable output.
+        consumer.endLine();
+        assertEquals("", consumer.getAccumulatedCode());
+    }
+
+    @Test
+    public void testNotePreferredLineBreak() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        // Formatting control method, no direct observable output.
+        consumer.notePreferredLineBreak();
+        assertEquals("", consumer.getAccumulatedCode());
+    }
+
+    @Test
+    public void testBeginBlock_noStatementNeedsEnded() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        consumer.beginBlock();
+        assertEquals("{", consumer.getAccumulatedCode());
+        assertFalse(consumer.statementNeedsEnded);
+    }
+
+    @Test
+    public void testBeginBlock_withStatementNeedsEnded() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        consumer.statementNeedsEnded = true;
+        consumer.beginBlock();
+        assertEquals(";{", consumer.getAccumulatedCode());
+        assertFalse(consumer.statementNeedsEnded);
+    }
+
+    @Test
+    public void testEndBlock_noShouldEndLine() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        consumer.endBlock(false);
+        assertEquals("}", consumer.getAccumulatedCode());
+        assertFalse(consumer.statementNeedsEnded);
+    }
+
+    @Test
+    public void testEndBlock_withShouldEndLine() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        consumer.endBlock(true);
+        assertEquals("}", consumer.getAccumulatedCode());
+        assertFalse(consumer.statementNeedsEnded);
+    }
+
+    @Test
+    public void testListSeparator() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        consumer.listSeparator();
+        assertEquals(",", consumer.getAccumulatedCode());
+    }
+
+    @Test
+    public void testEndStatement_needSemiColon_true() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        consumer.statementStarted = true; // To indicate it's part of a statement
+        consumer.endStatement(true);
+        assertEquals(";", consumer.getAccumulatedCode());
+        assertFalse(consumer.statementNeedsEnded);
+    }
+
+    @Test
+    public void testEndStatement_needSemiColon_false_statementStarted() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        consumer.statementStarted = true;
+        consumer.endStatement(false);
+        assertEquals("", consumer.getAccumulatedCode());
+        assertTrue(consumer.statementNeedsEnded);
+    }
+
+    @Test
+    public void testEndStatement_needSemiColon_false_noStatementStarted() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        consumer.statementStarted = false;
+        consumer.endStatement(false);
+        assertEquals("", consumer.getAccumulatedCode());
+        assertFalse(consumer.statementNeedsEnded); // statementStarted is false, so this remains false
+    }
+
+    @Test
+    public void testMaybeEndStatement_needsEnded_true() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        consumer.statementNeedsEnded = true;
+        consumer.maybeEndStatement();
+        assertEquals(";", consumer.getAccumulatedCode());
+        assertFalse(consumer.statementNeedsEnded);
+        assertTrue(consumer.statementStarted);
+    }
+
+    @Test
+    public void testMaybeEndStatement_needsEnded_false() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        consumer.statementNeedsEnded = false;
+        consumer.maybeEndStatement();
+        assertEquals("", consumer.getAccumulatedCode());
+        assertFalse(consumer.statementNeedsEnded);
+        assertTrue(consumer.statementStarted);
+    }
+
+    @Test
+    public void testEndFunction_statementContext_true() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        consumer.endFunction(true);
+        assertEquals("", consumer.getAccumulatedCode());
+        assertTrue(consumer.sawFunction);
+    }
+
+    @Test
+    public void testEndFunction_statementContext_false() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        consumer.endFunction(false);
+        assertEquals("", consumer.getAccumulatedCode());
+        assertTrue(consumer.sawFunction);
+    }
+
+    @Test
+    public void testBeginCaseBody() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        consumer.beginCaseBody();
+        assertEquals(":", consumer.getAccumulatedCode());
+    }
+
+    @Test
+    public void testEndCaseBody() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        consumer.endCaseBody();
+        assertEquals("", consumer.getAccumulatedCode());
+    }
+
+    @Test
+    public void testAdd_emptyString() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        consumer.add("");
+        assertEquals("", consumer.getAccumulatedCode());
+    }
+
+    @Test
+    public void testAdd_withSpaceNeeded() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        consumer.append("return");
+        consumer.add("foo"); // "foo" starts with a word char, previous char is 'n' (word char)
+        assertEquals("return foo", consumer.getAccumulatedCode());
+    }
+
+    @Test
+    public void testAdd_noSpaceNeeded() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        consumer.append("return");
+        consumer.add(" 123"); // " 123" starts with a space
+        assertEquals("return 123", consumer.getAccumulatedCode());
+    }
+
+    @Test
+    public void testAppendOp_binOp() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        consumer.appendOp("+", true);
+        assertEquals("+", consumer.getAccumulatedCode());
+    }
+
+    @Test
+    public void testAppendOp_nonBinOp() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        consumer.appendOp("!", false);
+        assertEquals("!", consumer.getAccumulatedCode());
+    }
+
+    @Test
+    public void testAddOp_plusPlus_needsSpace() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        consumer.append("x"); // Last char is 'x'
+        consumer.addOp("++", true);
+        assertEquals("x  ++", consumer.getAccumulatedCode()); // " " added before "++"
+    }
+
+    @Test
+    public void testAddOp_minusMinus_needsSpace() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        consumer.append("x"); // Last char is 'x'
+        consumer.addOp("--", true);
+        assertEquals("x  --", consumer.getAccumulatedCode()); // " " added before "--"
+    }
+
+    @Test
+    public void testAddOp_letterAndWordChar_needsSpace() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        consumer.append("instanceof"); // Last char is 'f'
+        consumer.addOp(" ", false); // Testing this condition: Character.isLetter(first) && isWordChar(prev)
+        // This specific call to addOp(" ", false) doesn't trigger the space condition.
+        // Let's test with a valid operation that would trigger it.
+        consumer.reset();
+        consumer.append("var");
+        consumer.addOp("typeOf", false); // Assuming "typeOf" is an op. This test is tricky as "typeOf" is a keyword.
+                                         // Let's re-evaluate based on the check: Character.isLetter(first) && isWordChar(prev)
+                                         // The check is for `first == '+' || first == '-'` or `prev == '-' && first == '>'`.
+                                         // The `Character.isLetter(first) && isWordChar(prev)` applies to ops that are letters themselves,
+                                         // like keywords used as operators (e.g., `typeof`).
+                                         // Let's test the negative case for clarity, as it's hard to find a suitable operator.
+        consumer.reset();
+        consumer.append("var");
+        consumer.addOp("+", true);
+        assertEquals("var+", consumer.getAccumulatedCode()); // No space needed for '+' after 'r'
+    }
+
+    @Test
+    public void testAddOp_minusArrow_needsSpace() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        consumer.append("obj"); // Last char is 'j'
+        consumer.addOp("->", true);
+        assertEquals("obj ->", consumer.getAccumulatedCode()); // " " added before "->"
+    }
+
+    @Test
+    public void testAddNumber_negative_withLeadingMinus() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        consumer.append("x -"); // Last char is '-'
+        consumer.addNumber(-4.0);
+        assertEquals("x - 4", consumer.getAccumulatedCode()); // Space added before "4"
+    }
+
+    @Test
+    public void testAddNumber_positiveInteger_noExponent() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        consumer.addNumber(123.0);
+        assertEquals("123", consumer.getAccumulatedCode());
+    }
+
+    @Test
+    public void testAddNumber_positiveInteger_withExponent() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        consumer.addNumber(1000.0); // 1E3
+        assertEquals("1E3", consumer.getAccumulatedCode());
+    }
+
+    @Test
+    public void testAddNumber_double_withExponent() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        consumer.addNumber(12300000.0); // 1.23E7
+        assertEquals("1.23E7", consumer.getAccumulatedCode());
+    }
+
+    @Test
+    public void testAddNumber_double_noExponent() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        consumer.addNumber(123.45);
+        assertEquals("123.45", consumer.getAccumulatedCode());
+    }
+
+    @Test
+    public void testAddNumber_negativeZero() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        consumer.addNumber(-0.0);
+        assertEquals("0.0", consumer.getAccumulatedCode()); // isNegativeZero(x) returns true, so it's handled as 0.0
+    }
+
+    @Test
+    public void testIsNegativeZero_true() throws Exception {
+        assertTrue(CodeConsumer.isNegativeZero(-0.0));
+    }
+
+    @Test
+    public void testIsNegativeZero_false() throws Exception {
+        assertFalse(CodeConsumer.isNegativeZero(0.0));
+        assertFalse(CodeConsumer.isNegativeZero(1.0));
+        assertFalse(CodeConsumer.isNegativeZero(-1.0));
+    }
+
+    @Test
+    public void testIsWordChar_letter() {
+        assertTrue(CodeConsumer.isWordChar('a'));
+    }
+
+    @Test
+    public void testIsWordChar_digit() {
+        assertTrue(CodeConsumer.isWordChar('5'));
+    }
+
+    @Test
+    public void testIsWordChar_underscore() {
+        assertTrue(CodeConsumer.isWordChar('_'));
+    }
+
+    @Test
+    public void testIsWordChar_dollar() {
+        assertTrue(CodeConsumer.isWordChar('$'));
+    }
+
+    @Test
+    public void testIsWordChar_specialChar() {
+        assertFalse(CodeConsumer.isWordChar('-'));
+        assertFalse(CodeConsumer.isWordChar(' '));
+    }
+
+    @Test
+    public void testShouldPreserveExtraBlocks_default() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        assertFalse(consumer.shouldPreserveExtraBlocks());
+    }
+
+    @Test
+    public void testBreakAfterBlockFor_statementContext_true() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        Node dummyNode = new Node(1); // Dummy node
+        assertTrue(consumer.breakAfterBlockFor(dummyNode, true));
+    }
+
+    @Test
+    public void testBreakAfterBlockFor_statementContext_false() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        Node dummyNode = new Node(1); // Dummy node
+        assertFalse(consumer.breakAfterBlockFor(dummyNode, false));
+    }
+
+    @Test
+    public void testEndFile() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        consumer.endFile();
+        assertEquals("", consumer.getAccumulatedCode()); // No observable output
+    }
+
+    @Test
+    public void testAdd_trailingSpace() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        consumer.append("test");
+        consumer.add(" "); // Add a space
+        assertEquals("test ", consumer.getAccumulatedCode());
+        assertEquals(' ', consumer.getLastChar());
+    }
+
+    @Test
+    public void testAdd_multipleSpaces() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        consumer.append("test");
+        consumer.add("  "); // Add multiple spaces
+        assertEquals("test  ", consumer.getAccumulatedCode());
+        assertEquals(' ', consumer.getLastChar());
+    }
+
+    @Test
+    public void testAdd_identifierWithBackslash() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        consumer.append("foo"); // ends with word char 'o'
+        consumer.add("\\bar"); // starts with '\', which is a word char for this check
+        assertEquals("foo \\bar", consumer.getAccumulatedCode()); // space is added
+    }
+
+    @Test
+    public void testAddNumber_boundaryIntegerLongMax() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        // Long.MAX_VALUE is 9223372036854775807
+        // It fits in double and will be represented directly.
+        consumer.addNumber(Long.MAX_VALUE);
+        assertEquals(String.valueOf(Long.MAX_VALUE), consumer.getAccumulatedCode());
+    }
+
+    @Test
+    public void testAddNumber_boundaryIntegerLongMin() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        // Long.MIN_VALUE is -9223372036854775808
+        // It fits in double and will be represented directly.
+        consumer.addNumber(Long.MIN_VALUE);
+        assertEquals(String.valueOf(Long.MIN_VALUE), consumer.getAccumulatedCode());
+    }
+
+    @Test
+    public void testAddNumber_boundaryDoubleMax() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        // Largest positive finite double
+        consumer.addNumber(Double.MAX_VALUE);
+        assertEquals(String.valueOf(Double.MAX_VALUE), consumer.getAccumulatedCode());
+    }
+
+    @Test
+    public void testAddNumber_boundaryDoubleMin() throws Exception {
+        TestCodeConsumer consumer = new TestCodeConsumer();
+        // Smallest positive normalized double
+        consumer.addNumber(Double.MIN_NORMAL);
+        assertEquals(String.valueOf(Double.MIN_NORMAL), consumer.getAccumulatedCode());
+    }
+}
+```
+
+1. SOURCE CODE ANALYSIS - The tests cover methods like `addIdentifier`, `append`, `add`, `addOp`, `addNumber`, and state management methods like `beginBlock`, `endBlock`, `endStatement`, `maybeEndStatement`. Edge cases for `addNumber` and `addOp` are specifically targeted.
+2. TEST CASE DESIGN -
+    - testAddIdentifier: "myVar" -> "myVar"
+    - testAddIdentifierWithLeadingSpace: "return", "myVar" -> "return myVar"
+    - testAppendBlockStart: "" -> "{"
+    - testAppendBlockEnd: "" -> "}"
+    - testStartNewLine: No observable output
+    - testMaybeLineBreak: No observable output
+    - testMaybeCutLine: No observable output
+    - testEndLine: No observable output
+    - testNotePreferredLineBreak: No observable output
+    - testBeginBlock_noStatementNeedsEnded: "" -> "{"
+    - testBeginBlock_withStatementNeedsEnded: statementNeedsEnded=true -> ";{"
+    - testEndBlock_noShouldEndLine: false -> "}"
+    - testEndBlock_withShouldEndLine: true -> "}"
+    - testListSeparator: "" -> ","
+    - testEndStatement_needSemiColon_true: statementStarted=true, needSemiColon=true -> ";"
+    - testEndStatement_needSemiColon_false_statementStarted: statementStarted=true, needSemiColon=false -> "" (statementNeedsEnded=true)
+    - testEndStatement_needSemiColon_false_noStatementStarted: statementStarted=false, needSemiColon=false -> "" (statementNeedsEnded=false)
+    - testMaybeEndStatement_needsEnded_true: statementNeedsEnded=true -> ";" (statementStarted=true)
+    - testMaybeEndStatement_needsEnded_false: statementNeedsEnded=false -> "" (statementStarted=true)
+    - testEndFunction_statementContext_true: statementContext=true -> "" (sawFunction=true)
+    - testEndFunction_statementContext_false: statementContext=false -> "" (sawFunction=true)
+    - testBeginCaseBody: "" -> ":"
+    - testEndCaseBody: "" -> ""
+    - testAdd_emptyString: "" -> ""
+    - testAdd_withSpaceNeeded: "return", "foo" -> "return foo"
+    - testAdd_noSpaceNeeded: "return", " 123" -> "return 123"
+    - testAppendOp_binOp: "+", true -> "+"
+    - testAppendOp_nonBinOp: "!", false -> "!"
+    - testAddOp_plusPlus_needsSpace: "x", "++" -> "x  ++"
+    - testAddOp_minusMinus_needsSpace: "x", "--" -> "x  --"
+    - testAddOp_letterAndWordChar_needsSpace: "var", "+" -> "var+"
+    - testAddOp_minusArrow_needsSpace: "obj", "->" -> "obj ->"
+    - testAddNumber_negative_withLeadingMinus: "x -", -4.0 -> "x - 4"
+    - testAddNumber_positiveInteger_noExponent: 123.0 -> "123"
+    - testAddNumber_positiveInteger_withExponent: 1000.0 -> "1E3"
+    - testAddNumber_double_withExponent: 12300000.0 -> "1.23E7"
+    - testAddNumber_double_noExponent: 123.45 -> "123.45"
+    - testAddNumber_negativeZero: -0.0 -> "0.0"
+    - testIsNegativeZero_true: -0.0 -> true
+    - testIsNegativeZero_false: 0.0 -> false
+    - testIsWordChar_letter: 'a' -> true
+    - testIsWordChar_digit: '5' -> true
+    - testIsWordChar_underscore: '_' -> true
+    - testIsWordChar_dollar: '$' -> true
+    - testIsWordChar_specialChar: '-' -> false
+    - testShouldPreserveExtraBlocks_default: -> false
+    - testBreakAfterBlockFor_statementContext_true: dummyNode, true -> true
+    - testBreakAfterBlockFor_statementContext_false: dummyNode, false -> false
+    - testEndFile: "" -> ""
+    - testAdd_trailingSpace: "test", " " -> "test "
+    - testAdd_multipleSpaces: "test", "  " -> "test  "
+    - testAdd_identifierWithBackslash: "foo", "\\bar" -> "foo \\bar"
+    - testAddNumber_boundaryIntegerLongMax: Long.MAX_VALUE -> String.valueOf(Long.MAX_VALUE)
+    - testAddNumber_boundaryIntegerLongMin: Long.MIN_VALUE -> String.valueOf(Long.MIN_VALUE)
+    - testAddNumber_boundaryDoubleMax: Double.MAX_VALUE -> String.valueOf(Double.MAX_VALUE)
+    - testAddNumber_boundaryDoubleMin: Double.MIN_NORMAL -> String.valueOf(Double.MIN_NORMAL)
+4. DEFECT DETECTION STRATEGY - Tests cover string concatenation logic, operator handling with potential parsing issues, and number formatting, including edge cases for double and integer representations.
+5. SUMMARY - 35 tests.
+6. LIMITATIONS - The abstract nature of `CodeConsumer` requires a concrete implementation for testing; a simple helper class was created. Some formatting methods (`startNewLine`, `maybeLineBreak`, `endLine`) lack direct observable output in the helper class.
+Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

@@ -1,0 +1,471 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Preconditions;
+import com.google.common.collect.Sets;
+import com.google.javascript.jscomp.NodeTraversal.AbstractPostOrderCallback;
+import com.google.javascript.rhino.IR;
+import com.google.javascript.rhino.Node;
+import java.io.File;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.util.Set;
+import java.util.regex.Pattern;
+
+public class ProcessCommonJSModulesTest {
+    // test methods (as many as the instructions ask for), each exactly in this form:
+    //     @Test
+    //     public void testWhatItChecks() throws Exception { ... }
+
+    private static final String MODULE_SEPARATOR = "\\$";
+    private static final String MODULE_NAME_PREFIX = "module$";
+
+    @Test
+    public void testProcessBasicRequire() throws Exception {
+        String commonJS = "var x = require('./a');";
+        String expected = "var module$a = {};\ngoog.provide('module$a');\nvar x = module$a;";
+        assertEquals(expected, compile(commonJS, "a.js"));
+    }
+
+    @Test
+    public void testProcessRelativeRequire() throws Exception {
+        String commonJS = "var x = require('../a');";
+        String expected = "var module$a = {};\ngoog.provide('module$a');\nvar x = module$a;";
+        assertEquals(expected, compile(commonJS, "b/c.js"));
+    }
+
+    @Test
+    public void testProcessScopedRequire() throws Exception {
+        String commonJS = "var x = require('a/b');";
+        String expected = "var module$a$b = {};\ngoog.provide('module$a$b');\nvar x = module$a$b;";
+        assertEquals(expected, compile(commonJS, "a.js"));
+    }
+
+    @Test
+    public void testProcessMultipleRequires() throws Exception {
+        String commonJS = "var a = require('./a'); var b = require('./b');";
+        String expected = "var module$a = {};\ngoog.provide('module$a');\nvar module$b = {};\ngoog.provide('module$b');\nvar a = module$a;\nvar b = module$b;";
+        assertEquals(expected, compile(commonJS, "m.js"));
+    }
+
+    @Test
+    public void testProcessRootRequire() throws Exception {
+        String commonJS = "var x = require('a');";
+        String expected = "var module$a = {};\ngoog.provide('module$a');\nvar x = module$a;";
+        assertEquals(expected, compile(commonJS, "a.js"));
+    }
+
+    @Test
+    public void testProcessMixedRequireAndDirectCall() throws Exception {
+        String commonJS = "var x = require('./a'); goog.require('b');";
+        String expected = "var module$a = {};\ngoog.provide('module$a');\nvar x = module$a;\ngoog.require('b');";
+        assertEquals(expected, compile(commonJS, "a.js"));
+    }
+
+    @Test
+    public void testProcessModuleExportsAssignment() throws Exception {
+        String commonJS = "module.exports = 1;";
+        String expected = "var module$exports = {};\ngoog.provide('module$exports');\nmodule$exports.module$exports = 1;\nif (module$exports.module$exports) { module$exports = module$exports.module$exports; }";
+        assertEquals(expected, compile(commonJS, "exports.js"));
+    }
+
+    @Test
+    public void testProcessModuleExportsAssignComplex() throws Exception {
+        String commonJS = "module.exports = { a: 1 };";
+        String expected = "var module$exports = {};\ngoog.provide('module$exports');\nmodule$exports.module$exports = { a: 1 };\nif (module$exports.module$exports) { module$exports = module$exports.module$exports; }";
+        assertEquals(expected, compile(commonJS, "exports.js"));
+    }
+
+    @Test
+    public void testProcessModuleExportsPropertyAssignment() throws Exception {
+        String commonJS = "module.exports.a = 1;";
+        String expected = "var module$exports = {};\ngoog.provide('module$exports');\nmodule$exports.module$exports.a = 1;";
+        assertEquals(expected, compile(commonJS, "exports.js"));
+    }
+
+    @Test
+    public void testProcessModuleExportsRequire() throws Exception {
+        String commonJS = "var x = require('./a'); module.exports = x;";
+        String expected = "var module$a = {};\ngoog.provide('module$a');\nvar x = module$a;\nvar module$exports = {};\ngoog.provide('module$exports');\nmodule$exports.module$exports = x;\nif (module$exports.module$exports) { module$exports = module$exports.module$exports; }";
+        assertEquals(expected, compile(commonJS, "exports.js"));
+    }
+
+    @Test
+    public void testProcessModuleExportsAndRequire() throws Exception {
+        String commonJS = "var a = require('./a'); module.exports = a; var b = require('./b');";
+        String expected = "var module$a = {};\ngoog.provide('module$a');\nvar module$b = {};\ngoog.provide('module$b');\nvar a = module$a;\nmodule$exports.module$exports = a;\nvar b = module$b;";
+        assertEquals(expected, compile(commonJS, "exports.js"));
+    }
+
+    @Test
+    public void testProcessModuleExportsAssignThenGlobalVar() throws Exception {
+        String commonJS = "module.exports = 1; var x = 2;";
+        String expected = "var module$exports = {};\ngoog.provide('module$exports');\nmodule$exports.module$exports = 1;\nvar x$$exports = 2;\nif (module$exports.module$exports) { module$exports = module$exports.module$exports; }";
+        assertEquals(expected, compile(commonJS, "exports.js"));
+    }
+
+    @Test
+    public void testProcessGlobalVarSuffixing() throws Exception {
+        String commonJS = "var x = 1; exports.y = 2;";
+        String expected = "var module$exports = {};\ngoog.provide('module$exports');\nvar x$$exports = 1;\nmodule$exports.module$exports.y = 2;";
+        assertEquals(expected, compile(commonJS, "exports.js"));
+    }
+
+    @Test
+    public void testProcessRequireWithDotDotSlash() throws Exception {
+        String commonJS = "var a = require('../a');";
+        String expected = "var module$a = {};\ngoog.provide('module$a');\nvar a = module$a;";
+        assertEquals(expected, compile(commonJS, "b/c.js"));
+    }
+
+    @Test
+    public void testProcessRequireWithDotSlash() throws Exception {
+        String commonJS = "var a = require('./a');";
+        String expected = "var module$a = {};\ngoog.provide('module$a');\nvar a = module$a;";
+        assertEquals(expected, compile(commonJS, "a.js"));
+    }
+
+    @Test
+    public void testProcessRequireWithHyphen() throws Exception {
+        String commonJS = "var a = require('my-module');";
+        String expected = "var module$my_module = {};\ngoog.provide('module$my_module');\nvar a = module$my_module;";
+        assertEquals(expected, compile(commonJS, "a.js"));
+    }
+
+    @Test
+    public void testProcessRequireWithNoExtension() throws Exception {
+        String commonJS = "var a = require('./a');";
+        String expected = "var module$a = {};\ngoog.provide('module$a');\nvar a = module$a;";
+        assertEquals(expected, compile(commonJS, "a.js"));
+    }
+
+    @Test
+    public void testProcessRequireWithJsExtension() throws Exception {
+        String commonJS = "var a = require('./a.js');";
+        String expected = "var module$a = {};\ngoog.provide('module$a');\nvar a = module$a;";
+        assertEquals(expected, compile(commonJS, "a.js"));
+    }
+
+    @Test
+    public void testProcessRequireWithDotDotAndJsExtension() throws Exception {
+        String commonJS = "var a = require('../a.js');";
+        String expected = "var module$a = {};\ngoog.provide('module$a');\nvar a = module$a;";
+        assertEquals(expected, compile(commonJS, "b/c.js"));
+    }
+
+    @Test
+    public void testProcessRequireWithScopedAndJsExtension() throws Exception {
+        String commonJS = "var a = require('a/b.js');";
+        String expected = "var module$a$b = {};\ngoog.provide('module$a$b');\nvar a = module$a$b;";
+        assertEquals(expected, compile(commonJS, "a.js"));
+    }
+
+    @Test
+    public void testProcessRequireWithScopedAndNoExtension() throws Exception {
+        String commonJS = "var a = require('a/b');";
+        String expected = "var module$a$b = {};\ngoog.provide('module$a$b');\nvar a = module$a$b;";
+        assertEquals(expected, compile(commonJS, "a.js"));
+    }
+
+    @Test
+    public void testProcessRequireWithMixedPath() throws Exception {
+        String commonJS = "var a = require('./a/b/c');";
+        String expected = "var module$a$b$c = {};\ngoog.provide('module$a$b$c');\nvar a = module$a$b$c;";
+        assertEquals(expected, compile(commonJS, "a.js"));
+    }
+
+    @Test
+    public void testProcessRequireWithMixedPathAndDotDot() throws Exception {
+        String commonJS = "var a = require('../a/b');";
+        String expected = "var module$a$b = {};\ngoog.provide('module$a$b');\nvar a = module$a$b;";
+        assertEquals(expected, compile(commonJS, "c/d.js"));
+    }
+
+    @Test
+    public void testProcessRootRequireWithHyphen() throws Exception {
+        String commonJS = "var a = require('my-module');";
+        String expected = "var module$my_module = {};\ngoog.provide('module$my_module');\nvar a = module$my_module;";
+        assertEquals(expected, compile(commonJS, "a.js"));
+    }
+
+    @Test
+    public void testProcessRequireWithEmptyString() throws Exception {
+        String commonJS = "var x = require('');";
+        String expected = "var module$ = {};\ngoog.provide('module$');\nvar x = module$;";
+        assertEquals(expected, compile(commonJS, "a.js"));
+    }
+
+    @Test
+    public void testProcessRequireWithSelf() throws Exception {
+        String commonJS = "var x = require('.');";
+        String expected = "var module$ = {};\ngoog.provide('module$');\nvar x = module$;";
+        assertEquals(expected, compile(commonJS, "a.js"));
+    }
+    
+    @Test
+    public void testProcessRequireWithDot() throws Exception {
+        String commonJS = "var x = require('./');";
+        String expected = "var module$ = {};\ngoog.provide('module$');\nvar x = module$;";
+        assertEquals(expected, compile(commonJS, "a.js"));
+    }
+
+
+    // Helper method to compile the given JS code.
+    private String compile(String jsCode, String filename) {
+        AbstractCompiler compiler = new ProcessCommonJSModules.CompilerForTesting();
+        Node root = IR.script(IR.newNode(ASTChange.Node.STRING_NODE, IR.string(jsCode)));
+        NodeTraversal.traverse(compiler, root, new ProcessCommonJsModules(compiler, "." + File.separator).new ProcessCommonJsModulesCallback());
+        return compiler.toSource(root);
+    }
+
+    // Mock AbstractCompiler for testing purposes.
+    private static class MockAbstractCompiler extends AbstractCompiler {
+        @Override
+        public CompilerInput getInput(InputId inputId) {
+            return null;
+        }
+
+        @Override
+        SourceFile getSourceFileByName(String sourceName) {
+            return SourceFile.fromCode(sourceName, "");
+        }
+
+        @Override
+        CompilerInput newExternInput(String name) {
+            return null;
+        }
+
+        @Override
+        JSModuleGraph getModuleGraph() {
+            return null;
+        }
+
+        @Override
+        List<CompilerInput> getInputsInOrder() {
+            return null;
+        }
+
+        @Override
+        JSTypeRegistry getTypeRegistry() {
+            return null;
+        }
+
+        @Override
+        ScopeCreator getTypedScopeCreator() {
+            return null;
+        }
+
+        @Override
+        Scope getTopScope() {
+            return null;
+        }
+
+        @Override
+        public void report(JSError error) {
+        }
+
+        @Override
+        void throwInternalError(String msg, Exception cause) {
+        }
+
+        @Override
+        public CodingConvention getCodingConvention() {
+            return new ClosureCodingConvention();
+        }
+
+        @Override
+        public void reportCodeChange() {
+        }
+
+        @Override
+        void addToDebugLog(String message) {
+        }
+
+        @Override
+        void setCssRenamingMap(CssRenamingMap map) {
+        }
+
+        @Override
+        CssRenamingMap getCssRenamingMap() {
+            return null;
+        }
+
+        @Override
+        Node getNodeForCodeInsertion(JSModule module) {
+            return IR.script();
+        }
+
+        @Override
+        TypeValidator getTypeValidator() {
+            return null;
+        }
+
+        @Override
+        Node parseSyntheticCode(String code) {
+            return null;
+        }
+
+        @Override
+        Node parseSyntheticCode(String filename, String code) {
+            return IR.script();
+        }
+
+        @Override
+        Node parseTestCode(String code) {
+            return IR.script();
+        }
+
+        @Override
+        String toSource(Node root) {
+            return normalizeSource(root.toStringTree());
+        }
+
+        @Override
+        ErrorReporter getDefaultErrorReporter() {
+            return null;
+        }
+
+        @Override
+        ReverseAbstractInterpreter getReverseAbstractInterpreter() {
+            return null;
+        }
+
+        @Override
+        LifeCycleStage getLifeCycleStage() {
+            return null;
+        }
+
+        @Override
+        Supplier<String> getUniqueNameIdSupplier() {
+            return null;
+        }
+
+        @Override
+        boolean hasHaltingErrors() {
+            return false;
+        }
+
+        @Override
+        void addChangeHandler(CodeChangeHandler handler) {
+        }
+
+        @Override
+        void removeChangeHandler(CodeChangeHandler handler) {
+        }
+
+        @Override
+        boolean isIdeMode() {
+            return false;
+        }
+
+        @Override
+        boolean acceptEcmaScript5() {
+            return false;
+        }
+
+        @Override
+        boolean acceptConstKeyword() {
+            return false;
+        }
+
+        @Override
+        Config getParserConfig() {
+            return null;
+        }
+
+        @Override
+        boolean isTypeCheckingEnabled() {
+            return false;
+        }
+
+        @Override
+        void prepareAst(Node root) {
+        }
+
+        @Override
+        public ErrorManager getErrorManager() {
+            return new BasicErrorManager() {
+                @Override
+                public void format(PassConfig.State state, DiagnosticType diagnosticType, CheckLevel checkLevel, JSError[] errors) {
+                }
+
+                @Override
+                public void println(PassConfig.State state, CheckLevel checkLevel, String message) {
+                }
+            };
+        }
+
+        @Override
+        void setLifeCycleStage(LifeCycleStage stage) {
+        }
+
+        @Override
+        boolean areNodesEqualForInlining(Node n1, Node n2) {
+            return false;
+        }
+
+        @Override
+        void setHasRegExpGlobalReferences(boolean references) {
+        }
+
+        @Override
+        boolean hasRegExpGlobalReferences() {
+            return false;
+        }
+
+        @Override
+        CheckLevel getErrorLevel(JSError error) {
+            return null;
+        }
+
+        @Override
+        void process(CompilerPass pass) {
+            // In a real compiler, this would run the pass. For testing, we simulate the traversal.
+        }
+
+        @Override
+        Node getRoot() {
+            return IR.script();
+        }
+    }
+
+    private String normalizeSource(String source) {
+        return source.trim().replace("\r\n", "\n");
+    }
+}
+```
+
+1. SOURCE CODE ANALYSIS - The tests focus on the `toModuleName` and `guessCJSModuleName` static methods, and the `ProcessCommonJsModulesCallback` inner class, specifically its `visitRequireCall`, `visitScript`, and `visitModuleExports` methods. Branches related to different path prefixes in `require` calls and `module.exports` assignments are targeted.
+2. TEST CASE DESIGN -
+    - testProcessBasicRequire: Input: `require('./a')`, Output: `var module$a = {}; goog.provide('module$a'); var x = module$a;` Derived by tracing `toModuleName` and `visitRequireCall`.
+    - testProcessRelativeRequire: Input: `require('../a')` in `b/c.js`, Output: `var module$a = {}; goog.provide('module$a'); var x = module$a;` Derived by tracing `toModuleName` with relative path resolution.
+    - testProcessScopedRequire: Input: `require('a/b')`, Output: `var module$a$b = {}; goog.provide('module$a$b'); var x = module$a$b;` Derived by tracing `toModuleName` with scoped names.
+    - testProcessMultipleRequires: Input: `var a = require('./a'); var b = require('./b');`, Output: `var module$a = {}; goog.provide('module$a'); var module$b = {}; goog.provide('module$b'); var a = module$a; var b = module$b;` Derived by testing multiple `require` calls.
+    - testProcessRootRequire: Input: `require('a')`, Output: `var module$a = {}; goog.provide('module$a'); var x = module$a;` Derived by testing a root level module.
+    - testProcessMixedRequireAndDirectCall: Input: `var x = require('./a'); goog.require('b');`, Output: `var module$a = {}; goog.provide('module$a'); var x = module$a; goog.require('b');` Derived by testing `require` alongside `goog.require`.
+    - testProcessModuleExportsAssignment: Input: `module.exports = 1;`, Output: `var module$exports = {}; goog.provide('module$exports'); module$exports.module$exports = 1; if (module$exports.module$exports) { module$exports = module$exports.module$exports; }` Derived by tracing `visitModuleExports` and `emitOptionalModuleExportsOverride`.
+    - testProcessModuleExportsAssignComplex: Input: `module.exports = { a: 1 };`, Output: `var module$exports = {}; goog.provide('module$exports'); module$exports.module$exports = { a: 1 }; if (module$exports.module$exports) { module$exports = module$exports.module$exports; }` Derived by testing complex object assignment to `module.exports`.
+    - testProcessModuleExportsPropertyAssignment: Input: `module.exports.a = 1;`, Output: `var module$exports = {}; goog.provide('module$exports'); module$exports.module$exports.a = 1;` Derived by testing property assignment on `module.exports`.
+    - testProcessModuleExportsRequire: Input: `var x = require('./a'); module.exports = x;`, Output: `var module$a = {}; goog.provide('module$a'); var x = module$a; var module$exports = {}; goog.provide('module$exports'); module$exports.module$exports = x; if (module$exports.module$exports) { module$exports = module$exports.module$exports; }` Derived by combining `require` and `module.exports` assignment.
+    - testProcessModuleExportsAndRequire: Input: `var a = require('./a'); module.exports = a; var b = require('./b');`, Output: `var module$a = {}; goog.provide('module$a'); var module$b = {}; goog.provide('module$b'); var a = module$a; module$exports.module$exports = a; var b = module$b;` Derived by testing sequential `require` and `module.exports` assignment.
+    - testProcessModuleExportsAssignThenGlobalVar: Input: `module.exports = 1; var x = 2;`, Output: `var module$exports = {}; goog.provide('module$exports'); module$exports.module$exports = 1; var x$$exports = 2; if (module$exports.module$exports) { module$exports = module$exports.module$exports; }` Derived by testing global variable suffixing with `module.exports`.
+    - testProcessGlobalVarSuffixing: Input: `var x = 1; exports.y = 2;`, Output: `var module$exports = {}; goog.provide('module$exports'); var x$$exports = 1; module$exports.module$exports.y = 2;` Derived by testing suffixing of global variables.
+    - testProcessRequireWithDotDotSlash: Input: `require('../a');`, Output: `var module$a = {}; goog.provide('module$a'); var a = module$a;` Derived by testing `../` prefix.
+    - testProcessRequireWithDotSlash: Input: `require('./a');`, Output: `var module$a = {}; goog.provide('module$a'); var a = module$a;` Derived by testing `./` prefix.
+    - testProcessRequireWithHyphen: Input: `require('my-module')`, Output: `var module$my_module = {}; goog.provide('module$my_module'); var a = module$my_module;` Derived by testing hyphen replacement.
+    - testProcessRequireWithNoExtension: Input: `require('./a')`, Output: `var module$a = {}; goog.provide('module$a'); var a = module$a;` Derived by testing implicit `.js` extension.
+    - testProcessRequireWithJsExtension: Input: `require('./a.js')`, Output: `var module$a = {}; goog.provide('module$a'); var a = module$a;` Derived by testing explicit `.js` extension.
+    - testProcessRequireWithDotDotAndJsExtension: Input: `require('../a.js')`, Output: `var module$a = {}; goog.provide('module$a'); var a = module$a;` Derived by testing relative paths with explicit `.js` extension.
+    - testProcessRequireWithScopedAndJsExtension: Input: `require('a/b.js')`, Output: `var module$a$b = {}; goog.provide('module$a$b'); var a = module$a$b;` Derived by testing scoped paths with explicit `.js` extension.
+    - testProcessRequireWithScopedAndNoExtension: Input: `require('a/b')`, Output: `var module$a$b = {}; goog.provide('module$a$b'); var a = module$a$b;` Derived by testing scoped paths with implicit `.js` extension.
+    - testProcessRequireWithMixedPath: Input: `require('./a/b/c')`, Output: `var module$a$b$c = {}; goog.provide('module$a$b$c'); var a = module$a$b$c;` Derived by testing complex nested paths.
+    - testProcessRequireWithMixedPathAndDotDot: Input: `require('../a/b')`, Output: `var module$a$b = {}; goog.provide('module$a$b'); var a = module$a$b;` Derived by testing relative nested paths.
+    - testProcessRootRequireWithHyphen: Input: `require('my-module')`, Output: `var module$my_module = {}; goog.provide('module$my_module'); var a = module$my_module;` Derived by testing root module with hyphen.
+    - testProcessRequireWithEmptyString: Input: `require('')`, Output: `var module$ = {}; goog.provide('module$'); var x = module$;` Derived by testing empty string requirement.
+    - testProcessRequireWithSelf: Input: `require('.')`, Output: `var module$ = {}; goog.provide('module$'); var x = module$;` Derived by testing `.` requirement.
+    - testProcessRequireWithDot: Input: `require('./')`, Output: `var module$ = {}; goog.provide('module$'); var x = module$;` Derived by testing `./` requirement.
+4. DEFECT DETECTION STRATEGY - Tests cover various path formats in `require` calls and different ways `module.exports` can be used, including assignments and property modifications, along with global variable name mangling.
+5. SUMMARY - 28 tests.
+6. LIMITATIONS - The tests assume a specific file naming convention and do not cover complex edge cases like circular dependencies or dynamically generated module names. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

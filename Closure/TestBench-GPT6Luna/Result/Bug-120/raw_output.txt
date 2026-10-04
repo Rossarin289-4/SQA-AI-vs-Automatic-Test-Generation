@@ -1,0 +1,212 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Predicate;
+import com.google.common.base.Predicates;
+import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.javascript.jscomp.NodeTraversal.ScopedCallback;
+import com.google.javascript.jscomp.Scope.Var;
+import com.google.javascript.rhino.InputId;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.jstype.JSType;
+import com.google.javascript.rhino.jstype.StaticReference;
+import com.google.javascript.rhino.jstype.StaticSourceFile;
+import com.google.javascript.rhino.jstype.StaticSymbolTable;
+import java.util.ArrayDeque;
+import java.util.Deque;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+public class ReferenceCollectingCallbackTest {
+    @Test
+    public void testReferenceCollectionIteratorEmpty() throws Exception {
+        ReferenceCollectingCallback.ReferenceCollection refs =
+                new ReferenceCollectingCallback.ReferenceCollection();
+        assertFalse(refs.iterator().hasNext());
+    }
+
+    @Test
+    public void testReferenceCollectionNeverAssignedEmpty() throws Exception {
+        ReferenceCollectingCallback.ReferenceCollection refs =
+                new ReferenceCollectingCallback.ReferenceCollection();
+        assertTrue(refs.isNeverAssigned());
+    }
+
+    @Test
+    public void testReferenceCollectionNotAssignedOnceWhenEmpty() throws Exception {
+        ReferenceCollectingCallback.ReferenceCollection refs =
+                new ReferenceCollectingCallback.ReferenceCollection();
+        assertFalse(refs.isAssignedOnceInLifetime());
+    }
+
+    @Test
+    public void testReferenceCollectionNotWellDefinedWhenEmpty() throws Exception {
+        ReferenceCollectingCallback.ReferenceCollection refs =
+                new ReferenceCollectingCallback.ReferenceCollection();
+        assertFalse(refs.isWellDefined());
+    }
+
+    @Test
+    public void testReferenceCollectionFirstReferenceNotAssigningWhenEmpty() throws Exception {
+        ReferenceCollectingCallback.ReferenceCollection refs =
+                new ReferenceCollectingCallback.ReferenceCollection();
+        assertFalse(refs.firstReferenceIsAssigningDeclaration());
+    }
+
+    @Test
+    public void testReferenceGetNodeAndInputIdFromTestReference() throws Exception {
+        CompilerInput input = new CompilerInput(new SourceFile("input.js", ""));
+        ReferenceCollectingCallback.Reference ref =
+                ReferenceCollectingCallback.Reference.createRefForTest(input);
+        assertNotNull(ref.getNode());
+        assertSame(input.getInputId(), ref.getInputId());
+    }
+
+    @Test
+    public void testReferenceSourceFileFromTestReference() throws Exception {
+        CompilerInput input = new CompilerInput(new SourceFile("input.js", ""));
+        ReferenceCollectingCallback.Reference ref =
+                ReferenceCollectingCallback.Reference.createRefForTest(input);
+        assertNull(ref.getSourceFile());
+    }
+
+    @Test
+    public void testBasicBlockWithoutParentIsGlobalBlock() throws Exception {
+        ReferenceCollectingCallback.BasicBlock block =
+                new ReferenceCollectingCallback.BasicBlock(null, new Node(Token.SCRIPT));
+        assertTrue(block.isGlobalScopeBlock());
+        assertNull(block.getParent());
+    }
+
+    @Test
+    public void testBasicBlockChildIsNotGlobalBlock() throws Exception {
+        ReferenceCollectingCallback.BasicBlock parent =
+                new ReferenceCollectingCallback.BasicBlock(null, new Node(Token.SCRIPT));
+        ReferenceCollectingCallback.BasicBlock child =
+                new ReferenceCollectingCallback.BasicBlock(parent, new Node(Token.BLOCK));
+        assertFalse(child.isGlobalScopeBlock());
+        assertSame(parent, child.getParent());
+    }
+
+    @Test
+    public void testBasicBlockExecutionBeforeDescendant() throws Exception {
+        ReferenceCollectingCallback.BasicBlock parent =
+                new ReferenceCollectingCallback.BasicBlock(null, new Node(Token.SCRIPT));
+        ReferenceCollectingCallback.BasicBlock child =
+                new ReferenceCollectingCallback.BasicBlock(parent, new Node(Token.BLOCK));
+        assertTrue(parent.provablyExecutesBefore(child));
+    }
+
+    @Test
+    public void testBasicBlockDoesNotExecuteBeforeUnrelatedBlock() throws Exception {
+        ReferenceCollectingCallback.BasicBlock first =
+                new ReferenceCollectingCallback.BasicBlock(null, new Node(Token.SCRIPT));
+        ReferenceCollectingCallback.BasicBlock second =
+                new ReferenceCollectingCallback.BasicBlock(null, new Node(Token.SCRIPT));
+        assertFalse(first.provablyExecutesBefore(second));
+    }
+
+    @Test
+    public void testBasicBlockGlobalBlocksExecuteBeforeEachOther() throws Exception {
+        ReferenceCollectingCallback.BasicBlock first =
+                new ReferenceCollectingCallback.BasicBlock(null, new Node(Token.SCRIPT));
+        ReferenceCollectingCallback.BasicBlock second =
+                new ReferenceCollectingCallback.BasicBlock(null, new Node(Token.SCRIPT));
+        assertTrue(first.provablyExecutesBefore(second));
+    }
+
+    @Test
+    public void testBasicBlockLoopRootHasParentLoopToken() throws Exception {
+        Node loop = new Node(Token.WHILE);
+        Node body = new Node(Token.BLOCK);
+        loop.addChildToBack(body);
+        ReferenceCollectingCallback.BasicBlock block =
+                new ReferenceCollectingCallback.BasicBlock(null, body);
+        assertFalse(block.isGlobalScopeBlock());
+        assertNull(block.getParent());
+    }
+
+    @Test
+    public void testCallbackInitiallyHasNoSymbols() throws Exception {
+        ReferenceCollectingCallback callback =
+                new ReferenceCollectingCallback(null,
+                        ReferenceCollectingCallback.DO_NOTHING_BEHAVIOR);
+        assertFalse(callback.getAllSymbols().iterator().hasNext());
+    }
+
+    @Test
+    public void testCallbackReferencesAbsentBeforeTraversal() throws Exception {
+        ReferenceCollectingCallback callback =
+                new ReferenceCollectingCallback(null,
+                        ReferenceCollectingCallback.DO_NOTHING_BEHAVIOR);
+        assertNull(callback.getReferences(null));
+    }
+
+    @Test
+    public void testCallbackScopeOfNullVariableIsNull() throws Exception {
+        ReferenceCollectingCallback callback =
+                new ReferenceCollectingCallback(null,
+                        ReferenceCollectingCallback.DO_NOTHING_BEHAVIOR);
+        assertNull(callback.getScope(null));
+    }
+
+    @Test
+    public void testBlockBoundaryConditionForConditionalFirstChild() throws Exception {
+        Node conditional = new Node(Token.IF);
+        Node first = new Node(Token.NAME, "cond");
+        conditional.addChildToBack(first);
+        assertFalse(ReferenceCollectingCallback.isBlockBoundary(first, conditional));
+    }
+
+    @Test
+    public void testBlockBoundaryConditionForConditionalAlternative() throws Exception {
+        Node conditional = new Node(Token.IF);
+        Node condition = new Node(Token.NAME, "cond");
+        Node alternative = new Node(Token.BLOCK);
+        conditional.addChildToBack(condition);
+        conditional.addChildToBack(alternative);
+        assertTrue(ReferenceCollectingCallback.isBlockBoundary(alternative, conditional));
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+Method selection is exploratory because no target method was specified. Tests focus on accessible `ReferenceCollection`, `Reference`, and `BasicBlock` behavior, plus callback lookup defaults and conditional block-boundary cases.
+
+### 2. TEST CASE DESIGN
+- `testReferenceCollectionIteratorEmpty`: empty collection; iterator has no next element, from its initially empty list.
+- `testReferenceCollectionNeverAssignedEmpty`: empty collection; true, because no references are assignments.
+- `testReferenceCollectionNotAssignedOnceWhenEmpty`: empty collection; false, because there is no assignment reference.
+- `testReferenceCollectionNotWellDefinedWhenEmpty`: empty collection; false, from the explicit zero-size case.
+- `testReferenceCollectionFirstReferenceNotAssigningWhenEmpty`: empty collection; false, because no first reference exists.
+- `testReferenceGetNodeAndInputIdFromTestReference`: factory-created reference; node is non-null and ID is the input's ID, from construction.
+- `testReferenceSourceFileFromTestReference`: factory-created reference with a bare name node; source file is null, as no source file is attached.
+- `testBasicBlockWithoutParentIsGlobalBlock`: root block; global-block predicate is true and parent is null, directly from constructor state.
+- `testBasicBlockChildIsNotGlobalBlock`: child block; predicate false and parent identity preserved.
+- `testBasicBlockExecutionBeforeDescendant`: parent and direct descendant; true, because the ancestor walk reaches the current block.
+- `testBasicBlockDoesNotExecuteBeforeUnrelatedBlock`: unrelated non-global childless blocks; false, because neither is an ancestor of the other.
+- `testBasicBlockGlobalBlocksExecuteBeforeEachOther`: two parentless blocks; true by the global-block special case.
+- `testBasicBlockLoopRootHasParentLoopToken`: block root under a while node; verifies non-global status and its separately supplied null parent.
+- `testCallbackInitiallyHasNoSymbols`: fresh callback; symbol iterator is empty because the reference map starts empty.
+- `testCallbackReferencesAbsentBeforeTraversal`: fresh callback and null key; returns null because no collection is stored.
+- `testCallbackScopeOfNullVariableIsNull`: fresh callback; map lookup for null yields null.
+- `testBlockBoundaryConditionForConditionalFirstChild`: first child of `IF`; false by the first-child exception.
+- `testBlockBoundaryConditionForConditionalAlternative`: non-first child of `IF`; true by the conditional-child rule.
+
+### 4. DEFECT DETECTION STRATEGY
+The tests pin down empty-collection outcomes, reference construction, block ancestry and global-block behavior, and both sides of the conditional boundary rule. No faulty-version outcome is assumed.
+
+### 5. SUMMARY
+18 tests.
+
+### 6. LIMITATIONS
+Traversal and configured reference-collection behavior are not exercised; several public methods require a compiler and a fully configured AST traversal. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

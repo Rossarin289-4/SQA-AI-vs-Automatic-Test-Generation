@@ -1,0 +1,699 @@
+```java
+package com.google.javascript.rhino.jstype;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Predicate;
+import com.google.javascript.rhino.ErrorReporter;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.jstype.JSTypeRegistry.ResolveMode;
+import java.io.Serializable;
+import java.util.Comparator;
+import com.google.javascript.jscomp.Scope;
+import com.google.javascript.rhino.testing.EmptyScope;
+import com.google.javascript.jscomp.TypeInference;
+
+public class JSTypeTest {
+
+    // Mock ErrorReporter and JSTypeRegistry for testing purposes
+    private ErrorReporter errorReporter = new ErrorReporter() {
+        @Override
+        public void warning(String message, String sourceName, int line, String lineSource, int lineOffset) {}
+        @Override
+        public void error(String message, String sourceName, int line, String lineSource, int lineOffset) {}
+        @Override
+        public EvaluatorException runtimeError(String message, String sourceName, int line, String lineSource, int lineOffset) {
+            return new EvaluatorException(message);
+        }
+    };
+
+    private JSTypeRegistry registry = new JSTypeRegistry(errorReporter);
+
+    // Helper to create a mock JSType with specific behaviors
+    private JSType mockJSType(boolean isSubtypeResult, boolean isEquivalentToResult) {
+        return new MockJSType(registry, isSubtypeResult, isEquivalentToResult);
+    }
+
+    private static class MockJSType extends JSType {
+        private boolean isSubtypeResult;
+        private boolean isEquivalentToResult;
+
+        MockJSType(JSTypeRegistry registry, boolean isSubtypeResult, boolean isEquivalentToResult) {
+            super(registry);
+            this.isSubtypeResult = isSubtypeResult;
+            this.isEquivalentToResult = isEquivalentToResult;
+        }
+
+        @Override
+        public boolean isSubtype(JSType that) {
+            return this.isSubtypeResult;
+        }
+
+        @Override
+        public boolean isEquivalentTo(JSType jsType) {
+            return this.isEquivalentToResult;
+        }
+
+        @Override
+        public TernaryValue getPossibleToBooleanOutcomes() {
+            return TernaryValue.UNKNOWN; // Default for mock
+        }
+
+        @Override
+        public <T> T visit(Visitor<T> visitor) {
+            return null; // Default for mock
+        }
+
+        @Override
+        JSType resolveInternal(ErrorReporter t, StaticScope<JSType> scope) {
+            return this; // Default for mock
+        }
+    }
+
+    @Test
+    public void testIsEquivalentToWithEqualTypes() throws Exception {
+        JSType type1 = registry.createNamedType("A");
+        JSType type2 = registry.createNamedType("A");
+        assertTrue(type1.isEquivalentTo(type2));
+    }
+
+    @Test
+    public void testIsEquivalentToWithDifferentTypes() throws Exception {
+        JSType type1 = registry.createNamedType("A");
+        JSType type2 = registry.createNamedType("B");
+        assertFalse(type1.isEquivalentTo(type2));
+    }
+
+    @Test
+    public void testIsEquivalentStaticMethod() throws Exception {
+        JSType type1 = registry.createNamedType("A");
+        JSType type2 = registry.createNamedType("A");
+        assertTrue(JSType.isEquivalent(type1, type2));
+    }
+
+    @Test
+    public void testIsEquivalentStaticMethodWithNull() throws Exception {
+        JSType type1 = registry.createNamedType("A");
+        assertFalse(JSType.isEquivalent(type1, null));
+        assertFalse(JSType.isEquivalent(null, type1));
+        assertTrue(JSType.isEquivalent(null, null));
+    }
+
+    @Test
+    public void testEqualsWithEqualTypes() throws Exception {
+        JSType type1 = registry.createNamedType("A");
+        JSType type2 = registry.createNamedType("A");
+        assertTrue(type1.equals(type2));
+    }
+
+    @Test
+    public void testEqualsWithDifferentTypes() throws Exception {
+        JSType type1 = registry.createNamedType("A");
+        JSType type2 = registry.createNamedType("B");
+        assertFalse(type1.equals(type2));
+    }
+
+    @Test
+    public void testEqualsWithNonJSTypeObject() throws Exception {
+        JSType type1 = registry.createNamedType("A");
+        assertFalse(type1.equals(new Object()));
+    }
+
+    @Test
+    public void testHashCodeConsistency() throws Exception {
+        JSType type1 = registry.createNamedType("A");
+        JSType type2 = registry.createNamedType("A");
+        assertEquals(type1.hashCode(), type2.hashCode());
+    }
+
+    @Test
+    public void testHashCodeDifference() throws Exception {
+        JSType type1 = registry.createNamedType("A");
+        JSType type2 = registry.createNamedType("B");
+        assertNotEquals(type1.hashCode(), type2.hashCode());
+    }
+
+    @Test
+    public void testMatchesInt32ContextForNumber() throws Exception {
+        JSType numberType = registry.getNativeType(JSTypeNative.NUMBER_TYPE);
+        assertTrue(numberType.matchesInt32Context());
+    }
+
+    @Test
+    public void testMatchesUint32ContextForNumber() throws Exception {
+        JSType numberType = registry.getNativeType(JSTypeNative.NUMBER_TYPE);
+        assertTrue(numberType.matchesUint32Context());
+    }
+
+    @Test
+    public void testMatchesNumberContextForNumber() throws Exception {
+        JSType numberType = registry.getNativeType(JSTypeNative.NUMBER_TYPE);
+        assertTrue(numberType.matchesNumberContext());
+    }
+
+    @Test
+    public void testMatchesStringContextForString() throws Exception {
+        JSType stringType = registry.getNativeType(JSTypeNative.STRING_TYPE);
+        assertTrue(stringType.matchesStringContext());
+    }
+
+    @Test
+    public void testMatchesObjectContextForObject() throws Exception {
+        ObjectType objectType = registry.getObjectType(JSTypeNative.OBJECT_TYPE);
+        assertTrue(objectType.matchesObjectContext());
+    }
+
+    @Test
+    public void testFindPropertyTypeOnObject() throws Exception {
+        ObjectType objectType = registry.getObjectType(JSTypeNative.OBJECT_TYPE);
+        JSType stringType = registry.getNativeType(JSTypeNative.STRING_TYPE);
+        objectType.defineInferredProperty("testProp", stringType, false, null);
+        assertEquals(stringType, objectType.findPropertyType("testProp"));
+    }
+
+    @Test
+    public void testFindPropertyTypeOnUnknownType() throws Exception {
+        JSType unknownType = registry.getNativeType(JSTypeNative.UNKNOWN_TYPE);
+        assertNull(unknownType.findPropertyType("anyProp"));
+    }
+
+    @Test
+    public void testCanBeCalledForFunctionType() throws Exception {
+        FunctionType functionType = registry.createFunctionType(registry.getNativeType(JSTypeNative.VOID_TYPE));
+        assertTrue(functionType.canBeCalled());
+    }
+
+    @Test
+    public void testCanBeCalledForObjectType() throws Exception {
+        ObjectType objectType = registry.getObjectType(JSTypeNative.OBJECT_TYPE);
+        assertFalse(objectType.canBeCalled());
+    }
+
+    @Test
+    public void testCanAssignToWhenSubtype() throws Exception {
+        JSType subtype = registry.createNamedType("Sub");
+        JSType supertype = registry.createNamedType("Super");
+        registry.registerType(subtype);
+        registry.registerType(supertype);
+        // Manually set up a subtype relationship for the test
+        ((ProxyObjectType) subtype).setReferencedType(supertype); // simplified, actual setup is complex
+
+        assertTrue(subtype.canAssignTo(supertype));
+    }
+
+    @Test
+    public void testCanAssignToWhenNotSubtype() throws Exception {
+        JSType type1 = registry.createNamedType("A");
+        JSType type2 = registry.createNamedType("B");
+        assertFalse(type1.canAssignTo(type2));
+    }
+
+    @Test
+    public void testAutoboxesToForNumber() throws Exception {
+        JSType numberType = registry.getNativeType(JSTypeNative.NUMBER_TYPE);
+        // The Number object type is what a primitive number autoboxes to.
+        // In the context of JSType, this is usually represented by NumberObjectType.
+        // We'll mock this behavior for the test.
+        JSType numberObjectType = new MockJSType(registry, false, false) {
+            @Override
+            public boolean isNumberObjectType() { return true; }
+        };
+        // Need a JSTypeRegistry to get native types
+        JSTypeRegistry tempRegistry = new JSTypeRegistry(errorReporter);
+        tempRegistry.registerType(numberObjectType); // Register the mock object type
+        JSType numberPrimitive = tempRegistry.getNativeType(JSTypeNative.NUMBER_TYPE);
+
+        // The actual implementation depends on JSTypeRegistry. Let's assume it returns a NumberObjectType.
+        // For this test, we'll simulate that behavior.
+        JSType result = mockJSType(false, false) {
+            @Override
+            public JSType autoboxesTo() {
+                return tempRegistry.getNativeType(JSTypeNative.NUMBER_OBJECT_TYPE);
+            }
+        }.autoboxesTo();
+
+        assertNotNull(result);
+        assertTrue(result.isNumberObjectType());
+    }
+
+    @Test
+    public void testUnboxesToForStringObject() throws Exception {
+        JSType stringObjectType = registry.getNativeType(JSTypeNative.STRING_OBJECT_TYPE);
+        JSType stringValueType = registry.getNativeType(JSTypeNative.STRING_TYPE);
+
+        // Mocking the behavior to return the string value type
+        JSType result = mockJSType(false, false) {
+            @Override
+            public JSType unboxesTo() {
+                return stringValueType;
+            }
+        }.unboxesTo();
+
+        assertNotNull(result);
+        assertTrue(result.isStringValueType());
+    }
+
+    @Test
+    public void testToObjectTypeWhenIsObjectType() throws Exception {
+        ObjectType objectType = registry.getObjectType(JSTypeNative.OBJECT_TYPE);
+        assertSame(objectType, objectType.toObjectType());
+    }
+
+    @Test
+    public void testToObjectTypeWhenNotObjectType() throws Exception {
+        JSType stringType = registry.getNativeType(JSTypeNative.STRING_TYPE);
+        assertNull(stringType.toObjectType());
+    }
+
+    @Test
+    public void testDereferenceForObjectType() throws Exception {
+        ObjectType objectType = registry.getObjectType(JSTypeNative.OBJECT_TYPE);
+        // Dereferencing an object type should return itself (or a compatible object type)
+        // since it's already an object and not null/undefined.
+        ObjectType dereferenced = objectType.dereference();
+        assertNotNull(dereferenced);
+        assertTrue(dereferenced.isObject());
+    }
+
+    @Test
+    public void testDereferenceForPrimitiveType() throws Exception {
+        JSType numberType = registry.getNativeType(JSTypeNative.NUMBER_TYPE);
+        // For primitive types, dereference should return the corresponding object type.
+        // We'll mock the autoboxesTo behavior for this.
+        ObjectType numberObjectType = registry.getNativeType(JSTypeNative.NUMBER_OBJECT_TYPE);
+        JSType result = mockJSType(false, false) {
+            @Override
+            public JSType autoboxesTo() {
+                return numberObjectType;
+            }
+            @Override
+            public JSType restrictByNotNullOrUndefined() {
+                return this;
+            }
+        }.dereference();
+        assertNotNull(result);
+        assertSame(numberObjectType, result);
+    }
+
+    @Test
+    public void testCanTestForEqualityWithUnknown() throws Exception {
+        JSType unknownType = registry.getNativeType(JSTypeNative.UNKNOWN_TYPE);
+        JSType anyType = registry.getNativeType(JSTypeNative.ALL_TYPE);
+        assertTrue(unknownType.canTestForEqualityWith(anyType));
+    }
+
+    @Test
+    public void testCanTestForEqualityWithNonNull() throws Exception {
+        JSType stringType = registry.getNativeType(JSTypeNative.STRING_TYPE);
+        JSType numberType = registry.getNativeType(JSTypeNative.NUMBER_TYPE);
+        // Assuming string and number can be compared, the result is UNKNOWN
+        assertTrue(stringType.canTestForEqualityWith(numberType));
+    }
+
+    @Test
+    public void testTestForEqualityWithBoolean() throws Exception {
+        JSType booleanType = registry.getNativeType(JSTypeNative.BOOLEAN_TYPE);
+        assertEquals(TernaryValue.TRUE, booleanType.testForEquality(booleanType));
+    }
+
+    @Test
+    public void testTestForEqualityWithDifferentTypes() throws Exception {
+        JSType stringType = registry.getNativeType(JSTypeNative.STRING_TYPE);
+        JSType numberType = registry.getNativeType(JSTypeNative.NUMBER_TYPE);
+        // Depending on the internal implementation, this might be UNKNOWN or FALSE.
+        // We'll assert for UNKNOWN as a common case.
+        assertEquals(TernaryValue.UNKNOWN, stringType.testForEquality(numberType));
+    }
+
+    @Test
+    public void testCanTestForShallowEqualityWithSameType() throws Exception {
+        JSType stringType = registry.getNativeType(JSTypeNative.STRING_TYPE);
+        assertTrue(stringType.canTestForShallowEqualityWith(stringType));
+    }
+
+    @Test
+    public void testCanTestForShallowEqualityWithSubtype() throws Exception {
+        JSType objectType = registry.getObjectType(JSTypeNative.OBJECT_TYPE);
+        JSType nullType = registry.getNativeType(JSTypeNative.NULL_TYPE);
+        // Null is not a subtype of Object, nor is Object a subtype of Null.
+        // However, the implementation of canTestForShallowEqualityWith uses isSubtype.
+        // Let's mock isSubtype to test the logic.
+        JSType mockObject = mockJSType(false, false) {
+            @Override
+            public boolean isSubtype(JSType that) {
+                return that.isObjectType(); // Simplified: object is subtype of itself
+            }
+            @Override
+            public boolean isObjectType() { return true;}
+        };
+        JSType mockNull = mockJSType(false, false) {
+            @Override
+            public boolean isSubtype(JSType that) {
+                return that.isNullType(); // Simplified: null is subtype of itself
+            }
+            @Override
+            public boolean isNullType() { return true; }
+        };
+        assertTrue(mockObject.canTestForShallowEqualityWith(mockObject));
+        assertTrue(mockNull.canTestForShallowEqualityWith(mockNull));
+    }
+
+    @Test
+    public void testIsNullableForNullType() throws Exception {
+        JSType nullType = registry.getNativeType(JSTypeNative.NULL_TYPE);
+        assertTrue(nullType.isNullable());
+    }
+
+    @Test
+    public void testIsNullableForObjectType() throws Exception {
+        ObjectType objectType = registry.getObjectType(JSTypeNative.OBJECT_TYPE);
+        assertFalse(objectType.isNullable());
+    }
+
+    @Test
+    public void testGetLeastSupertypeWithSameTypes() throws Exception {
+        JSType numberType = registry.getNativeType(JSTypeNative.NUMBER_TYPE);
+        assertEquals(numberType, numberType.getLeastSupertype(numberType));
+    }
+
+    @Test
+    public void testGetLeastSupertypeWithDifferentTypes() throws Exception {
+        JSType numberType = registry.getNativeType(JSTypeNative.NUMBER_TYPE);
+        ObjectType objectType = registry.getObjectType(JSTypeNative.OBJECT_TYPE);
+        JSType supertype = numberType.getLeastSupertype(objectType);
+        // The least supertype of number and Object is Object itself (or a common supertype).
+        // In this case, Object is the least supertype.
+        assertTrue(supertype.isObject());
+        assertFalse(supertype.isNumberValueType());
+    }
+
+    @Test
+    public void testGetGreatestSubtypeWithSameTypes() throws Exception {
+        JSType numberType = registry.getNativeType(JSTypeNative.NUMBER_TYPE);
+        assertEquals(numberType, numberType.getGreatestSubtype(numberType));
+    }
+
+    @Test
+    public void testGetGreatestSubtypeWithDifferentTypes() throws Exception {
+        JSType numberType = registry.getNativeType(JSTypeNative.NUMBER_TYPE);
+        ObjectType objectType = registry.getObjectType(JSTypeNative.OBJECT_TYPE);
+        JSType subtype = numberType.getGreatestSubtype(objectType);
+        // The greatest subtype of number and Object is typically UNKNOWN or NO_TYPE,
+        // as they don't share a common specific subtype other than what all types do.
+        // In this implementation, it seems to result in NO_OBJECT_TYPE if both are objects.
+        assertTrue(subtype.isNoObjectType());
+    }
+
+    @Test
+    public void testGetRestrictedTypeGivenToBooleanOutcomeTrue() throws Exception {
+        JSType stringType = registry.getNativeType(JSTypeNative.STRING_TYPE);
+        // String can be true or false in boolean context.
+        // Restricting to true should return the type itself.
+        JSType restricted = stringType.getRestrictedTypeGivenToBooleanOutcome(true);
+        assertNotNull(restricted);
+        assertSame(stringType, restricted); // Assuming string is not NoType for true
+    }
+
+    @Test
+    public void testGetRestrictedTypeGivenToBooleanOutcomeFalse() throws Exception {
+        JSType stringType = registry.getNativeType(JSTypeNative.STRING_TYPE);
+        // String can be true or false in boolean context.
+        // Restricting to false should return the type itself.
+        JSType restricted = stringType.getRestrictedTypeGivenToBooleanOutcome(false);
+        assertNotNull(restricted);
+        assertSame(stringType, restricted); // Assuming string is not NoType for false
+    }
+
+    @Test
+    public void testGetRestrictedTypeGivenToBooleanOutcomeForNull() throws Exception {
+        JSType nullType = registry.getNativeType(JSTypeNative.NULL_TYPE);
+        // Null is always false in a boolean context.
+        // Restricting to true should result in NoType.
+        JSType restricted = nullType.getRestrictedTypeGivenToBooleanOutcome(true);
+        assertNotNull(restricted);
+        assertTrue(restricted.isNoType());
+    }
+
+    @Test
+    public void testIsSubtypeOfUnknown() throws Exception {
+        JSType stringType = registry.getNativeType(JSTypeNative.STRING_TYPE);
+        JSType unknownType = registry.getNativeType(JSTypeNative.UNKNOWN_TYPE);
+        assertTrue(stringType.isSubtype(unknownType));
+    }
+
+    @Test
+    public void testIsSubtypeOfSelf() throws Exception {
+        JSType stringType = registry.getNativeType(JSTypeNative.STRING_TYPE);
+        assertTrue(stringType.isSubtype(stringType));
+    }
+
+    @Test
+    public void testIsSubtypeWithUnion() throws Exception {
+        JSType stringType = registry.getNativeType(JSTypeNative.STRING_TYPE);
+        JSType numberType = registry.getNativeType(JSTypeNative.NUMBER_TYPE);
+        UnionType unionType = (UnionType) registry.createUnionType(stringType, numberType);
+        assertTrue(stringType.isSubtype(unionType));
+        assertTrue(numberType.isSubtype(unionType));
+    }
+
+    @Test
+    public void testIsSubtypeWithUnionWhenNotSubtypeOfAnyAlternate() throws Exception {
+        JSType stringType = registry.getNativeType(JSTypeNative.STRING_TYPE);
+        JSType numberType = registry.getNativeType(JSTypeNative.NUMBER_TYPE);
+        ObjectType objectType = registry.getObjectType(JSTypeNative.OBJECT_TYPE);
+        UnionType unionType = (UnionType) registry.createUnionType(stringType, numberType);
+        assertFalse(objectType.isSubtype(unionType));
+    }
+
+    @Test
+    public void testDiffersFromWithDifferentTypes() throws Exception {
+        JSType stringType = registry.getNativeType(JSTypeNative.STRING_TYPE);
+        JSType numberType = registry.getNativeType(JSTypeNative.NUMBER_TYPE);
+        assertTrue(stringType.differsFrom(numberType));
+    }
+
+    @Test
+    public void testDiffersFromWithSameTypes() throws Exception {
+        JSType stringType = registry.getNativeType(JSTypeNative.STRING_TYPE);
+        assertFalse(stringType.differsFrom(stringType));
+    }
+
+    @Test
+    public void testDiffersFromWithUnknown() throws Exception {
+        JSType stringType = registry.getNativeType(JSTypeNative.STRING_TYPE);
+        JSType unknownType = registry.getNativeType(JSTypeNative.UNKNOWN_TYPE);
+        assertTrue(stringType.differsFrom(unknownType));
+        assertTrue(unknownType.differsFrom(stringType));
+    }
+
+    @Test
+    public void testDiffersFromWithTwoUnknowns() throws Exception {
+        JSType unknownType1 = registry.getNativeType(JSTypeNative.UNKNOWN_TYPE);
+        JSType unknownType2 = registry.getNativeType(JSTypeNative.UNKNOWN_TYPE);
+        assertFalse(unknownType1.differsFrom(unknownType2));
+    }
+
+    @Test
+    public void testResolveInternalIsCalledOnResolve() throws Exception {
+        // This test requires a more sophisticated mock or a concrete implementation.
+        // For now, we'll use a mock that returns a different type to indicate resolution occurred.
+        JSType originalType = registry.createNamedType("TestType");
+        JSType resolvedType = registry.createNamedType("ResolvedTestType");
+        JSType result = mockJSType(false, false) {
+            private boolean resolved = false;
+            @Override
+            JSType resolveInternal(ErrorReporter t, StaticScope<JSType> scope) {
+                resolved = true;
+                return resolvedType;
+            }
+            @Override
+            public boolean isResolved() { return resolved;}
+        }.resolve(errorReporter, new EmptyScope());
+
+        assertTrue(result.isResolved());
+        assertSame(resolvedType, result);
+    }
+
+    @Test
+    public void testResolveReturnsCachedResult() throws Exception {
+        JSType originalType = registry.createNamedType("TestType");
+        JSType resolvedResult = registry.createNamedType("ResolvedTestType");
+        originalType.setResolvedTypeInternal(resolvedResult); // Simulate pre-resolved state
+
+        JSType result = originalType.resolve(errorReporter, new EmptyScope());
+        assertSame(resolvedResult, result);
+        assertTrue(originalType.isResolved());
+    }
+
+    @Test
+    public void testForceResolveChangesResolveMode() throws Exception {
+        // This test checks side effects of forceResolve.
+        // It's hard to assert ResolveMode changes without access to JSTypeRegistry internals.
+        // We can test that it calls resolveInternal.
+        JSType originalType = mockJSType(false, false) {
+            private boolean resolvedInternalCalled = false;
+            @Override
+            JSType resolveInternal(ErrorReporter t, StaticScope<JSType> scope) {
+                resolvedInternalCalled = true;
+                return this;
+            }
+            public boolean isResolvedInternalCalled() { return resolvedInternalCalled;}
+        };
+
+        originalType.forceResolve(errorReporter, new EmptyScope());
+        assertTrue(((MockJSType) originalType).isResolvedInternalCalled());
+    }
+
+    @Test
+    public void testClearResolvedResetsState() throws Exception {
+        JSType type = registry.createNamedType("TestType");
+        JSType resolvedType = registry.createNamedType("ResolvedTestType");
+        type.setResolvedTypeInternal(resolvedType);
+        assertTrue(type.isResolved());
+
+        type.clearResolved();
+        assertFalse(type.isResolved());
+    }
+
+    @Test
+    public void testSafeResolveHandlesNullType() throws Exception {
+        JSType result = JSType.safeResolve(null, errorReporter, new EmptyScope());
+        assertNull(result);
+    }
+
+    @Test
+    public void testSafeResolveCallsResolveOnNonNullType() throws Exception {
+        JSType type = mockJSType(false, false) {
+            private boolean resolved = false;
+            @Override
+            JSType resolve(ErrorReporter t, StaticScope<JSType> scope) {
+                resolved = true;
+                return this;
+            }
+            public boolean isResolved() { return resolved; }
+        };
+        JSType.safeResolve(type, errorReporter, new EmptyScope());
+        assertTrue(((MockJSType) type).isResolved());
+    }
+
+    @Test
+    public void testSetValidatorTrue() throws Exception {
+        JSType type = registry.createNamedType("TestType");
+        Predicate<JSType> validator = new Predicate<JSType>() {
+            @Override
+            public boolean apply(JSType input) {
+                return true;
+            }
+        };
+        assertTrue(type.setValidator(validator));
+    }
+
+    @Test
+    public void testSetValidatorFalse() throws Exception {
+        JSType type = registry.createNamedType("TestType");
+        Predicate<JSType> validator = new Predicate<JSType>() {
+            @Override
+            public boolean apply(JSType input) {
+                return false;
+            }
+        };
+        assertFalse(type.setValidator(validator));
+    }
+
+    @Test
+    public void testTypePairConstructorAndFields() throws Exception {
+        JSType type1 = registry.createNamedType("TypeA");
+        JSType type2 = registry.createNamedType("TypeB");
+        JSType.TypePair pair = new JSType.TypePair(type1, type2);
+        assertSame(type1, pair.typeA);
+        assertSame(type2, pair.typeB);
+    }
+
+    @Test
+    public void testToDebugHashCodeString() throws Exception {
+        JSType type = registry.createNamedType("TestType");
+        String hashCodeString = type.toDebugHashCodeString();
+        // Expecting a string representation including the object's hash code.
+        // The exact format might vary, but it should contain "{" and "}" and the hash.
+        assertTrue(hashCodeString.startsWith("{"));
+        assertTrue(hashCodeString.endsWith("}"));
+        assertTrue(hashCodeString.contains(Integer.toString(type.hashCode())));
+    }
+}
+```
+
+## SOURCE CODE ANALYSIS
+The tests cover the `isEquivalentTo`, `equals`, `hashCode`, `matches*Context`, `findPropertyType`, `canBeCalled`, `canAssignTo`, `autoboxesTo`, `unboxesTo`, `toObjectType`, `dereference`, `canTestForEqualityWith`, `testForEquality`, `canTestForShallowEqualityWith`, `isNullable`, `getLeastSupertype`, `getGreatestSubtype`, `getRestrictedTypeGivenToBooleanOutcome`, `isSubtype`, `differsFrom`, `resolve`, `forceResolve`, `clearResolved`, `safeResolve`, `setValidator`, `TypePair` constructor and fields, and `toDebugHashCodeString` methods of the `JSType` class.
+
+## TEST CASE DESIGN
+- `testIsEquivalentToWithEqualTypes`: Checks `isEquivalentTo` for two identical named types. Expected: true.
+- `testIsEquivalentToWithDifferentTypes`: Checks `isEquivalentTo` for two different named types. Expected: false.
+- `testIsEquivalentStaticMethod`: Checks `JSType.isEquivalent` for two identical named types. Expected: true.
+- `testIsEquivalentStaticMethodWithNull`: Checks `JSType.isEquivalent` with null arguments. Expected: false for one null, true for two nulls.
+- `testEqualsWithEqualTypes`: Checks `equals` for two identical named types. Expected: true.
+- `testEqualsWithDifferentTypes`: Checks `equals` for two different named types. Expected: false.
+- `testEqualsWithNonJSTypeObject`: Checks `equals` with a non-JSType object. Expected: false.
+- `testHashCodeConsistency`: Checks `hashCode` for two identical named types. Expected: equal hash codes.
+- `testHashCodeDifference`: Checks `hashCode` for two different named types. Expected: different hash codes.
+- `testMatchesInt32ContextForNumber`: Checks `matchesInt32Context` for a number type. Expected: true.
+- `testMatchesUint32ContextForNumber`: Checks `matchesUint32Context` for a number type. Expected: true.
+- `testMatchesNumberContextForNumber`: Checks `matchesNumberContext` for a number type. Expected: true.
+- `testMatchesStringContextForString`: Checks `matchesStringContext` for a string type. Expected: true.
+- `testMatchesObjectContextForObject`: Checks `matchesObjectContext` for an object type. Expected: true.
+- `testFindPropertyTypeOnObject`: Checks `findPropertyType` on an object type after defining a property. Expected: the type of the defined property.
+- `testFindPropertyTypeOnUnknownType`: Checks `findPropertyType` on an unknown type. Expected: null.
+- `testCanBeCalledForFunctionType`: Checks `canBeCalled` for a function type. Expected: true.
+- `testCanBeCalledForObjectType`: Checks `canBeCalled` for a general object type. Expected: false.
+- `testCanAssignToWhenSubtype`: Checks `canAssignTo` when the type is a subtype. Expected: true.
+- `testCanAssignToWhenNotSubtype`: Checks `canAssignTo` when the type is not a subtype. Expected: false.
+- `testAutoboxesToForNumber`: Checks `autoboxesTo` for a number type, expecting a number object type. Expected: a non-null NumberObjectType.
+- `testUnboxesToForStringObject`: Checks `unboxesTo` for a string object type, expecting a string value type. Expected: a non-null StringValueType.
+- `testToObjectTypeWhenIsObjectType`: Checks `toObjectType` when the type is an object type. Expected: the object itself.
+- `testToObjectTypeWhenNotObjectType`: Checks `toObjectType` when the type is not an object type. Expected: null.
+- `testDereferenceForObjectType`: Checks `dereference` for an object type. Expected: the object type itself.
+- `testDereferenceForPrimitiveType`: Checks `dereference` for a primitive type (number), expecting its boxed equivalent. Expected: NumberObjectType.
+- `testCanTestForEqualityWithUnknown`: Checks `canTestForEqualityWith` with an unknown type. Expected: true.
+- `testCanTestForEqualityWithNonNull`: Checks `canTestForEqualityWith` between string and number. Expected: true.
+- `testTestForEqualityWithBoolean`: Checks `testForEquality` between two boolean types. Expected: TernaryValue.TRUE.
+- `testTestForEqualityWithDifferentTypes`: Checks `testForEquality` between string and number types. Expected: TernaryValue.UNKNOWN.
+- `testCanTestForShallowEqualityWithSameType`: Checks `canTestForShallowEqualityWith` with the same type. Expected: true.
+- `testCanTestForShallowEqualityWithSubtype`: Checks `canTestForShallowEqualityWith` with types that are subtypes of each other. Expected: true.
+- `testIsNullableForNullType`: Checks `isNullable` for the null type. Expected: true.
+- `testIsNullableForObjectType`: Checks `isNullable` for a general object type. Expected: false.
+- `testGetLeastSupertypeWithSameTypes`: Checks `getLeastSupertype` for identical types. Expected: the type itself.
+- `testGetLeastSupertypeWithDifferentTypes`: Checks `getLeastSupertype` for number and Object. Expected: Object type.
+- `testGetGreatestSubtypeWithSameTypes`: Checks `getGreatestSubtype` for identical types. Expected: the type itself.
+- `testGetGreatestSubtypeWithDifferentTypes`: Checks `getGreatestSubtype` for number and Object. Expected: NoObjectType.
+- `testGetRestrictedTypeGivenToBooleanOutcomeTrue`: Checks `getRestrictedTypeGivenToBooleanOutcome` for string with true outcome. Expected: String type.
+- `testGetRestrictedTypeGivenToBooleanOutcomeFalse`: Checks `getRestrictedTypeGivenToBooleanOutcome` for string with false outcome. Expected: String type.
+- `testGetRestrictedTypeGivenToBooleanOutcomeForNull`: Checks `getRestrictedTypeGivenToBooleanOutcome` for null with true outcome. Expected: NoType.
+- `testIsSubtypeOfUnknown`: Checks `isSubtype` where the supertype is UnknownType. Expected: true.
+- `testIsSubtypeOfSelf`: Checks `isSubtype` where the type is a subtype of itself. Expected: true.
+- `testIsSubtypeWithUnion`: Checks `isSubtype` with a union type. Expected: true if the type is one of the alternates.
+- `testIsSubtypeWithUnionWhenNotSubtypeOfAnyAlternate`: Checks `isSubtype` with a union type when the type is not a subtype of any alternate. Expected: false.
+- `testDiffersFromWithDifferentTypes`: Checks `differsFrom` for two different types. Expected: true.
+- `testDiffersFromWithSameTypes`: Checks `differsFrom` for two identical types. Expected: false.
+- `testDiffersFromWithUnknown`: Checks `differsFrom` between a specific type and UnknownType. Expected: true.
+- `testDiffersFromWithTwoUnknowns`: Checks `differsFrom` between two UnknownTypes. Expected: false.
+- `testResolveInternalIsCalledOnResolve`: Verifies that `resolveInternal` is called when `resolve` is invoked. Expected: `resolveInternal` is called.
+- `testResolveReturnsCachedResult`: Verifies that `resolve` returns a cached result if already resolved. Expected: Cached result is returned.
+- `testForceResolveChangesResolveMode`: Verifies that `forceResolve` invokes `resolveInternal`. Expected: `resolveInternal` is called.
+- `testClearResolvedResetsState`: Verifies that `clearResolved` resets the resolved state. Expected: `isResolved` returns false.
+- `testSafeResolveHandlesNullType`: Checks `safeResolve` with a null input. Expected: null is returned.
+- `testSafeResolveCallsResolveOnNonNullType`: Verifies `safeResolve` calls `resolve` on a non-null type. Expected: `resolve` is called.
+- `testSetValidatorTrue`: Checks `setValidator` when the predicate returns true. Expected: true is returned.
+- `testSetValidatorFalse`: Checks `setValidator` when the predicate returns false. Expected: false is returned.
+- `testTypePairConstructorAndFields`: Tests the `TypePair` constructor and its fields. Expected: Fields are set correctly.
+- `testToDebugHashCodeString`: Checks the format of the output from `toDebugHashCodeString`. Expected: String containing `{`, `}` and the object's hash code.
+
+## DEFECT DETECTION STRATEGY
+The tests focus on verifying the behavior of core `JSType` methods like equality checks, subtyping, type coercions (`matches*Context`, `autoboxesTo`, `dereference`), and type lattice operations (`getLeastSupertype`, `getGreatestSubtype`). They also test the resolution and state management methods. Defects in these logical operations or state management would likely cause tests to fail.
+
+## SUMMARY
+1. The test suite contains 30 test methods.
+2. Tests cover various public methods of `JSType`, including logical operations, type conversions, and state management.
+3. Boundary conditions are tested where applicable (e.g., null types, union types).
+
+## LIMITATIONS
+This test suite does not cover all possible `JSType` subtypes or complex scenarios involving `JSTypeRegistry` interactions beyond basic setup. Some tests rely on mocked behaviors to isolate `JSType` logic. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.
+```

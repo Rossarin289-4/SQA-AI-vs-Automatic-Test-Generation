@@ -1,0 +1,425 @@
+```java
+package org.jsoup.parser;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import org.jsoup.helper.DescendableLinkedList;
+import org.jsoup.helper.StringUtil;
+import org.jsoup.nodes.*;
+import java.util.Iterator;
+import java.util.LinkedList;
+
+public class TreeBuilderStateTest {
+
+    // Helper method to create a TreeBuilder with a document and base URI
+    private TreeBuilder createTreeBuilder(String baseUri) {
+        TreeBuilder tb = new TreeBuilder();
+        tb.parse("", baseUri); // Initialize with an empty document
+        return tb;
+    }
+
+    // Helper method to create a TreeBuilder with a document and base URI, and then call process(token)
+    private void processToken(TreeBuilder tb, Token token) {
+        tb.process(token);
+    }
+
+    // Helper method to create a TreeBuilder and transition to a specific state
+    private TreeBuilder createAndTransition(String baseUri, TreeBuilderState targetState) {
+        TreeBuilder tb = createTreeBuilder(baseUri);
+        tb.transition(targetState);
+        return tb;
+    }
+
+    @Test
+    public void testInitialStateIgnoresWhitespace() throws Exception {
+        TreeBuilder tb = createAndTransition("", TreeBuilderState.Initial);
+        Token.Character whitespaceToken = new Token.Character(" ");
+        assertTrue(tb.state().process(whitespaceToken, tb));
+        assertEquals(0, tb.getDocument().childNodes().size());
+    }
+
+    @Test
+    public void testInitialStateHandlesComment() throws Exception {
+        TreeBuilder tb = createAndTransition("", TreeBuilderState.Initial);
+        Token.Comment commentToken = new Token.Comment("A comment");
+        assertTrue(tb.state().process(commentToken, tb));
+        assertEquals(1, tb.getDocument().childNodes().size());
+        assertTrue(tb.getDocument().childNodes().get(0) instanceof Comment);
+        assertEquals("A comment", ((Comment) tb.getDocument().childNodes().get(0)).getData());
+    }
+
+    @Test
+    public void testInitialStateHandlesDoctypeWithoutQuirks() throws Exception {
+        TreeBuilder tb = createAndTransition("", TreeBuilderState.Initial);
+        Token.Doctype doctypeToken = new Token.Doctype("html", "", "");
+        assertTrue(tb.state().process(doctypeToken, tb));
+        assertEquals(1, tb.getDocument().childNodes().size());
+        assertTrue(tb.getDocument().childNodes().get(0) instanceof DocumentType);
+        assertEquals("html", ((DocumentType) tb.getDocument().childNodes().get(0)).name());
+        assertEquals("", ((DocumentType) tb.getDocument().childNodes().get(0)).publicIdentifier());
+        assertEquals("", ((DocumentType) tb.getDocument().childNodes().get(0)).systemIdentifier());
+        assertEquals(Document.QuirksMode.noQuirks, tb.getDocument().quirksMode());
+        assertEquals(TreeBuilderState.BeforeHtml, tb.state());
+    }
+
+    @Test
+    public void testInitialStateHandlesDoctypeWithQuirks() throws Exception {
+        TreeBuilder tb = createAndTransition("", TreeBuilderState.Initial);
+        Token.Doctype doctypeToken = new Token.Doctype("html", "", "");
+        doctypeToken.forceQuirks(true);
+        assertTrue(tb.state().process(doctypeToken, tb));
+        assertEquals(Document.QuirksMode.quirks, tb.getDocument().quirksMode());
+        assertEquals(TreeBuilderState.BeforeHtml, tb.state());
+    }
+
+    @Test
+    public void testInitialStateReprocessesTokenWhenNotWhitespaceOrCommentOrDoctype() throws Exception {
+        TreeBuilder tb = createAndTransition("", TreeBuilderState.Initial);
+        Token.StartTag htmlTag = new Token.StartTag("html");
+        assertTrue(tb.state().process(htmlTag, tb)); // Should reprocess and transition to BeforeHtml
+        assertEquals(TreeBuilderState.BeforeHtml, tb.state());
+        assertEquals("html", tb.getDocument().childNode(0).nodeName());
+    }
+
+    @Test
+    public void testBeforeHtmlIgnoresWhitespace() throws Exception {
+        TreeBuilder tb = createAndTransition("", TreeBuilderState.BeforeHtml);
+        Token.Character whitespaceToken = new Token.Character(" ");
+        assertTrue(tb.state().process(whitespaceToken, tb));
+        assertEquals(0, tb.getDocument().childNodes().size()); // No new nodes should be added
+    }
+
+    @Test
+    public void testBeforeHtmlHandlesComment() throws Exception {
+        TreeBuilder tb = createAndTransition("", TreeBuilderState.BeforeHtml);
+        Token.Comment commentToken = new Token.Comment("Comment");
+        assertTrue(tb.state().process(commentToken, tb));
+        assertEquals(1, tb.getDocument().childNodes().size());
+        assertTrue(tb.getDocument().childNodes().get(0) instanceof Comment);
+    }
+
+    @Test
+    public void testBeforeHtmlTransitionsToBeforeHeadOnHtmlStartTag() throws Exception {
+        TreeBuilder tb = createAndTransition("", TreeBuilderState.BeforeHtml);
+        Token.StartTag htmlTag = new Token.StartTag("html");
+        assertTrue(tb.state().process(htmlTag, tb));
+        assertEquals(TreeBuilderState.BeforeHead, tb.state());
+        assertEquals(1, tb.getDocument().childNodes().size());
+        assertEquals("html", tb.getDocument().childNode(0).nodeName());
+    }
+
+    @Test
+    public void testBeforeHtmlHandlesUnexpectedEndTags() throws Exception {
+        TreeBuilder tb = createAndTransition("", TreeBuilderState.BeforeHtml);
+        Token.EndTag headTag = new Token.EndTag("head");
+        // This should cause an error and return false according to the spec
+        assertFalse(tb.state().process(headTag, tb));
+        assertEquals(TreeBuilderState.BeforeHtml, tb.state()); // State should not change on error
+    }
+
+    @Test
+    public void testBeforeHtmlAnythingElseHandlesMissingHtml() throws Exception {
+        TreeBuilder tb = createAndTransition("", TreeBuilderState.BeforeHtml);
+        Token.StartTag bodyTag = new Token.StartTag("body");
+        assertTrue(tb.state().process(bodyTag, tb)); // Should insert html and reprocess body
+        assertEquals(TreeBuilderState.BeforeHead, tb.state());
+        assertEquals(2, tb.getDocument().childNodes().size()); // html and body
+        assertEquals("html", tb.getDocument().childNode(0).nodeName());
+        assertEquals("body", tb.getDocument().childNode(1).nodeName());
+    }
+
+    @Test
+    public void testBeforeHeadIgnoresWhitespace() throws Exception {
+        TreeBuilder tb = createAndTransition("", TreeBuilderState.BeforeHead);
+        Token.Character whitespaceToken = new Token.Character(" ");
+        assertTrue(tb.state().process(whitespaceToken, tb));
+        assertEquals(0, tb.getDocument().childNodes().size()); // No new nodes
+    }
+
+    @Test
+    public void testBeforeHeadHandlesComment() throws Exception {
+        TreeBuilder tb = createAndTransition("", TreeBuilderState.BeforeHead);
+        Token.Comment commentToken = new Token.Comment("Comment");
+        assertTrue(tb.state().process(commentToken, tb));
+        assertEquals(1, tb.getDocument().childNodes().size());
+        assertTrue(tb.getDocument().childNodes().get(0) instanceof Comment);
+    }
+
+    @Test
+    public void testBeforeHeadTransitionsToInHeadOnHeadStartTag() throws Exception {
+        TreeBuilder tb = createAndTransition("", TreeBuilderState.BeforeHead);
+        Token.StartTag headTag = new Token.StartTag("head");
+        assertTrue(tb.state().process(headTag, tb));
+        assertEquals(TreeBuilderState.InHead, tb.state());
+        assertEquals(1, tb.getDocument().childNodes().size());
+        assertEquals("head", tb.getDocument().childNode(0).nodeName());
+    }
+
+    @Test
+    public void testBeforeHeadHandlesUnexpectedEndTags() throws Exception {
+        TreeBuilder tb = createAndTransition("", TreeBuilderState.BeforeHead);
+        Token.EndTag bodyTag = new Token.EndTag("body");
+        assertFalse(tb.state().process(bodyTag, tb));
+        assertEquals(TreeBuilderState.BeforeHead, tb.state()); // State should not change on error
+    }
+
+    @Test
+    public void testBeforeHeadAnythingElseHandlesMissingHead() throws Exception {
+        TreeBuilder tb = createAndTransition("", TreeBuilderState.BeforeHead);
+        Token.StartTag metaTag = new Token.StartTag("meta");
+        assertTrue(tb.state().process(metaTag, tb)); // Should insert head and reprocess meta
+        assertEquals(TreeBuilderState.InHead, tb.state());
+        assertEquals(2, tb.getDocument().childNodes().size()); // head and meta
+        assertEquals("head", tb.getDocument().childNode(0).nodeName());
+        assertEquals("meta", tb.getDocument().childNode(1).nodeName());
+    }
+
+    @Test
+    public void testInHeadIgnoresWhitespace() throws Exception {
+        TreeBuilder tb = createAndTransition("", TreeBuilderState.InHead);
+        Token.Character whitespaceToken = new Token.Character(" ");
+        assertTrue(tb.state().process(whitespaceToken, tb));
+        assertEquals(1, tb.getDocument().childNodes().size());
+        assertTrue(tb.getDocument().childNodes().get(0) instanceof TextNode);
+        assertEquals(" ", ((TextNode) tb.getDocument().childNodes().get(0)).getWholeText());
+    }
+
+    @Test
+    public void testInHeadHandlesComment() throws Exception {
+        TreeBuilder tb = createAndTransition("", TreeBuilderState.InHead);
+        Token.Comment commentToken = new Token.Comment("Comment");
+        assertTrue(tb.state().process(commentToken, tb));
+        assertEquals(1, tb.getDocument().childNodes().size());
+        assertTrue(tb.getDocument().childNodes().get(0) instanceof Comment);
+    }
+
+    @Test
+    public void testInHeadHandlesBaseTag() throws Exception {
+        TreeBuilder tb = createAndTransition("", TreeBuilderState.InHead);
+        Token.StartTag baseTag = new Token.StartTag("base");
+        baseTag.newAttribute("href", "http://example.com");
+        assertTrue(tb.state().process(baseTag, tb));
+        assertEquals(2, tb.getDocument().childNodes().size());
+        assertTrue(tb.getDocument().childNodes().get(1) instanceof Element);
+        Element baseElement = (Element) tb.getDocument().childNodes().get(1);
+        assertEquals("base", baseElement.nodeName());
+        assertEquals("http://example.com", baseElement.attr("href"));
+        assertEquals("http://example.com", tb.getBaseUri()); // Should update base URI
+    }
+
+    @Test
+    public void testInHeadHandlesMetaTag() throws Exception {
+        TreeBuilder tb = createAndTransition("", TreeBuilderState.InHead);
+        Token.StartTag metaTag = new Token.StartTag("meta");
+        assertTrue(tb.state().process(metaTag, tb));
+        assertEquals(2, tb.getDocument().childNodes().size());
+        assertTrue(tb.getDocument().childNodes().get(1) instanceof Element);
+        assertEquals("meta", ((Element) tb.getDocument().childNodes().get(1)).nodeName());
+    }
+
+    @Test
+    public void testInHeadHandlesTitleTag() throws Exception {
+        TreeBuilder tb = createAndTransition("", TreeBuilderState.InHead);
+        Token.StartTag titleStart = new Token.StartTag("title");
+        Token.Character titleText = new Token.Character("Page Title");
+        Token.EndTag titleEnd = new Token.EndTag("title");
+
+        assertTrue(tb.state().process(titleStart, tb)); // Transition to Text state
+        assertEquals(TreeBuilderState.Text, tb.state());
+        assertEquals(2, tb.getDocument().childNodes().size()); // head and title start tag
+
+        assertTrue(tb.state().process(titleText, tb)); // Should insert text in Text state
+        assertEquals(3, tb.getDocument().childNodes().size());
+        assertTrue(tb.getDocument().childNodes().get(2) instanceof TextNode);
+        assertEquals("Page Title", ((TextNode) tb.getDocument().childNodes().get(2)).getWholeText());
+
+        assertTrue(tb.state().process(titleEnd, tb)); // Transition back to InHead
+        assertEquals(TreeBuilderState.InHead, tb.state());
+        assertEquals(2, tb.getDocument().childNodes().size()); // head and title element
+        assertEquals("title", ((Element) tb.getDocument().childNodes().get(1)).nodeName());
+        assertEquals("Page Title", ((Element) tb.getDocument().childNodes().get(1)).text());
+    }
+
+    @Test
+    public void testInHeadHandlesNoscriptStartTag() throws Exception {
+        TreeBuilder tb = createAndTransition("", TreeBuilderState.InHead);
+        Token.StartTag noscriptStart = new Token.StartTag("noscript");
+        assertTrue(tb.state().process(noscriptStart, tb));
+        assertEquals(TreeBuilderState.InHeadNoscript, tb.state());
+        assertEquals(2, tb.getDocument().childNodes().size()); // head and noscript start
+    }
+
+    @Test
+    public void testInHeadHandlesScriptStartTag() throws Exception {
+        TreeBuilder tb = createAndTransition("", TreeBuilderState.InHead);
+        Token.StartTag scriptStart = new Token.StartTag("script");
+        assertTrue(tb.state().process(scriptStart, tb));
+        assertEquals(TreeBuilderState.Text, tb.state());
+        assertEquals(2, tb.getDocument().childNodes().size()); // head and script start
+        assertEquals("script", ((Element) tb.getDocument().childNodes().get(1)).nodeName());
+    }
+
+    @Test
+    public void testInHeadHandlesHeadEndTag() throws Exception {
+        TreeBuilder tb = createAndTransition("", TreeBuilderState.InHead);
+        Token.EndTag headEnd = new Token.EndTag("head");
+        assertTrue(tb.state().process(headEnd, tb));
+        assertEquals(TreeBuilderState.AfterHead, tb.state());
+        assertEquals(1, tb.getDocument().childNodes().size()); // Should only have the head element
+    }
+
+    @Test
+    public void testInHeadHandlesUnexpectedEndTags() throws Exception {
+        TreeBuilder tb = createAndTransition("", TreeBuilderState.InHead);
+        Token.EndTag bodyTag = new Token.EndTag("body");
+        assertFalse(tb.state().process(bodyTag, tb)); // Error
+        assertEquals(TreeBuilderState.InHead, tb.state());
+    }
+
+    @Test
+    public void testInHeadAnythingElseHandlesMissingHeadEndTag() throws Exception {
+        TreeBuilder tb = createAndTransition("", TreeBuilderState.InHead);
+        Token.StartTag pTag = new Token.StartTag("p");
+        assertTrue(tb.state().process(pTag, tb)); // Should insert </head> and reprocess <p>
+        assertEquals(TreeBuilderState.InBody, tb.state());
+        assertEquals(2, tb.getDocument().childNodes().size()); // head and p
+        assertEquals("head", tb.getDocument().childNode(0).nodeName());
+        assertEquals("p", tb.getDocument().childNode(1).nodeName());
+    }
+
+    @Test
+    public void testInHeadNoscriptHandlesEndNoscriptTag() throws Exception {
+        TreeBuilder tb = createAndTransition("", TreeBuilderState.InHeadNoscript);
+        Token.EndTag noscriptEnd = new Token.EndTag("noscript");
+        assertTrue(tb.state().process(noscriptEnd, tb));
+        assertEquals(TreeBuilderState.InHead, tb.state());
+    }
+
+    @Test
+    public void testInHeadNoscriptHandlesEndBrTag() throws Exception {
+        TreeBuilder tb = createAndAndTransition("", TreeBuilderState.InHeadNoscript);
+        Token.EndTag brTag = new Token.EndTag("br");
+        assertTrue(tb.state().process(brTag, tb)); // Should become <br> in InBody, and then InHead has </noscript>
+        assertEquals(TreeBuilderState.InHead, tb.state()); // Should transition back to InHead
+        assertEquals(3, tb.getDocument().childNodes().size()); // head, noscript, br
+    }
+
+    @Test
+    public void testAfterHeadIgnoresWhitespace() throws Exception {
+        TreeBuilder tb = createAndTransition("", TreeBuilderState.AfterHead);
+        Token.Character whitespaceToken = new Token.Character(" ");
+        assertTrue(tb.state().process(whitespaceToken, tb));
+        assertEquals(1, tb.getDocument().childNodes().size());
+        assertTrue(tb.getDocument().childNodes().get(0) instanceof TextNode);
+        assertEquals(" ", ((TextNode) tb.getDocument().childNodes().get(0)).getWholeText());
+    }
+
+    @Test
+    public void testAfterHeadHandlesComment() throws Exception {
+        TreeBuilder tb = createAndTransition("", TreeBuilderState.AfterHead);
+        Token.Comment commentToken = new Token.Comment("Comment");
+        assertTrue(tb.state().process(commentToken, tb));
+        assertEquals(1, tb.getDocument().childNodes().size());
+        assertTrue(tb.getDocument().childNodes().get(0) instanceof Comment);
+    }
+
+    @Test
+    public void testAfterHeadHandlesHtmlStartTag() throws Exception {
+        TreeBuilder tb = createAndTransition("", TreeBuilderState.AfterHead);
+        Token.StartTag htmlTag = new Token.StartTag("html");
+        assertTrue(tb.state().process(htmlTag, tb));
+        assertEquals(TreeBuilderState.InBody, tb.state()); // Transitions to InBody
+    }
+
+    @Test
+    public void testAfterHeadHandlesBodyStartTag() throws Exception {
+        TreeBuilder tb = createAndTransition("", TreeBuilderState.AfterHead);
+        Token.StartTag bodyTag = new Token.StartTag("body");
+        assertTrue(tb.state().process(bodyTag, tb));
+        assertEquals(TreeBuilderState.InBody, tb.state());
+        assertEquals(2, tb.getDocument().childNodes().size()); // head, body
+        assertEquals("body", tb.getDocument().childNode(1).nodeName());
+        assertFalse(tb.framesetOk());
+    }
+
+    @Test
+    public void testAfterHeadHandlesFramesetStartTag() throws Exception {
+        TreeBuilder tb = createAndTransition("", TreeBuilderState.AfterHead);
+        Token.StartTag framesetTag = new Token.StartTag("frameset");
+        assertTrue(tb.state().process(framesetTag, tb));
+        assertEquals(TreeBuilderState.InFrameset, tb.state());
+        assertEquals(2, tb.getDocument().childNodes().size()); // head, frameset
+    }
+
+    @Test
+    public void testAfterHeadHandlesInvalidTags() throws Exception {
+        TreeBuilder tb = createAndTransition("", TreeBuilderState.AfterHead);
+        Token.StartTag scriptTag = new Token.StartTag("script");
+        assertTrue(tb.state().process(scriptTag, tb)); // Should push head, process in InHead, pop head
+        assertEquals(TreeBuilderState.InHead, tb.state()); // Temporarily InHead
+        assertEquals(2, tb.getDocument().childNodes().size()); // head, script
+        tb.pop(); // Pop head to return to AfterHead
+        tb.transition(TreeBuilderState.AfterHead); // Manually transition back for test accuracy
+        assertEquals(TreeBuilderState.AfterHead, tb.state());
+    }
+
+    @Test
+    public void testAfterHeadAnythingElseHandlesMissingBody() throws Exception {
+        TreeBuilder tb = createAndTransition("", TreeBuilderState.AfterHead);
+        Token.StartTag pTag = new Token.StartTag("p");
+        assertTrue(tb.state().process(pTag, tb)); // Should insert <body> and reprocess <p>
+        assertEquals(TreeBuilderState.InBody, tb.state());
+        assertEquals(3, tb.getDocument().childNodes().size()); // head, body, p
+        assertEquals("body", tb.getDocument().childNode(1).nodeName());
+    }
+}
+```
+
+SOURCE CODE ANALYSIS
+The tests cover states within the `TreeBuilderState` enum, focusing on initial states like `Initial`, `BeforeHtml`, `BeforeHead`, `InHead`, `InHeadNoscript`, and `AfterHead`. They examine how whitespace, comments, doctypes, and start/end tags are handled, including transitions between states and error conditions.
+
+TEST CASE DESIGN
+- `testInitialStateIgnoresWhitespace`: Input: Whitespace token. Expected: True, no document modification. Derived: By tracing `Initial.process`.
+- `testInitialStateHandlesComment`: Input: Comment token. Expected: True, comment node added. Derived: By tracing `Initial.process`.
+- `testInitialStateHandlesDoctypeWithoutQuirks`: Input: Doctype token. Expected: True, DocumentType node added, quirksMode=noQuirks, transition to BeforeHtml. Derived: By tracing `Initial.process`.
+- `testInitialStateHandlesDoctypeWithQuirks`: Input: Doctype token with quirks. Expected: True, DocumentType node added, quirksMode=quirks, transition to BeforeHtml. Derived: By tracing `Initial.process`.
+- `testInitialStateReprocessesTokenWhenNotWhitespaceOrCommentOrDoctype`: Input: StartTag("html"). Expected: True, transition to BeforeHtml, token reprocessed. Derived: By tracing `Initial.process`.
+- `testBeforeHtmlIgnoresWhitespace`: Input: Whitespace token. Expected: True, no document modification. Derived: By tracing `BeforeHtml.process`.
+- `testBeforeHtmlHandlesComment`: Input: Comment token. Expected: True, comment node added. Derived: By tracing `BeforeHtml.process`.
+- `testBeforeHtmlTransitionsToBeforeHeadOnHtmlStartTag`: Input: StartTag("html"). Expected: True, transition to BeforeHead. Derived: By tracing `BeforeHtml.process`.
+- `testBeforeHtmlHandlesUnexpectedEndTags`: Input: EndTag("head"). Expected: False, error. Derived: By tracing `BeforeHtml.process`.
+- `testBeforeHtmlAnythingElseHandlesMissingHtml`: Input: StartTag("body"). Expected: True, insert "html", reprocess token. Derived: By tracing `BeforeHtml.anythingElse`.
+- `testBeforeHeadIgnoresWhitespace`: Input: Whitespace token. Expected: True, no document modification. Derived: By tracing `BeforeHead.process`.
+- `testBeforeHeadHandlesComment`: Input: Comment token. Expected: True, comment node added. Derived: By tracing `BeforeHead.process`.
+- `testBeforeHeadTransitionsToInHeadOnHeadStartTag`: Input: StartTag("head"). Expected: True, transition to InHead. Derived: By tracing `BeforeHead.process`.
+- `testBeforeHeadHandlesUnexpectedEndTags`: Input: EndTag("body"). Expected: False, error. Derived: By tracing `BeforeHead.process`.
+- `testBeforeHeadAnythingElseHandlesMissingHead`: Input: StartTag("meta"). Expected: True, insert "head", reprocess token. Derived: By tracing `BeforeHead.process`.
+- `testInHeadIgnoresWhitespace`: Input: Whitespace token. Expected: True, TextNode added. Derived: By tracing `InHead.process`.
+- `testInHeadHandlesComment`: Input: Comment token. Expected: True, Comment node added. Derived: By tracing `InHead.process`.
+- `testInHeadHandlesBaseTag`: Input: StartTag("base") with href. Expected: True, Element added, base URI updated. Derived: By tracing `InHead.process`.
+- `testInHeadHandlesMetaTag`: Input: StartTag("meta"). Expected: True, Element added. Derived: By tracing `InHead.process`.
+- `testInHeadHandlesTitleTag`: Input: StartTag("title"), Character, EndTag("title"). Expected: True, Title element with text added. Derived: By tracing `InHead.process` and `handleRcData`.
+- `testInHeadHandlesNoscriptStartTag`: Input: StartTag("noscript"). Expected: True, transition to InHeadNoscript. Derived: By tracing `InHead.process`.
+- `testInHeadHandlesScriptStartTag`: Input: StartTag("script"). Expected: True, transition to Text. Derived: By tracing `InHead.process`.
+- `testInHeadHandlesHeadEndTag`: Input: EndTag("head"). Expected: True, transition to AfterHead. Derived: By tracing `InHead.process`.
+- `testInHeadHandlesUnexpectedEndTags`: Input: EndTag("body"). Expected: False, error. Derived: By tracing `InHead.process`.
+- `testInHeadAnythingElseHandlesMissingHeadEndTag`: Input: StartTag("p"). Expected: True, insert </head>, reprocess token. Derived: By tracing `InHead.anythingElse`.
+- `testInHeadNoscriptHandlesEndNoscriptTag`: Input: EndTag("noscript"). Expected: True, transition to InHead. Derived: By tracing `InHeadNoscript.process`.
+- `testInHeadNoscriptHandlesEndBrTag`: Input: EndTag("br"). Expected: True, transition to InHead. Derived: By tracing `InHeadNoscript.process`.
+- `testAfterHeadIgnoresWhitespace`: Input: Whitespace token. Expected: True, TextNode added. Derived: By tracing `AfterHead.process`.
+- `testAfterHeadHandlesComment`: Input: Comment token. Expected: True, Comment node added. Derived: By tracing `AfterHead.process`.
+- `testAfterHeadHandlesHtmlStartTag`: Input: StartTag("html"). Expected: True, transition to InBody. Derived: By tracing `AfterHead.process`.
+- `testAfterHeadHandlesBodyStartTag`: Input: StartTag("body"). Expected: True, transition to InBody, framesetOk=false. Derived: By tracing `AfterHead.process`.
+- `testAfterHeadHandlesFramesetStartTag`: Input: StartTag("frameset"). Expected: True, transition to InFrameset. Derived: By tracing `AfterHead.process`.
+- `testAfterHeadHandlesInvalidTags`: Input: StartTag("script"). Expected: True, processes as in InHead. Derived: By tracing `AfterHead.process`.
+- `testAfterHeadAnythingElseHandlesMissingBody`: Input: StartTag("p"). Expected: True, insert <body>, reprocess token. Derived: By tracing `AfterHead.anythingElse`.
+
+DEFECT DETECTION STRATEGY
+The tests focus on state transitions and the correct handling of various token types within different states of the `TreeBuilderState` enum, aiming to catch logic errors in state management and token processing.
+
+SUMMARY
+33 tests.
+
+LIMITATIONS
+The tests only cover a subset of the `TreeBuilderState` enum and its associated methods. Complex scenarios involving nested structures or specific HTML parsing quirks are not fully explored.
+Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

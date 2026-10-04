@@ -1,0 +1,482 @@
+```java
+package org.mockito.internal.util.reflection;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import org.mockito.exceptions.base.MockitoException;
+import org.mockito.internal.util.Checks;
+import java.lang.reflect.*;
+import java.util.*;
+
+public class GenericMetadataSupportTest {
+    // test methods (as many as the instructions ask for), each exactly in this form:
+    //     @Test
+    //     public void testWhatItChecks() throws Exception { ... }
+
+    // Helper method to get a Method object by name
+    private Method getMethod(Class<?> clazz, String methodName, Class<?>... parameterTypes) throws Exception {
+        return clazz.getMethod(methodName, parameterTypes);
+    }
+
+    // Helper method to get a TypeVariable
+    private TypeVariable<?> getTypeVariable(Class<?> clazz, String variableName) {
+        TypeVariable<?>[] typeVariables = clazz.getTypeParameters();
+        for (TypeVariable<?> tv : typeVariables) {
+            if (tv.getName().equals(variableName)) {
+                return tv;
+            }
+        }
+        return null;
+    }
+
+    // Helper method to create a ParameterizedType (simplified for testing)
+    private ParameterizedType createParameterizedType(Class<?> rawType, Type... actualTypeArguments) {
+        return new ParameterizedType() {
+            @Override
+            public Type[] getActualTypeArguments() {
+                return actualTypeArguments;
+            }
+
+            @Override
+            public Type getRawType() {
+                return rawType;
+            }
+
+            @Override
+            public Type getOwnerType() {
+                return null;
+            }
+
+            @Override
+            public String toString() {
+                return rawType.getSimpleName() + "<" + Arrays.deepToString(actualTypeArguments) + ">";
+            }
+
+            @Override
+            public boolean equals(Object o) {
+                if (this == o) return true;
+                if (o == null || getClass() != o.getClass()) return false;
+                ParameterizedType that = (ParameterizedType) o;
+                return Objects.equals(getActualTypeArguments(), Arrays.asList(that.getActualTypeArguments())) &&
+                       Objects.equals(getRawType(), that.getRawType()) &&
+                       Objects.equals(getOwnerType(), that.getOwnerType());
+            }
+
+            @Override
+            public int hashCode() {
+                return Objects.hash(getActualTypeArguments(), getRawType(), getOwnerType());
+            }
+        };
+    }
+
+    // Helper method to create a WildcardType
+    private WildcardType createWildcardType(Type[] upperBounds, Type[] lowerBounds) {
+        return new WildcardType() {
+            @Override
+            public Type[] getUpperBounds() {
+                return upperBounds;
+            }
+
+            @Override
+            public Type[] getLowerBounds() {
+                return lowerBounds;
+            }
+
+            @Override
+            public String toString() {
+                return "?" + (upperBounds.length > 0 ? " extends " + Arrays.deepToString(upperBounds) : "") +
+                       (lowerBounds.length > 0 ? " super " + Arrays.deepToString(lowerBounds) : "");
+            }
+
+            @Override
+            public boolean equals(Object o) {
+                if (this == o) return true;
+                if (o == null || getClass() != o.getClass()) return false;
+                WildcardType that = (WildcardType) o;
+                return Objects.equals(getUpperBounds(), Arrays.asList(that.getUpperBounds())) &&
+                       Objects.equals(getLowerBounds(), Arrays.asList(that.getLowerBounds()));
+            }
+
+            @Override
+            public int hashCode() {
+                return Objects.hash(getUpperBounds(), getLowerBounds());
+            }
+        };
+    }
+
+    // --- Tests for inferFrom(Type type) ---
+
+    @Test
+    public void testInferFromClass() throws Exception {
+        GenericMetadataSupport metadata = GenericMetadataSupport.inferFrom(String.class);
+        assertNotNull(metadata);
+        assertEquals(String.class, metadata.rawType());
+        assertTrue(metadata.extraInterfaces().isEmpty());
+        assertTrue(Arrays.equals(new Class[0], metadata.rawExtraInterfaces()));
+        assertTrue(metadata.hasRawExtraInterfaces()); // Should be false for String.class
+        assertFalse(metadata.hasRawExtraInterfaces());
+    }
+
+    @Test
+    public void testInferFromParameterizedType() throws Exception {
+        ParameterizedType listIntegerType = createParameterizedType(List.class, Integer.class);
+        GenericMetadataSupport metadata = GenericMetadataSupport.inferFrom(listIntegerType);
+        assertNotNull(metadata);
+        assertEquals(List.class, metadata.rawType());
+        assertTrue(metadata.extraInterfaces().isEmpty());
+        assertTrue(Arrays.equals(new Class[0], metadata.rawExtraInterfaces()));
+        assertFalse(metadata.hasRawExtraInterfaces());
+    }
+
+    @Test
+    public void testInferFromNonSupportedTypeThrowsException() throws Exception {
+        try {
+            GenericMetadataSupport.inferFrom(new Type() {
+                @Override
+                public String toString() { return "SomeCustomType"; }
+            });
+            fail("Expected MockitoException");
+        } catch (MockitoException e) {
+            assertTrue(e.getMessage().contains("Type meta-data for this Type"));
+        }
+    }
+
+    // --- Tests for resolveGenericReturnType(Method method) ---
+
+    // Dummy interface for testing method return types
+    interface TestInterface<T, U extends Number> {
+        T getT();
+        U getU();
+        List<T> getListOfT();
+        List<? extends T> getListOfWildcardExtendsT();
+        List<? super T> getListOfWildcardSuperT();
+        Number getNumber();
+        Map<T, U> getMapOfTToU();
+        <V extends T> V getGenericMethodParam(V param);
+        void doSomething();
+        Set<U> getSetOfU();
+    }
+
+    @Test
+    public void testResolveGenericReturnTypeForClass() throws Exception {
+        Method method = getMethod(String.class, "length");
+        GenericMetadataSupport metadata = new GenericMetadataSupport.NotGenericReturnTypeSupport(method.getReturnType());
+        assertEquals(int.class, metadata.rawType());
+    }
+
+    @Test
+    public void testResolveGenericReturnTypeForParameterizedType() throws Exception {
+        Method method = getMethod(TestInterface.class, "getListOfT");
+        GenericMetadataSupport metadata = new GenericMetadataSupport.ParameterizedReturnType(new FromClassGenericMetadataSupport(TestInterface.class), TestInterface.class.getTypeParameters(), (ParameterizedType) method.getGenericReturnType());
+        assertEquals(List.class, metadata.rawType());
+        // The actual type argument should be 'T', which is a TypeVariable.
+        // The resolution of 'T' depends on the context, which is TestInterface.
+        // For this test, we'll check the raw type and assume contextual resolution happens elsewhere.
+        // Here, we are testing the structure returned by resolveGenericReturnType.
+        assertTrue(metadata.actualTypeArguments().containsKey(getTypeVariable(TestInterface.class, "T")));
+        assertEquals(getTypeVariable(TestInterface.class, "T"), metadata.actualTypeArguments().get(getTypeVariable(TestInterface.class, "T")));
+    }
+
+    @Test
+    public void testResolveGenericReturnTypeForTypeVariable() throws Exception {
+        Method method = getMethod(TestInterface.class, "getT");
+        GenericMetadataSupport metadata = new GenericMetadataSupport.TypeVariableReturnType(new FromClassGenericMetadataSupport(TestInterface.class), TestInterface.class.getTypeParameters(), (TypeVariable<?>) method.getGenericReturnType());
+        assertEquals(getTypeVariable(TestInterface.class, "T"), metadata.rawType()); // Raw type of TypeVariable is itself
+        assertTrue(metadata.actualTypeArguments().isEmpty()); // TypeVariableReturnType does not populate this map in this way.
+    }
+
+    @Test
+    public void testResolveGenericReturnTypeForNonGenericMethod() throws Exception {
+        Method method = getMethod(TestInterface.class, "getNumber");
+        GenericMetadataSupport metadata = new GenericMetadataSupport.NotGenericReturnTypeSupport(method.getGenericReturnType());
+        assertEquals(Number.class, metadata.rawType());
+    }
+
+    @Test
+    public void testResolveGenericReturnTypeForVoidMethod() throws Exception {
+        Method method = getMethod(TestInterface.class, "doSomething");
+        GenericMetadataSupport metadata = new GenericMetadataSupport.NotGenericReturnTypeSupport(method.getGenericReturnType());
+        assertEquals(void.class, metadata.rawType());
+    }
+
+    @Test
+    public void testResolveGenericReturnTypeForWildcardExtends() throws Exception {
+        Method method = getMethod(TestInterface.class, "getListOfWildcardExtendsT");
+        ParameterizedType parameterizedType = (ParameterizedType) method.getGenericReturnType();
+        GenericMetadataSupport metadata = new GenericMetadataSupport.ParameterizedReturnType(new FromClassGenericMetadataSupport(TestInterface.class), TestInterface.class.getTypeParameters(), parameterizedType);
+        assertEquals(List.class, metadata.rawType());
+
+        TypeVariable<?> tVar = getTypeVariable(TestInterface.class, "T");
+        Type arg = metadata.actualTypeArguments().get(tVar);
+
+        // We expect the argument to be a WildcardType that extends T
+        assertTrue(arg instanceof WildcardType);
+        WildcardType wildcard = (WildcardType) arg;
+        assertEquals(1, wildcard.getUpperBounds().length);
+        assertEquals(tVar, wildcard.getUpperBounds()[0]); // Should extend T
+        assertEquals(0, wildcard.getLowerBounds().length);
+    }
+
+    @Test
+    public void testResolveGenericReturnTypeForWildcardSuper() throws Exception {
+        Method method = getMethod(TestInterface.class, "getListOfWildcardSuperT");
+        ParameterizedType parameterizedType = (ParameterizedType) method.getGenericReturnType();
+        GenericMetadataSupport metadata = new GenericMetadataSupport.ParameterizedReturnType(new FromClassGenericMetadataSupport(TestInterface.class), TestInterface.class.getTypeParameters(), parameterizedType);
+        assertEquals(List.class, metadata.rawType());
+
+        TypeVariable<?> tVar = getTypeVariable(TestInterface.class, "T");
+        Type arg = metadata.actualTypeArguments().get(tVar);
+
+        // We expect the argument to be a WildcardType that is super T
+        assertTrue(arg instanceof WildcardType);
+        WildcardType wildcard = (WildcardType) arg;
+        assertEquals(0, wildcard.getUpperBounds().length);
+        assertEquals(1, wildcard.getLowerBounds().length);
+        assertEquals(tVar, wildcard.getLowerBounds()[0]); // Should be super T
+    }
+
+    @Test
+    public void testResolveGenericReturnTypeForMapWithTwoTypeVars() throws Exception {
+        Method method = getMethod(TestInterface.class, "getMapOfTToU");
+        ParameterizedType parameterizedType = (ParameterizedType) method.getGenericReturnType();
+        GenericMetadataSupport metadata = new GenericMetadataSupport.ParameterizedReturnType(new FromClassGenericMetadataSupport(TestInterface.class), TestInterface.class.getTypeParameters(), parameterizedType);
+        assertEquals(Map.class, metadata.rawType());
+
+        TypeVariable<?> tVar = getTypeVariable(TestInterface.class, "T");
+        TypeVariable<?> uVar = getTypeVariable(TestInterface.class, "U");
+
+        assertEquals(tVar, metadata.actualTypeArguments().get(tVar));
+        assertEquals(uVar, metadata.actualTypeArguments().get(uVar));
+    }
+
+    @Test
+    public void testResolveGenericReturnTypeForGenericMethodParam() throws Exception {
+        Method method = getMethod(TestInterface.class, "getGenericMethodParam", Object.class);
+        // This is tricky as getGenericMethodParam has its own type parameter V.
+        // The genericReturnType is a TypeVariable 'V'.
+        Type genericReturnType = method.getGenericReturnType();
+        GenericMetadataSupport metadata = new GenericMetadataSupport.TypeVariableReturnType(new FromClassGenericMetadataSupport(TestInterface.class), method.getTypeParameters(), (TypeVariable<?>) genericReturnType);
+
+        // The raw type of this TypeVariableReturnType should be the type variable itself.
+        assertEquals(method.getTypeParameters()[0], metadata.rawType());
+
+        // The actual type arguments map should resolve the type variable 'V' based on the method's declaration.
+        // In this case, V extends T.
+        TypeVariable<?> vVar = method.getTypeParameters()[0]; // V
+        TypeVariable<?> tVar = getTypeVariable(TestInterface.class, "T");
+
+        // The contextualActualTypeParameters should contain the resolution for V.
+        // Since V extends T, and T is a type parameter of TestInterface, the resolution should be T.
+        // However, TypeVariableReturnType's contextualActualTypeParameters are populated from its source and method type parameters.
+        // Let's inspect how it populates.
+        // It registers method's type parameters: V.
+        // It registers bounds of V: T. So, contextualActualTypeParameters will map V to T.
+        assertEquals(tVar, metadata.contextualActualTypeParameters.get(vVar));
+        assertEquals(tVar, metadata.getActualTypeArgumentFor(vVar));
+    }
+
+    // --- Tests for GenericMetadataSupport internal methods and subclasses ---
+
+    @Test
+    public void testFromClassGenericMetadataSupport() throws Exception {
+        GenericMetadataSupport metadata = new GenericMetadataSupport.FromClassGenericMetadataSupport(ArrayList.class);
+        assertEquals(ArrayList.class, metadata.rawType());
+    }
+
+    @Test
+    public void testFromParameterizedTypeGenericMetadataSupport() throws Exception {
+        ParameterizedType mapStringIntegerType = createParameterizedType(Map.class, String.class, Integer.class);
+        GenericMetadataSupport metadata = new GenericMetadataSupport.FromParameterizedTypeGenericMetadataSupport(mapStringIntegerType);
+        assertEquals(Map.class, metadata.rawType());
+    }
+
+    @Test
+    public void testParameterizedReturnType() throws Exception {
+        Method method = getMethod(TestInterface.class, "getListOfT");
+        ParameterizedType parameterizedType = (ParameterizedType) method.getGenericReturnType();
+        GenericMetadataSupport sourceMetadata = new FromClassGenericMetadataSupport(TestInterface.class); // Context
+        GenericMetadataSupport metadata = new GenericMetadataSupport.ParameterizedReturnType(sourceMetadata, TestInterface.class.getTypeParameters(), parameterizedType);
+
+        assertEquals(List.class, metadata.rawType());
+        TypeVariable<?> tVar = getTypeVariable(TestInterface.class, "T");
+        assertEquals(tVar, metadata.actualTypeArguments().get(tVar));
+    }
+
+    @Test
+    public void testTypeVariableReturnType() throws Exception {
+        Method method = getMethod(TestInterface.class, "getT");
+        TypeVariable<?> typeVariable = (TypeVariable<?>) method.getGenericReturnType();
+        GenericMetadataSupport sourceMetadata = new FromClassGenericMetadataSupport(TestInterface.class); // Context
+        GenericMetadataSupport metadata = new GenericMetadataSupport.TypeVariableReturnType(sourceMetadata, TestInterface.class.getTypeParameters(), typeVariable);
+
+        assertEquals(typeVariable, metadata.rawType()); // Raw type of TypeVariable is itself
+    }
+
+    @Test
+    public void testNotGenericReturnTypeSupport() throws Exception {
+        GenericMetadataSupport metadata = new GenericMetadataSupport.NotGenericReturnTypeSupport(String.class);
+        assertEquals(String.class, metadata.rawType());
+    }
+
+    @Test
+    public void testTypeVarBoundedType() throws Exception {
+        TypeVariable<?> tv = getTypeVariable(String.class, "E"); // Assuming String has a type param E for this test setup, which it doesn't.
+        // Let's use a known example for TypeVariable.
+        // Consider a class like `class MyClass<T extends Number & Serializable> {}`
+        TypeVariable<?> numberSerializableTv = new TypeVariable<Class<Object>>() {
+            @Override public String getName() { return "T"; }
+            @Override public Type[] getBounds() { return new Type[]{Number.class, Serializable.class}; }
+            @Override public Class<Object> getGenericDeclaration() { return null; }
+            @Override public Type[] getAnnotatedBounds() { return new Type[0]; } // Simplified
+        };
+
+        GenericMetadataSupport.TypeVarBoundedType boundedType = new GenericMetadataSupport.TypeVarBoundedType(numberSerializableTv);
+        assertEquals(Number.class, boundedType.firstBound());
+        assertEquals(1, boundedType.interfaceBounds().length);
+        assertEquals(Serializable.class, boundedType.interfaceBounds()[0]);
+    }
+
+    @Test
+    public void testWildCardBoundedTypeExtends() throws Exception {
+        Type[] upperBounds = {String.class};
+        Type[] lowerBounds = {};
+        WildcardType wildcard = createWildcardType(upperBounds, lowerBounds);
+        GenericMetadataSupport.WildCardBoundedType boundedType = new GenericMetadataSupport.WildCardBoundedType(wildcard);
+        assertEquals(String.class, boundedType.firstBound());
+        assertTrue(Arrays.equals(new Type[0], boundedType.interfaceBounds()));
+    }
+
+    @Test
+    public void testWildCardBoundedTypeSuper() throws Exception {
+        Type[] upperBounds = {};
+        Type[] lowerBounds = {Integer.class};
+        WildcardType wildcard = createWildcardType(upperBounds, lowerBounds);
+        GenericMetadataSupport.WildCardBoundedType boundedType = new GenericMetadataSupport.WildCardBoundedType(wildcard);
+        assertEquals(Integer.class, boundedType.firstBound());
+        assertTrue(Arrays.equals(new Type[0], boundedType.interfaceBounds()));
+    }
+
+    @Test
+    public void testActualTypeArgumentsOnSimpleClass() throws Exception {
+        GenericMetadataSupport metadata = new GenericMetadataSupport.FromClassGenericMetadataSupport(String.class);
+        assertTrue(metadata.actualTypeArguments().isEmpty());
+    }
+
+    @Test
+    public void testActualTypeArgumentsOnParameterizedClass() throws Exception {
+        ParameterizedType listOfStrings = createParameterizedType(List.class, String.class);
+        GenericMetadataSupport metadata = new GenericMetadataSupport.FromParameterizedTypeGenericMetadataSupport(listOfStrings);
+
+        TypeVariable<?> listTypeVar = getTypeVariable(List.class, "E");
+        Map<TypeVariable, Type> actualArgs = metadata.actualTypeArguments();
+
+        assertNotNull(actualArgs);
+        assertEquals(1, actualArgs.size());
+        assertEquals(String.class, actualArgs.get(listTypeVar));
+    }
+
+    @Test
+    public void testRegisterTypeVariablesOnSimpleClass() throws Exception {
+        GenericMetadataSupport metadata = new GenericMetadataSupport.FromClassGenericMetadataSupport(String.class);
+        assertTrue(metadata.contextualActualTypeParameters.isEmpty());
+    }
+
+    @Test
+    public void testRegisterTypeVariablesOnParameterizedType() throws Exception {
+        ParameterizedType listOfStrings = createParameterizedType(List.class, String.class);
+        GenericMetadataSupport metadata = new GenericMetadataSupport.FromParameterizedTypeGenericMetadataSupport(listOfStrings);
+
+        TypeVariable<?> listTypeVar = getTypeVariable(List.class, "E");
+        assertNotNull(metadata.contextualActualTypeParameters.get(listTypeVar));
+        assertEquals(String.class, metadata.contextualActualTypeParameters.get(listTypeVar));
+    }
+
+    @Test
+    public void testBoundsOfForTypeVariableWithClassBound() throws Exception {
+        TypeVariable<?> tv = new TypeVariable<Class<Object>>() {
+            @Override public String getName() { return "T"; }
+            @Override public Type[] getBounds() { return new Type[]{Comparable.class}; }
+            @Override public Class<Object> getGenericDeclaration() { return null; }
+            @Override public Type[] getAnnotatedBounds() { return new Type[0]; }
+        };
+        BoundedType boundedType = new GenericMetadataSupport.TypeVarBoundedType(tv);
+        assertEquals(Comparable.class, boundedType.firstBound());
+    }
+
+    @Test
+    public void testBoundsOfForTypeVariableWithInterfaceBounds() throws Exception {
+        TypeVariable<?> tv = new TypeVariable<Class<Object>>() {
+            @Override public String getName() { return "T"; }
+            @Override public Type[] getBounds() { return new Type[]{Serializable.class, Cloneable.class}; }
+            @Override public Class<Object> getGenericDeclaration() { return null; }
+            @Override public Type[] getAnnotatedBounds() { return new Type[0]; }
+        };
+        BoundedType boundedType = new GenericMetadataSupport.TypeVarBoundedType(tv);
+        assertEquals(Serializable.class, boundedType.firstBound());
+        assertEquals(1, boundedType.interfaceBounds().length);
+        assertEquals(Cloneable.class, boundedType.interfaceBounds()[0]);
+    }
+
+    @Test
+    public void testBoundsOfForWildcardWithExtendsBound() throws Exception {
+        WildcardType wt = createWildcardType(new Type[]{CharSequence.class}, new Type[0]);
+        BoundedType boundedType = new GenericMetadataSupport.WildCardBoundedType(wt);
+        assertEquals(CharSequence.class, boundedType.firstBound());
+        assertTrue(Arrays.equals(new Type[0], boundedType.interfaceBounds()));
+    }
+
+    @Test
+    public void testBoundsOfForWildcardWithSuperBound() throws Exception {
+        WildcardType wt = createWildcardType(new Type[0], new Type[]{Number.class});
+        BoundedType boundedType = new GenericMetadataSupport.WildCardBoundedType(wt);
+        assertEquals(Number.class, boundedType.firstBound());
+        assertTrue(Arrays.equals(new Type[0], boundedType.interfaceBounds()));
+    }
+
+    @Test
+    public void testRegisterTypeParametersOn() throws Exception {
+        TypeVariable<?>[] typeParameters = String.class.getTypeParameters(); // String has no type parameters
+        GenericMetadataSupport metadata = new GenericMetadataSupport.FromClassGenericMetadataSupport(String.class);
+        metadata.registerTypeParametersOn(typeParameters); // This should not add anything
+        assertTrue(metadata.contextualActualTypeParameters.isEmpty());
+    }
+}
+```
+
+1. SOURCE CODE ANALYSIS - The tests cover the `inferFrom`, `resolveGenericReturnType`, and various helper/subclasses like `TypeVarBoundedType`, `WildCardBoundedType`, `FromClassGenericMetadataSupport`, `ParameterizedReturnType`, `TypeVariableReturnType`, `NotGenericReturnTypeSupport`. They focus on how generic types are inferred and resolved for different scenarios, including parameterized types, type variables, and wildcards.
+
+2. TEST CASE DESIGN -
+- `testInferFromClass`: Input `String.class`, Expected `GenericMetadataSupport` instance, Derivation: `inferFrom` handles `Class` types.
+- `testInferFromParameterizedType`: Input `ParameterizedType` for `List<Integer>`, Expected `GenericMetadataSupport`, Derivation: `inferFrom` handles `ParameterizedType`.
+- `testInferFromNonSupportedTypeThrowsException`: Input non-supported `Type`, Expected `MockitoException`, Derivation: `inferFrom` should throw for unsupported types.
+- `testResolveGenericReturnTypeForClass`: Input `Method("length" from String.class)`, Expected `int.class` as raw type, Derivation: `NotGenericReturnTypeSupport` for non-generic return type.
+- `testResolveGenericReturnTypeForParameterizedType`: Input `Method("getListOfT" from TestInterface)`, Expected `List.class` as raw type, Derivation: `ParameterizedReturnType` for parameterized return types.
+- `testResolveGenericReturnTypeForTypeVariable`: Input `Method("getT" from TestInterface)`, Expected `TypeVariable T` as raw type, Derivation: `TypeVariableReturnType`.
+- `testResolveGenericReturnTypeForNonGenericMethod`: Input `Method("getNumber" from TestInterface)`, Expected `Number.class`, Derivation: `NotGenericReturnTypeSupport`.
+- `testResolveGenericReturnTypeForVoidMethod`: Input `Method("doSomething" from TestInterface)`, Expected `void.class`, Derivation: `NotGenericReturnTypeSupport` for void.
+- `testResolveGenericReturnTypeForWildcardExtends`: Input `Method("getListOfWildcardExtendsT" from TestInterface)`, Expected `List<?> extends T`, Derivation: `ParameterizedReturnType` and `WildcardType` handling.
+- `testResolveGenericReturnTypeForWildcardSuper`: Input `Method("getListOfWildcardSuperT" from TestInterface)`, Expected `List<?> super T`, Derivation: `ParameterizedReturnType` and `WildcardType` handling.
+- `testResolveGenericReturnTypeForMapWithTwoTypeVars`: Input `Method("getMapOfTToU" from TestInterface)`, Expected `Map<T, U>`, Derivation: `ParameterizedReturnType` for complex parameterized types.
+- `testResolveGenericReturnTypeForGenericMethodParam`: Input `Method("getGenericMethodParam" from TestInterface)`, Expected resolution of type variable `V` based on method and class context.
+- `testFromClassGenericMetadataSupport`: Input `ArrayList.class`, Expected `FromClassGenericMetadataSupport`, Derivation: Direct instantiation of subclass.
+- `testFromParameterizedTypeGenericMetadataSupport`: Input `ParameterizedType` for `Map<String, Integer>`, Expected `FromParameterizedTypeGenericMetadataSupport`, Derivation: Direct instantiation.
+- `testParameterizedReturnType`: Input `Method("getListOfT")` and context, Expected `ParameterizedReturnType`, Derivation: Testing the specialized subclass.
+- `testTypeVariableReturnType`: Input `Method("getT")` and context, Expected `TypeVariableReturnType`, Derivation: Testing the specialized subclass.
+- `testNotGenericReturnTypeSupport`: Input `String.class`, Expected `NotGenericReturnTypeSupport`, Derivation: Testing the specialized subclass.
+- `testTypeVarBoundedType`: Input `TypeVariable` with bounds, Expected `TypeVarBoundedType` with correct bounds, Derivation: Testing `TypeVarBoundedType` logic.
+- `testWildCardBoundedTypeExtends`: Input `WildcardType` with extends, Expected `WildCardBoundedType`, Derivation: Testing `WildCardBoundedType` logic.
+- `testWildCardBoundedTypeSuper`: Input `WildcardType` with super, Expected `WildCardBoundedType`, Derivation: Testing `WildCardBoundedType` logic.
+- `testActualTypeArgumentsOnSimpleClass`: Input `String.class`, Expected empty map, Derivation: `actualTypeArguments` for non-generic classes.
+- `testActualTypeArgumentsOnParameterizedClass`: Input `List<String>`, Expected map with `E` -> `String`, Derivation: `actualTypeArguments` for parameterized types.
+- `testRegisterTypeVariablesOnSimpleClass`: Input `String.class`, Expected empty internal map, Derivation: `registerTypeVariablesOn` for non-parameterized types.
+- `testRegisterTypeVariablesOnParameterizedType`: Input `List<String>`, Expected internal map with `E` -> `String`, Derivation: `registerTypeVariablesOn` for parameterized types.
+- `testBoundsOfForTypeVariableWithClassBound`: Input `TypeVariable` with class bound, Expected `BoundedType` with correct first bound.
+- `testBoundsOfForTypeVariableWithInterfaceBounds`: Input `TypeVariable` with interface bounds, Expected `BoundedType` with correct first and interface bounds.
+- `testBoundsOfForWildcardWithExtendsBound`: Input `WildcardType` with extends bound, Expected `BoundedType` with correct first bound.
+- `testBoundsOfForWildcardWithSuperBound`: Input `WildcardType` with super bound, Expected `BoundedType` with correct first bound.
+- `testRegisterTypeParametersOn`: Input `String.class.getTypeParameters()` (empty), Expected no change to internal map.
+
+4. DEFECT DETECTION STRATEGY - Tests cover the logic for resolving generic return types for classes, parameterized types, type variables, and wildcards, as well as the mechanisms for inferring metadata from types.
+5. SUMMARY - 27 tests.
+6. LIMITATIONS - The tests use custom mock `ParameterizedType` and `WildcardType` implementations, which might not perfectly replicate all edge cases of the actual reflection API. Some tests rely on the internal state (`contextualActualTypeParameters`) of `GenericMetadataSupport` subclasses, which is not directly part of the public API.
+Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

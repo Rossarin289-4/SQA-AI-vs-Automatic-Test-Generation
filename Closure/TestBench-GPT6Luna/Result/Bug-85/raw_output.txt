@@ -1,0 +1,186 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.base.Preconditions;
+import com.google.javascript.jscomp.ControlFlowGraph.Branch;
+import com.google.javascript.jscomp.NodeTraversal.AbstractPostOrderCallback;
+import com.google.javascript.jscomp.NodeTraversal.ScopedCallback;
+import com.google.javascript.jscomp.graph.GraphReachability;
+import com.google.javascript.jscomp.graph.DiGraph.DiGraphEdge;
+import com.google.javascript.jscomp.graph.DiGraph.DiGraphNode;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import java.util.Deque;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+public class UnreachableCodeEliminationTest {
+    @Test
+    public void testProcessWithNullRoot() throws Exception {
+        UnreachableCodeElimination pass =
+                new UnreachableCodeElimination(new Compiler(), false);
+        pass.process(null, null);
+        assertTrue(pass.cfgStack.isEmpty());
+    }
+
+    @Test
+    public void testProcessEmptyScript() throws Exception {
+        UnreachableCodeElimination pass =
+                new UnreachableCodeElimination(new Compiler(), false);
+        Node script = new Node(Token.SCRIPT);
+        pass.process(null, script);
+        assertTrue(pass.cfgStack.isEmpty());
+    }
+
+    @Test
+    public void testProcessScriptContainingExpression() throws Exception {
+        UnreachableCodeElimination pass =
+                new UnreachableCodeElimination(new Compiler(), false);
+        Node script = new Node(Token.SCRIPT);
+        Node statement = new Node(Token.EXPR_RESULT, Node.newString("x"));
+        script.addChildToBack(statement);
+        pass.process(null, script);
+        assertSame(statement, script.getFirstChild());
+        assertNull(pass.curCfg);
+    }
+
+    @Test
+    public void testVisitRootLeavesItAlone() throws Exception {
+        UnreachableCodeElimination pass =
+                new UnreachableCodeElimination(new Compiler(), false);
+        Node root = new Node(Token.SCRIPT);
+        pass.visit(null, root, null);
+        assertEquals(Token.SCRIPT, root.getType());
+    }
+
+    @Test
+    public void testVisitFunctionLeavesItAlone() throws Exception {
+        UnreachableCodeElimination pass =
+                new UnreachableCodeElimination(new Compiler(), false);
+        Node parent = new Node(Token.SCRIPT);
+        Node function = new Node(Token.FUNCTION);
+        parent.addChildToBack(function);
+        pass.visit(null, function, parent);
+        assertSame(function, parent.getFirstChild());
+    }
+
+    @Test
+    public void testVisitScriptLeavesItAlone() throws Exception {
+        UnreachableCodeElimination pass =
+                new UnreachableCodeElimination(new Compiler(), false);
+        Node parent = new Node(Token.BLOCK);
+        Node script = new Node(Token.SCRIPT);
+        parent.addChildToBack(script);
+        pass.visit(null, script, parent);
+        assertSame(script, parent.getFirstChild());
+    }
+
+    @Test
+    public void testVisitNodeOutsideGraphLeavesItAlone() throws Exception {
+        UnreachableCodeElimination pass =
+                new UnreachableCodeElimination(new Compiler(), false);
+        Node parent = new Node(Token.BLOCK);
+        Node expression = new Node(Token.EXPR_RESULT, Node.newString("x"));
+        parent.addChildToBack(expression);
+        pass.curCfg = null;
+        pass.visit(null, expression, parent);
+        assertSame(expression, parent.getFirstChild());
+    }
+
+    @Test
+    public void testEnterAndExitScopeRestoreCurrentGraph() throws Exception {
+        UnreachableCodeElimination pass =
+                new UnreachableCodeElimination(new Compiler(), false);
+        assertNull(pass.curCfg);
+        assertTrue(pass.cfgStack.isEmpty());
+        // Scope entry requires a traversal with a valid scope; scope-stack
+        // behavior is also exercised by processing a script below.
+        Node script = new Node(Token.SCRIPT);
+        pass.process(null, script);
+        assertNull(pass.curCfg);
+        assertTrue(pass.cfgStack.isEmpty());
+    }
+
+    @Test
+    public void testNoOpRemovalDisabledPreservesScriptExpression() throws Exception {
+        UnreachableCodeElimination pass =
+                new UnreachableCodeElimination(new Compiler(), false);
+        Node script = new Node(Token.SCRIPT);
+        Node expression = new Node(Token.EXPR_RESULT, Node.newString("x"));
+        script.addChildToBack(expression);
+        pass.process(null, script);
+        assertSame(expression, script.getFirstChild());
+        assertNull(expression.getNext());
+    }
+
+    @Test
+    public void testNoOpRemovalEnabledPreservesReachableScriptExpression() throws Exception {
+        UnreachableCodeElimination pass =
+                new UnreachableCodeElimination(new Compiler(), true);
+        Node script = new Node(Token.SCRIPT);
+        Node expression = new Node(Token.EXPR_RESULT, Node.newString("x"));
+        script.addChildToBack(expression);
+        pass.process(null, script);
+        assertSame(expression, script.getFirstChild());
+    }
+
+    @Test
+    public void testProcessMaintainsSiblingOrder() throws Exception {
+        UnreachableCodeElimination pass =
+                new UnreachableCodeElimination(new Compiler(), false);
+        Node script = new Node(Token.SCRIPT);
+        Node first = new Node(Token.EXPR_RESULT, Node.newString("a"));
+        Node second = new Node(Token.EXPR_RESULT, Node.newString("b"));
+        script.addChildToBack(first);
+        script.addChildToBack(second);
+        pass.process(null, script);
+        assertSame(first, script.getFirstChild());
+        assertSame(second, first.getNext());
+        assertNull(second.getNext());
+    }
+
+    @Test
+    public void testProcessWithExternsDoesNotChangeExternTree() throws Exception {
+        UnreachableCodeElimination pass =
+                new UnreachableCodeElimination(new Compiler(), false);
+        Node externs = new Node(Token.SCRIPT);
+        Node externStatement = new Node(Token.EXPR_RESULT, Node.newString("e"));
+        externs.addChildToBack(externStatement);
+        Node script = new Node(Token.SCRIPT);
+        pass.process(externs, script);
+        assertSame(externStatement, externs.getFirstChild());
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+Method selection is exploratory because no target method was specified. Tests focus on `process` and `visit`, particularly root/function/script exclusions and nodes outside the control-flow graph.
+
+`enterScope` and `exitScope` require a valid traversal scope; only the behavior reached through processing a script is exercised.
+
+### 2. TEST CASE DESIGN
+- `testProcessWithNullRoot`: null root; processing returns; CFG stack remains empty.
+- `testProcessEmptyScript`: empty script; traversal completes and leaves the CFG stack empty.
+- `testProcessScriptContainingExpression`: script with an expression; the node remains attached because it is reachable and removal of no-ops is disabled.
+- `testVisitRootLeavesItAlone`: null parent; visit returns without changing the script type.
+- `testVisitFunctionLeavesItAlone`: function node; visit returns without removing it.
+- `testVisitScriptLeavesItAlone`: script node; visit returns without removing it.
+- `testVisitNodeOutsideGraphLeavesItAlone`: CFG is null; visit sees no graph node and preserves the expression.
+- `testEnterAndExitScopeRestoreCurrentGraph`: empty script processing; current CFG is null and stack empty afterward.
+- `testNoOpRemovalDisabledPreservesScriptExpression`: reachable expression with removal disabled; expression remains.
+- `testNoOpRemovalEnabledPreservesReachableScriptExpression`: reachable expression; it remains because it is not dead.
+- `testProcessMaintainsSiblingOrder`: two reachable statements; traversal leaves their order and links unchanged.
+- `testProcessWithExternsDoesNotChangeExternTree`: externs statement is outside the traversed root; it remains attached.
+
+### 4. DEFECT DETECTION STRATEGY
+The tests pin observable control-flow-independent exclusions and basic processing behavior. They do not establish that any defect will be detected.
+
+### 5. SUMMARY
+12 tests.
+
+### 6. LIMITATIONS
+This package-private pass depends on compiler traversal and control-flow construction; the available declarations do not support reliable direct setup of detailed dead-code CFG cases. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

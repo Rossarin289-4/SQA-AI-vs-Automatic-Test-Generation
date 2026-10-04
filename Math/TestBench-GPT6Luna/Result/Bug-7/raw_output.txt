@@ -1,0 +1,255 @@
+```java
+package org.apache.commons.math3.ode;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.Iterator;
+import java.util.List;
+import java.util.SortedSet;
+import java.util.TreeSet;
+import org.apache.commons.math3.analysis.solvers.BracketingNthOrderBrentSolver;
+import org.apache.commons.math3.analysis.solvers.UnivariateSolver;
+import org.apache.commons.math3.exception.DimensionMismatchException;
+import org.apache.commons.math3.exception.MaxCountExceededException;
+import org.apache.commons.math3.exception.NoBracketingException;
+import org.apache.commons.math3.exception.NumberIsTooSmallException;
+import org.apache.commons.math3.exception.util.LocalizedFormats;
+import org.apache.commons.math3.ode.events.EventHandler;
+import org.apache.commons.math3.ode.events.EventState;
+import org.apache.commons.math3.ode.sampling.AbstractStepInterpolator;
+import org.apache.commons.math3.ode.sampling.StepHandler;
+import org.apache.commons.math3.util.FastMath;
+import org.apache.commons.math3.util.Incrementor;
+import org.apache.commons.math3.util.Precision;
+import org.apache.commons.math3.ode.nonstiff.ThreeEighthesIntegrator;
+import org.apache.commons.math3.ode.nonstiff.EulerIntegrator;
+import org.apache.commons.math3.ode.nonstiff.MidpointIntegrator;
+import org.apache.commons.math3.ode.nonstiff.GraggBulirschStoerIntegrator;
+import org.apache.commons.math3.ode.nonstiff.ClassicalRungeKuttaIntegrator;
+import org.apache.commons.math3.ode.nonstiff.GillIntegrator;
+
+public class AbstractIntegratorTest {
+    @Test
+    public void testNameAndInitialStepValues() throws Exception {
+        EulerIntegrator integrator = new EulerIntegrator(0.1);
+        assertEquals("Euler", integrator.getName());
+        assertTrue(Double.isNaN(integrator.getCurrentStepStart()));
+        assertTrue(Double.isNaN(integrator.getCurrentSignedStepsize()));
+    }
+
+    @Test
+    public void testStepHandlerAdditionAndClear() throws Exception {
+        EulerIntegrator integrator = new EulerIntegrator(0.1);
+        StepHandler handler = new StepHandler() {
+            public void init(double t0, double[] y0, double t) { }
+            public void handleStep(org.apache.commons.math3.ode.sampling.StepInterpolator i,
+                                   boolean last) { }
+        };
+        integrator.addStepHandler(handler);
+        assertEquals(1, integrator.getStepHandlers().size());
+        assertSame(handler, integrator.getStepHandlers().iterator().next());
+        integrator.clearStepHandlers();
+        assertEquals(0, integrator.getStepHandlers().size());
+    }
+
+    @Test
+    public void testStepHandlerCollectionIsUnmodifiable() throws Exception {
+        EulerIntegrator integrator = new EulerIntegrator(0.1);
+        try {
+            integrator.getStepHandlers().clear();
+            fail("expected UnsupportedOperationException");
+        } catch (UnsupportedOperationException expected) { }
+        assertEquals(0, integrator.getStepHandlers().size());
+    }
+
+    @Test
+    public void testEventHandlerAdditionAndClear() throws Exception {
+        EulerIntegrator integrator = new EulerIntegrator(0.1);
+        EventHandler handler = new EventHandler() {
+            public void init(double t0, double[] y0, double t) { }
+            public double g(double t, double[] y) { return t; }
+            public Action eventOccurred(double t, double[] y, boolean increasing) {
+                return Action.CONTINUE;
+            }
+            public void resetState(double t, double[] y) { }
+        };
+        integrator.addEventHandler(handler, 1.0, 1e-6, 20);
+        assertEquals(1, integrator.getEventHandlers().size());
+        assertSame(handler, integrator.getEventHandlers().iterator().next());
+        integrator.clearEventHandlers();
+        assertEquals(0, integrator.getEventHandlers().size());
+    }
+
+    @Test
+    public void testEventHandlerCollectionIsUnmodifiable() throws Exception {
+        EulerIntegrator integrator = new EulerIntegrator(0.1);
+        try {
+            integrator.getEventHandlers().clear();
+            fail("expected UnsupportedOperationException");
+        } catch (UnsupportedOperationException expected) { }
+        assertEquals(0, integrator.getEventHandlers().size());
+    }
+
+    @Test
+    public void testDefaultMaximumEvaluationCount() throws Exception {
+        EulerIntegrator integrator = new EulerIntegrator(0.1);
+        assertEquals(Integer.MAX_VALUE, integrator.getMaxEvaluations());
+        assertEquals(0, integrator.getEvaluations());
+    }
+
+    @Test
+    public void testNegativeEvaluationLimitMeansUnlimited() throws Exception {
+        EulerIntegrator integrator = new EulerIntegrator(0.1);
+        integrator.setMaxEvaluations(-1);
+        assertEquals(Integer.MAX_VALUE, integrator.getMaxEvaluations());
+    }
+
+    @Test
+    public void testZeroEvaluationLimit() throws Exception {
+        EulerIntegrator integrator = new EulerIntegrator(0.1);
+        integrator.setMaxEvaluations(0);
+        assertEquals(0, integrator.getMaxEvaluations());
+    }
+
+    @Test
+    public void testPositiveEvaluationLimit() throws Exception {
+        EulerIntegrator integrator = new EulerIntegrator(0.1);
+        integrator.setMaxEvaluations(17);
+        assertEquals(17, integrator.getMaxEvaluations());
+    }
+
+    @Test
+    public void testIntegrationComputesConstantDerivative() throws Exception {
+        EulerIntegrator integrator = new EulerIntegrator(0.1);
+        FirstOrderDifferentialEquations equations = new FirstOrderDifferentialEquations() {
+            public int getDimension() { return 1; }
+            public void computeDerivatives(double t, double[] y, double[] yDot) {
+                yDot[0] = 2.0;
+            }
+        };
+        double[] y = new double[1];
+        double time = integrator.integrate(equations, 0.0, new double[] {1.0}, 1.0, y);
+        assertEquals(1.0, time, 0.0);
+        assertEquals(3.0, y[0], 1e-12);
+        assertTrue(integrator.getEvaluations() > 0);
+    }
+
+    @Test
+    public void testIntegrationRejectsWrongInitialDimension() throws Exception {
+        EulerIntegrator integrator = new EulerIntegrator(0.1);
+        FirstOrderDifferentialEquations equations = new FirstOrderDifferentialEquations() {
+            public int getDimension() { return 1; }
+            public void computeDerivatives(double t, double[] y, double[] yDot) {
+                yDot[0] = 0.0;
+            }
+        };
+        try {
+            integrator.integrate(equations, 0.0, new double[0], 1.0, new double[1]);
+            fail("expected DimensionMismatchException");
+        } catch (DimensionMismatchException expected) {
+            assertEquals(0, expected.getDimension());
+        }
+    }
+
+    @Test
+    public void testIntegrationRejectsWrongOutputDimension() throws Exception {
+        EulerIntegrator integrator = new EulerIntegrator(0.1);
+        FirstOrderDifferentialEquations equations = new FirstOrderDifferentialEquations() {
+            public int getDimension() { return 1; }
+            public void computeDerivatives(double t, double[] y, double[] yDot) {
+                yDot[0] = 0.0;
+            }
+        };
+        try {
+            integrator.integrate(equations, 0.0, new double[1], 1.0, new double[0]);
+            fail("expected DimensionMismatchException");
+        } catch (DimensionMismatchException expected) {
+            assertEquals(0, expected.getDimension());
+        }
+    }
+
+    @Test
+    public void testComputeDerivativesAndCount() throws Exception {
+        EulerIntegrator integrator = new EulerIntegrator(0.1);
+        FirstOrderDifferentialEquations equations = new FirstOrderDifferentialEquations() {
+            public int getDimension() { return 1; }
+            public void computeDerivatives(double t, double[] y, double[] yDot) {
+                yDot[0] = 3.0 * y[0] + t;
+            }
+        };
+        ExpandableStatefulODE expandable = new ExpandableStatefulODE(equations);
+        integrator.setEquations(expandable);
+        double[] derivative = new double[1];
+        integrator.computeDerivatives(2.0, new double[] {4.0}, derivative);
+        assertEquals(14.0, derivative[0], 0.0);
+        assertEquals(1, integrator.getEvaluations());
+    }
+
+    @Test
+    public void testEvaluationCountIncrementsForEachDerivativeCall() throws Exception {
+        EulerIntegrator integrator = new EulerIntegrator(0.1);
+        FirstOrderDifferentialEquations equations = new FirstOrderDifferentialEquations() {
+            public int getDimension() { return 1; }
+            public void computeDerivatives(double t, double[] y, double[] yDot) {
+                yDot[0] = -1.0;
+            }
+        };
+        integrator.setEquations(new ExpandableStatefulODE(equations));
+        double[] derivative = new double[1];
+        integrator.computeDerivatives(0.0, new double[] {2.0}, derivative);
+        integrator.computeDerivatives(1.0, new double[] {2.0}, derivative);
+        assertEquals(2, integrator.getEvaluations());
+        assertEquals(-1.0, derivative[0], 0.0);
+    }
+
+    @Test
+    public void testIntegrationResetsEvaluationCount() throws Exception {
+        EulerIntegrator integrator = new EulerIntegrator(0.1);
+        FirstOrderDifferentialEquations equations = new FirstOrderDifferentialEquations() {
+            public int getDimension() { return 1; }
+            public void computeDerivatives(double t, double[] y, double[] yDot) {
+                yDot[0] = 0.0;
+            }
+        };
+        integrator.setEquations(new ExpandableStatefulODE(equations));
+        integrator.computeDerivatives(0.0, new double[] {0.0}, new double[1]);
+        assertEquals(1, integrator.getEvaluations());
+        integrator.integrate(equations, 0.0, new double[] {0.0}, 0.2, new double[1]);
+        assertTrue(integrator.getEvaluations() > 0);
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+Selected the handler collection operations, evaluation-limit mapping, evaluation counting, derivative delegation, and public integration validation/result transfer.
+The supplied public-method list includes `compare(EventState, EventState)`, but no accessible declaration is provided for it; it is not called.
+
+### 2. TEST CASE DESIGN
+- `testNameAndInitialStepValues`: new Euler integrator; verifies its reported name and initial NaN step values from the constructor and getters.
+- `testStepHandlerAdditionAndClear`: add then clear one handler; collection size and identity follow the collection operations.
+- `testStepHandlerCollectionIsUnmodifiable`: attempt to clear returned view; requires the documented unmodifiable wrapper and unchanged size.
+- `testEventHandlerAdditionAndClear`: add then clear one event handler; checks its retained identity and resulting size.
+- `testEventHandlerCollectionIsUnmodifiable`: attempts to clear the returned event-handler view; requires the unmodifiable wrapper.
+- `testDefaultMaximumEvaluationCount`: new integrator; constructor calls `setMaxEvaluations(-1)`, mapping to `Integer.MAX_VALUE`, with count zero.
+- `testNegativeEvaluationLimitMeansUnlimited`: setting -1 follows the negative branch and maps to `Integer.MAX_VALUE`.
+- `testZeroEvaluationLimit`: exact zero is passed through to the counter.
+- `testPositiveEvaluationLimit`: positive limit 17 is passed through unchanged.
+- `testIntegrationComputesConstantDerivative`: integrates derivative 2 from state 1 over unit time with Euler steps; result is state 3 at time 1.
+- `testIntegrationRejectsWrongInitialDimension`: zero-length initial state against dimension one; expects the source’s first dimension check to throw with wrong dimension 0.
+- `testIntegrationRejectsWrongOutputDimension`: zero-length output against dimension one; expects the second dimension check’s wrong dimension 0.
+- `testComputeDerivativesAndCount`: derivative `3*4+2` is 14; one call increments evaluation count once.
+- `testEvaluationCountIncrementsForEachDerivativeCall`: two direct derivative calls yield count two and derivative -1.
+- `testIntegrationResetsEvaluationCount`: verifies one prior call is counted, then the integration path’s initialization resets and subsequent integration evaluations occur.
+
+### 4. DEFECT DETECTION STRATEGY
+The assertions pin handler retention and clearing, evaluation-limit handling, derivative evaluation accounting, integration dimension checks, and a simple numerical integration result. No detection outcome is claimed.
+
+### 5. SUMMARY
+15 independent test methods.
+
+### 6. LIMITATIONS
+No target method was specified, so method selection is exploratory. The listed `compare` method has no declaration in the supplied reference source and cannot be safely exercised. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

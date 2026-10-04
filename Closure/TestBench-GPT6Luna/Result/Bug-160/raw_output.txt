@@ -1,0 +1,563 @@
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Supplier;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.javascript.jscomp.CompilerOptions.DevMode;
+import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
+import com.google.javascript.jscomp.CompilerOptions.TracerMode;
+import com.google.javascript.jscomp.ReferenceCollectingCallback.ReferenceCollection;
+import com.google.javascript.jscomp.ReferenceCollectingCallback.ReferenceMap;
+import com.google.javascript.jscomp.Scope.Var;
+import com.google.javascript.jscomp.deps.SortedDependencies.CircularDependencyException;
+import com.google.javascript.jscomp.deps.SortedDependencies.MissingProvideException;
+import com.google.javascript.jscomp.mozilla.rhino.ErrorReporter;
+import com.google.javascript.jscomp.parsing.Config;
+import com.google.javascript.jscomp.parsing.ParserRunner;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.jstype.JSTypeRegistry;
+import java.io.IOException;
+import java.io.PrintStream;
+import java.io.Serializable;
+import java.nio.charset.Charset;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+public class CompilerTest {
+    @Test
+    public void testGetSourceLineBoundaries() throws Exception {
+        Compiler compiler = new Compiler();
+        compiler.init(new JSSourceFile[0],
+                new JSSourceFile[] {JSSourceFile.fromCode("src.js", "alpha\nbeta")},
+                new CompilerOptions());
+        assertNull(compiler.getSourceLine("src.js", 0));
+        assertEquals("alpha", compiler.getSourceLine("src.js", 1));
+        assertEquals("beta", compiler.getSourceLine("src.js", 2));
+        assertNull(compiler.getSourceLine("missing.js", 1));
+    }
+
+    @Test
+    public void testGetSourceRegionValidLine() throws Exception {
+        Compiler compiler = new Compiler();
+        compiler.init(new JSSourceFile[0],
+                new JSSourceFile[] {JSSourceFile.fromCode("src.js", "alpha\nbeta")},
+                new CompilerOptions());
+        assertNotNull(compiler.getSourceRegion("src.js", 1));
+        assertNull(compiler.getSourceRegion("src.js", 0));
+    }
+
+    @Test
+    public void testGetInputByInitializedName() throws Exception {
+        Compiler compiler = new Compiler();
+        compiler.init(new JSSourceFile[0],
+                new JSSourceFile[] {JSSourceFile.fromCode("src.js", "var a;")},
+                new CompilerOptions());
+        assertEquals("src.js", compiler.getInput("src.js").getName());
+        assertNull(compiler.getInput("absent.js"));
+    }
+
+    @Test
+    public void testNewExternInputRegistersInput() throws Exception {
+        Compiler compiler = new Compiler();
+        compiler.init(new JSSourceFile[0],
+                new JSSourceFile[] {JSSourceFile.fromCode("src.js", "var a;")},
+                new CompilerOptions());
+        CompilerInput input = compiler.newExternInput("ext.js");
+        assertSame(input, compiler.getInput("ext.js"));
+        assertTrue(input.isExtern());
+    }
+
+    @Test
+    public void testNewExternInputRejectsDuplicateName() throws Exception {
+        Compiler compiler = new Compiler();
+        compiler.init(new JSSourceFile[0],
+                new JSSourceFile[] {JSSourceFile.fromCode("src.js", "var a;")},
+                new CompilerOptions());
+        try {
+            compiler.newExternInput("src.js");
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) {
+        }
+    }
+
+    @Test
+    public void testGetInputAfterRebuildingModules() throws Exception {
+        Compiler compiler = new Compiler();
+        JSModule module = new JSModule("m");
+        module.add(JSSourceFile.fromCode("part.js", "var p;"));
+        compiler.initModules(Collections.<JSSourceFile>emptyList(),
+                Lists.newArrayList(module), new CompilerOptions());
+        module.add(JSSourceFile.fromCode("later.js", "var q;"));
+        compiler.rebuildInputsFromModules();
+        assertEquals("later.js", compiler.getInput("later.js").getName());
+        assertEquals(2, compiler.getInputsForTesting().size());
+    }
+
+    @Test
+    public void testGetSourceLineLastLine() throws Exception {
+        Compiler compiler = new Compiler();
+        compiler.init(new JSSourceFile[0],
+                new JSSourceFile[] {JSSourceFile.fromCode("lines.js", "x\ny")},
+                new CompilerOptions());
+        assertEquals("y", compiler.getSourceLine("lines.js", 2));
+        assertNull(compiler.getSourceLine("lines.js", 3));
+    }
+
+    @Test
+    public void testGetSourceLineRejectsNegativeLine() throws Exception {
+        Compiler compiler = new Compiler();
+        compiler.init(new JSSourceFile[0],
+                new JSSourceFile[] {JSSourceFile.fromCode("lines.js", "x")},
+                new CompilerOptions());
+        assertNull(compiler.getSourceLine("lines.js", -1));
+    }
+
+    @Test
+    public void testErrorManagerLazyInitialization() throws Exception {
+        Compiler compiler = new Compiler();
+        assertNotNull(compiler.getErrorManager());
+        assertSame(compiler.getErrorManager(), compiler.getErrorManager());
+    }
+
+    @Test
+    public void testGetErrorsNeverNullAfterInitialization() throws Exception {
+        Compiler compiler = new Compiler();
+        compiler.init(new JSSourceFile[0],
+                new JSSourceFile[] {JSSourceFile.fromCode("src.js", "var a;")},
+                new CompilerOptions());
+        assertNotNull(compiler.getErrors());
+        assertEquals(0, compiler.getErrorCount());
+    }
+
+    @Test
+    public void testGetWarningsNeverNullAfterInitialization() throws Exception {
+        Compiler compiler = new Compiler();
+        compiler.init(new JSSourceFile[0],
+                new JSSourceFile[] {JSSourceFile.fromCode("src.js", "var a;")},
+                new CompilerOptions());
+        assertNotNull(compiler.getWarnings());
+        assertEquals(0, compiler.getWarningCount());
+    }
+
+    @Test
+    public void testLanguageModeAndEcmaScriptAcceptance() throws Exception {
+        CompilerOptions options = new CompilerOptions();
+        options.setLanguageIn(LanguageMode.ECMASCRIPT5);
+        Compiler compiler = new Compiler();
+        compiler.initOptions(options);
+        assertEquals(LanguageMode.ECMASCRIPT5, compiler.languageMode());
+        assertTrue(compiler.acceptEcmaScript5());
+    }
+
+    @Test
+    public void testEcmaScript3NotAcceptedAsEs5() throws Exception {
+        CompilerOptions options = new CompilerOptions();
+        options.setLanguageIn(LanguageMode.ECMASCRIPT3);
+        Compiler compiler = new Compiler();
+        compiler.initOptions(options);
+        assertFalse(compiler.acceptEcmaScript5());
+        assertEquals(LanguageMode.ECMASCRIPT3, compiler.languageMode());
+    }
+
+    @Test
+    public void testIdeModeReflectsOption() throws Exception {
+        CompilerOptions options = new CompilerOptions();
+        options.ideMode = true;
+        Compiler compiler = new Compiler();
+        compiler.initOptions(options);
+        assertTrue(compiler.isIdeMode());
+    }
+
+    @Test
+    public void testTypeCheckingEnabledFlag() throws Exception {
+        CompilerOptions options = new CompilerOptions();
+        options.checkTypes = true;
+        Compiler compiler = new Compiler();
+        compiler.initOptions(options);
+        assertTrue(compiler.isTypeCheckingEnabled());
+    }
+
+    @Test
+    public void testAcceptConstKeywordFlag() throws Exception {
+        CompilerOptions options = new CompilerOptions();
+        options.acceptConstKeyword = true;
+        Compiler compiler = new Compiler();
+        compiler.initOptions(options);
+        assertTrue(compiler.acceptConstKeyword());
+    }
+
+    @Test
+    public void testEmptyModuleReceivesPlaceholderInput() throws Exception {
+        Compiler compiler = new Compiler();
+        JSModule module = new JSModule("empty");
+        compiler.initModules(Collections.<JSSourceFile>emptyList(),
+                Lists.newArrayList(module), new CompilerOptions());
+        assertEquals(1, module.getInputs().size());
+        assertEquals("[]", compiler.getInputsForTesting().get(0).getName());
+    }
+
+    @Test
+    public void testInitializedRootInitiallyAbsent() throws Exception {
+        Compiler compiler = new Compiler();
+        compiler.init(new JSSourceFile[0],
+                new JSSourceFile[] {JSSourceFile.fromCode("src.js", "var a;")},
+                new CompilerOptions());
+        assertNull(compiler.getRoot());
+    }
+
+    @Test
+    public void testToSourceForInitializedEmptyAst() throws Exception {
+        Compiler compiler = new Compiler();
+        compiler.init(new JSSourceFile[0],
+                new JSSourceFile[] {JSSourceFile.fromCode("src.js", "var a;")},
+                new CompilerOptions());
+        compiler.parse();
+        assertEquals("var a;", compiler.toSource());
+    }
+
+    @Test
+    public void testToSourceArrayPreservesSeparateInputs() throws Exception {
+        Compiler compiler = new Compiler();
+        compiler.init(new JSSourceFile[0], new JSSourceFile[] {
+                JSSourceFile.fromCode("a.js", "var a;"),
+                JSSourceFile.fromCode("b.js", "var b;")
+        }, new CompilerOptions());
+        compiler.parse();
+        String[] result = compiler.toSourceArray();
+        assertEquals(2, result.length);
+        assertEquals("var a;", result[0]);
+        assertEquals("var b;", result[1]);
+    }
+
+    @Test
+    public void testGetSourceMapAbsentByDefault() throws Exception {
+        Compiler compiler = new Compiler();
+        compiler.init(new JSSourceFile[0],
+                new JSSourceFile[] {JSSourceFile.fromCode("src.js", "var a;")},
+                new CompilerOptions());
+        assertNull(compiler.getSourceMap());
+    }
+}
+```
+
+1. SOURCE CODE ANALYSIS  
+Selection is exploratory because no target method was specified. Tests exercise source lookup boundaries, input registration/rebuilding, module placeholder initialization, parser/source output, and option-derived public behaviors.
+
+2. TEST CASE DESIGN  
+- `testGetSourceLineBoundaries`: line 0, lines 1–2, unknown name; expected null, exact source lines, null, following the line checks and source-file lookup.
+- `testGetSourceRegionValidLine`: valid line and line 0; expected a region for an existing line and null below the permitted range.
+- `testGetInputByInitializedName`: initialized source and absent name; expected the indexed input and null lookup.
+- `testNewExternInputRegistersInput`: new extern name; expected identical registered input and extern status set by constructor.
+- `testNewExternInputRejectsDuplicateName`: existing input name; expected `IllegalArgumentException` from the duplicate guard.
+- `testGetInputAfterRebuildingModules`: added module input followed by rebuild; expected its name to resolve and the rebuilt list to contain two entries.
+- `testGetSourceLineLastLine`: final present line and one-past-final; expected `"y"` and null.
+- `testGetSourceLineRejectsNegativeLine`: line -1; expected null by the less-than-one guard.
+- `testErrorManagerLazyInitialization`: fresh compiler; expected a non-null lazily created manager, stable on repeated access.
+- `testGetErrorsNeverNullAfterInitialization`: no-error compilation initialization; expected non-null errors array and count zero.
+- `testGetWarningsNeverNullAfterInitialization`: no-warning initialization; expected non-null warnings array and count zero.
+- `testLanguageModeAndEcmaScriptAcceptance`: ECMASCRIPT5 input mode; expected that mode and true acceptance.
+- `testEcmaScript3NotAcceptedAsEs5`: ECMASCRIPT3; expected false acceptance and unchanged reported mode.
+- `testIdeModeReflectsOption`: IDE mode set true; expected true.
+- `testTypeCheckingEnabledFlag`: checkTypes true; expected true.
+- `testAcceptConstKeywordFlag`: acceptConstKeyword true; expected true.
+- `testEmptyModuleReceivesPlaceholderInput`: one empty module; expected one synthesized input and the placeholder source name.
+- `testInitializedRootInitiallyAbsent`: initialization without parsing; expected null root because parse-tree roots are not yet created.
+- `testToSourceForInitializedEmptyAst`: parse simple declaration; expected normalized printer output `"var a;"`.
+- `testToSourceArrayPreservesSeparateInputs`: two parsed sources; expected two outputs in input order.
+- `testGetSourceMapAbsentByDefault`: no source-map output path; expected null source map.
+
+4. DEFECT DETECTION STRATEGY  
+The assertions pin input-name mapping and source-line boundaries, option-to-query behavior, empty-module filling, and parsed source serialization.  
+No detection claim is made; execution against both versions is required to measure outcomes.
+
+5. SUMMARY  
+21 tests.
+
+6. LIMITATIONS  
+Some initialization and parser output behavior depends on this Closure version's supporting classes and must be verified by compilation and execution. The test selection is exploratory because no target method was specified. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions. 
+ાઇલ
+
+[//]: # (Unused final correction cannot alter block. Source analysis expected only message. Note setLanguageIn may not visible API outline omitted methods. declaration visible source doesn't show CompilerOptions setLanguageIn. Rule only declarations visible API outline lists fields omitted and no method. Tests invalid. Also to compile compiler ambiguity Java builtin? same pkg class fine. Header asks no prose? corrections. Need ensure avoid unavailable setLanguageIn use options language mode setter not shown. Options getter likely setters not visible. fields languageIn private maybe not allowed. Remove tests needing setLanguageIn, and static modes cannot configure. Hardly get option API. Much of listed method public-but API calls compilerOptions methods not shown declarations in source? source invokes options.setWarningLevel etc, setLanguageIn unseen. Can't use. Could test default language via options.getLanguageIn visible source invocation method declaration not shown but CompilerOptions API outline says omitted more members; prohibited declarations cannot see. options fields known public checkTypes, ideMode acceptConstKeyword. Current setLanguageIn fails rule and likely exists but unseen. Need produce 12 tests and valid. Need remove language tests replace methods of compiler based on known calls no params. Could use default languageMode and acceptEcmaScript5 uncertain default source unseen. No.
+
+Valid 12 tests can repeat input sources variants. Remove region getRegion call declaration on SourceFile not shown but Compiler method call declared and return exact uncertain. Keep tests compile. getInputsForTesting package-private source visible yes. JSSourceFile etc.
+
+Can have 12 distinct cases source line, module etc. Rewrite concise but full output.
+
+```java
+package com.google.javascript.jscomp;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Supplier;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.javascript.jscomp.CompilerOptions.DevMode;
+import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
+import com.google.javascript.jscomp.CompilerOptions.TracerMode;
+import com.google.javascript.jscomp.ReferenceCollectingCallback.ReferenceCollection;
+import com.google.javascript.jscomp.ReferenceCollectingCallback.ReferenceMap;
+import com.google.javascript.jscomp.Scope.Var;
+import com.google.javascript.jscomp.deps.SortedDependencies.CircularDependencyException;
+import com.google.javascript.jscomp.deps.SortedDependencies.MissingProvideException;
+import com.google.javascript.jscomp.mozilla.rhino.ErrorReporter;
+import com.google.javascript.jscomp.parsing.Config;
+import com.google.javascript.jscomp.parsing.ParserRunner;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.jstype.JSTypeRegistry;
+import java.io.IOException;
+import java.io.PrintStream;
+import java.io.Serializable;
+import java.nio.charset.Charset;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+public class CompilerTest {
+    @Test
+    public void testGetSourceLineAtFirstLine() throws Exception {
+        Compiler compiler = new Compiler();
+        compiler.init(new JSSourceFile[0],
+                new JSSourceFile[] {JSSourceFile.fromCode("src.js", "alpha\nbeta")},
+                new CompilerOptions());
+        assertEquals("alpha", compiler.getSourceLine("src.js", 1));
+    }
+
+    @Test
+    public void testGetSourceLineAtLastLine() throws Exception {
+        Compiler compiler = new Compiler();
+        compiler.init(new JSSourceFile[0],
+                new JSSourceFile[] {JSSourceFile.fromCode("src.js", "alpha\nbeta")},
+                new CompilerOptions());
+        assertEquals("beta", compiler.getSourceLine("src.js", 2));
+    }
+
+    @Test
+    public void testGetSourceLineZeroIsNull() throws Exception {
+        Compiler compiler = new Compiler();
+        compiler.init(new JSSourceFile[0],
+                new JSSourceFile[] {JSSourceFile.fromCode("src.js", "alpha")},
+                new CompilerOptions());
+        assertNull(compiler.getSourceLine("src.js", 0));
+    }
+
+    @Test
+    public void testGetSourceLineNegativeIsNull() throws Exception {
+        Compiler compiler = new Compiler();
+        compiler.init(new JSSourceFile[0],
+                new JSSourceFile[] {JSSourceFile.fromCode("src.js", "alpha")},
+                new CompilerOptions());
+        assertNull(compiler.getSourceLine("src.js", -1));
+    }
+
+    @Test
+    public void testGetSourceLineAfterEndIsNull() throws Exception {
+        Compiler compiler = new Compiler();
+        compiler.init(new JSSourceFile[0],
+                new JSSourceFile[] {JSSourceFile.fromCode("src.js", "alpha")},
+                new CompilerOptions());
+        assertNull(compiler.getSourceLine("src.js", 2));
+    }
+
+    @Test
+    public void testGetSourceLineUnknownNameIsNull() throws Exception {
+        Compiler compiler = new Compiler();
+        compiler.init(new JSSourceFile[0],
+                new JSSourceFile[] {JSSourceFile.fromCode("src.js", "alpha")},
+                new CompilerOptions());
+        assertNull(compiler.getSourceLine("missing.js", 1));
+    }
+
+    @Test
+    public void testGetInputByName() throws Exception {
+        Compiler compiler = new Compiler();
+        compiler.init(new JSSourceFile[0],
+                new JSSourceFile[] {JSSourceFile.fromCode("src.js", "var a;")},
+                new CompilerOptions());
+        assertEquals("src.js", compiler.getInput("src.js").getName());
+    }
+
+    @Test
+    public void testGetInputUnknownNameIsNull() throws Exception {
+        Compiler compiler = new Compiler();
+        compiler.init(new JSSourceFile[0],
+                new JSSourceFile[] {JSSourceFile.fromCode("src.js", "var a;")},
+                new CompilerOptions());
+        assertNull(compiler.getInput("missing.js"));
+    }
+
+    @Test
+    public void testNewExternInputIsRegistered() throws Exception {
+        Compiler compiler = new Compiler();
+        compiler.init(new JSSourceFile[0],
+                new JSSourceFile[] {JSSourceFile.fromCode("src.js", "var a;")},
+                new CompilerOptions());
+        CompilerInput input = compiler.newExternInput("ext.js");
+        assertSame(input, compiler.getInput("ext.js"));
+        assertTrue(input.isExtern());
+    }
+
+    @Test
+    public void testNewExternInputRejectsExistingName() throws Exception {
+        Compiler compiler = new Compiler();
+        compiler.init(new JSSourceFile[0],
+                new JSSourceFile[] {JSSourceFile.fromCode("src.js", "var a;")},
+                new CompilerOptions());
+        try {
+            compiler.newExternInput("src.js");
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) {
+        }
+    }
+
+    @Test
+    public void testRebuildInputsIncludesLaterModuleInput() throws Exception {
+        Compiler compiler = new Compiler();
+        JSModule module = new JSModule("m");
+        module.add(JSSourceFile.fromCode("part.js", "var p;"));
+        compiler.initModules(Collections.<JSSourceFile>emptyList(),
+                Lists.newArrayList(module), new CompilerOptions());
+        module.add(JSSourceFile.fromCode("later.js", "var q;"));
+        compiler.rebuildInputsFromModules();
+        assertEquals("later.js", compiler.getInput("later.js").getName());
+        assertEquals(2, compiler.getInputsForTesting().size());
+    }
+
+    @Test
+    public void testEmptyModuleGetsPlaceholderInput() throws Exception {
+        Compiler compiler = new Compiler();
+        JSModule module = new JSModule("empty");
+        compiler.initModules(Collections.<JSSourceFile>emptyList(),
+                Lists.newArrayList(module), new CompilerOptions());
+        assertEquals(1, module.getInputs().size());
+        assertEquals("[]", compiler.getInputsForTesting().get(0).getName());
+    }
+
+    @Test
+    public void testErrorsArrayIsNotNull() throws Exception {
+        Compiler compiler = new Compiler();
+        compiler.init(new JSSourceFile[0],
+                new JSSourceFile[] {JSSourceFile.fromCode("src.js", "var a;")},
+                new CompilerOptions());
+        assertNotNull(compiler.getErrors());
+        assertEquals(0, compiler.getErrorCount());
+    }
+
+    @Test
+    public void testWarningsArrayIsNotNull() throws Exception {
+        Compiler compiler = new Compiler();
+        compiler.init(new JSSourceFile[0],
+                new JSSourceFile[] {JSSourceFile.fromCode("src.js", "var a;")},
+                new CompilerOptions());
+        assertNotNull(compiler.getWarnings());
+        assertEquals(0, compiler.getWarningCount());
+    }
+
+    @Test
+    public void testGetErrorManagerInitializesIt() throws Exception {
+        Compiler compiler = new Compiler();
+        assertNotNull(compiler.getErrorManager());
+        assertSame(compiler.getErrorManager(), compiler.getErrorManager());
+    }
+
+    @Test
+    public void testGetRootBeforeParsingIsNull() throws Exception {
+        Compiler compiler = new Compiler();
+        compiler.init(new JSSourceFile[0],
+                new JSSourceFile[] {JSSourceFile.fromCode("src.js", "var a;")},
+                new CompilerOptions());
+        assertNull(compiler.getRoot());
+    }
+
+    @Test
+    public void testGetSourceMapAbsentWithoutOutputPath() throws Exception {
+        Compiler compiler = new Compiler();
+        compiler.init(new JSSourceFile[0],
+                new JSSourceFile[] {JSSourceFile.fromCode("src.js", "var a;")},
+                new CompilerOptions());
+        assertNull(compiler.getSourceMap());
+    }
+
+    @Test
+    public void testIdeModeReflectsOption() throws Exception {
+        CompilerOptions options = new CompilerOptions();
+        options.ideMode = true;
+        Compiler compiler = new Compiler();
+        compiler.initOptions(options);
+        assertTrue(compiler.isIdeMode());
+    }
+
+    @Test
+    public void testTypeCheckingReflectsOption() throws Exception {
+        CompilerOptions options = new CompilerOptions();
+        options.checkTypes = true;
+        Compiler compiler = new Compiler();
+        compiler.initOptions(options);
+        assertTrue(compiler.isTypeCheckingEnabled());
+    }
+
+    @Test
+    public void testAcceptConstKeywordReflectsOption() throws Exception {
+        CompilerOptions options = new CompilerOptions();
+        options.acceptConstKeyword = true;
+        Compiler compiler = new Compiler();
+        compiler.initOptions(options);
+        assertTrue(compiler.acceptConstKeyword());
+    }
+}
+```
+
+1. SOURCE CODE ANALYSIS  
+No target method was specified, so method selection is exploratory. The tests focus on source-line lookup boundaries, input lookup and registration, module input rebuilding, and option-backed accessors.
+
+2. TEST CASE DESIGN  
+- `testGetSourceLineAtFirstLine`: line 1 of `"alpha\nbeta"`; expected `"alpha"` from one-based source-line lookup.
+- `testGetSourceLineAtLastLine`: line 2 of `"alpha\nbeta"`; expected `"beta"` from one-based source-line lookup.
+- `testGetSourceLineZeroIsNull`: line 0; expected null from the `lineNumber < 1` guard.
+- `testGetSourceLineNegativeIsNull`: line -1; expected null from the same guard.
+- `testGetSourceLineAfterEndIsNull`: line 2 of a one-line source; expected null because the source has no such line.
+- `testGetSourceLineUnknownNameIsNull`: unregistered name; expected null because no matching input exists.
+- `testGetInputByName`: initialized input name; expected the corresponding input's name.
+- `testGetInputUnknownNameIsNull`: unregistered name; expected null from the input map lookup.
+- `testNewExternInputIsRegistered`: fresh extern name; expected the returned input to be the registered instance and marked extern.
+- `testNewExternInputRejectsExistingName`: existing input name; expected `IllegalArgumentException` from the duplicate-name check.
+- `testRebuildInputsIncludesLaterModuleInput`: add a second module input, rebuild; expected its lookup and a two-input list.
+- `testEmptyModuleGetsPlaceholderInput`: single empty module; expected one placeholder input, whose generated name is `"[]"` for module `"empty"`.
+- `testErrorsArrayIsNotNull`: valid initialized source; expected a non-null errors array and error count zero.
+- `testWarningsArrayIsNotNull`: valid initialized source; expected a non-null warnings array and warning count zero.
+- `testGetErrorManagerInitializesIt`: new compiler; expected a non-null manager that remains the same on repeated access.
+- `testGetRootBeforeParsingIsNull`: initialized but not parsed compiler; expected null because parse roots have not been built.
+- `testGetSourceMapAbsentWithoutOutputPath`: default options; expected null because no source-map output path is set.
+- `testIdeModeReflectsOption`: IDE mode true; expected true from the accessor.
+- `testTypeCheckingReflectsOption`: `checkTypes` true; expected true from the accessor.
+- `testAcceptConstKeywordReflectsOption`: `acceptConstKeyword` true; expected true from the accessor.
+
+4. DEFECT DETECTION STRATEGY  
+The tests pin source lookup edge behavior, duplicate input handling, module rebuilding, and selected option accessors. No defect detection is claimed without execution against both versions.
+
+5. SUMMARY  
+19 tests.
+
+6. LIMITATIONS  
+No target method was specified, and the tests avoid relying on compiler pass output. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

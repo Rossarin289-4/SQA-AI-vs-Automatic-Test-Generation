@@ -1,0 +1,282 @@
+```java
+package com.fasterxml.jackson.databind.type;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.util.*;
+import java.util.concurrent.atomic.AtomicReference;
+import java.lang.reflect.*;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JavaType;
+import com.fasterxml.jackson.databind.util.ArrayBuilders;
+import com.fasterxml.jackson.databind.util.ClassUtil;
+import com.fasterxml.jackson.databind.util.LRUMap;
+
+public class TypeFactoryTest {
+    @Test
+    public void testDefaultFactorySingletonAndInitialLoader() throws Exception {
+        TypeFactory factory = TypeFactory.defaultInstance();
+        assertSame(factory, TypeFactory.defaultInstance());
+        assertNull(factory.getClassLoader());
+    }
+
+    @Test
+    public void testFactoryWithSpecifiedLoader() throws Exception {
+        ClassLoader loader = String.class.getClassLoader();
+        assertSame(loader, TypeFactory.defaultInstance().withClassLoader(loader).getClassLoader());
+    }
+
+    @Test
+    public void testFactoryWithNullLoader() throws Exception {
+        assertNull(TypeFactory.defaultInstance().withClassLoader(null).getClassLoader());
+    }
+
+    @Test
+    public void testCustomCacheFactoryCanConstructType() throws Exception {
+        LRUMap<Object, JavaType> cache = new LRUMap<Object, JavaType>(2, 8);
+        TypeFactory factory = TypeFactory.defaultInstance().withCache(cache);
+        assertEquals(String.class, factory.constructType(String.class).getRawClass());
+    }
+
+    @Test
+    public void testClearCacheLeavesFactoryUsable() throws Exception {
+        TypeFactory factory = TypeFactory.defaultInstance().withCache(
+                new LRUMap<Object, JavaType>(2, 8));
+        assertEquals(Integer.class, factory.constructType(Integer.class).getRawClass());
+        factory.clearCache();
+        assertEquals(Integer.class, factory.constructType(Integer.class).getRawClass());
+    }
+
+    @Test
+    public void testUnknownTypeIsObject() throws Exception {
+        assertEquals(Object.class, TypeFactory.unknownType().getRawClass());
+    }
+
+    @Test
+    public void testRawClassForClassAndParameterizedType() throws Exception {
+        assertSame(String.class, TypeFactory.rawClass(String.class));
+        JavaType listType = TypeFactory.defaultInstance().constructType(
+                new TypeReference<List<String>>() { });
+        assertSame(List.class, TypeFactory.rawClass(listType));
+    }
+
+    @Test
+    public void testFindPrimitiveClass() throws Exception {
+        assertSame(Integer.TYPE, TypeFactory.defaultInstance().findClass("int"));
+    }
+
+    @Test
+    public void testFindNamedClass() throws Exception {
+        assertSame(String.class, TypeFactory.defaultInstance().findClass("java.lang.String"));
+    }
+
+    @Test
+    public void testSpecializeCollectionPreservesContentType() throws Exception {
+        TypeFactory factory = TypeFactory.defaultInstance();
+        JavaType base = factory.constructCollectionType(List.class, String.class);
+        JavaType specialized = factory.constructSpecializedType(base, ArrayList.class);
+        assertSame(ArrayList.class, specialized.getRawClass());
+        assertSame(String.class, specialized.getContentType().getRawClass());
+    }
+
+    @Test
+    public void testSpecializeRejectsUnrelatedClass() throws Exception {
+        TypeFactory factory = TypeFactory.defaultInstance();
+        JavaType base = factory.constructType(String.class);
+        try {
+            factory.constructSpecializedType(base, Integer.class);
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) { }
+    }
+
+    @Test
+    public void testGeneralizeCollectionFindsParameterizedSupertype() throws Exception {
+        TypeFactory factory = TypeFactory.defaultInstance();
+        JavaType base = factory.constructCollectionType(ArrayList.class, String.class);
+        JavaType generalized = factory.constructGeneralizedType(base, List.class);
+        assertSame(List.class, generalized.getRawClass());
+        assertSame(String.class, generalized.getContentType().getRawClass());
+    }
+
+    @Test
+    public void testGeneralizeRejectsUnrelatedClass() throws Exception {
+        TypeFactory factory = TypeFactory.defaultInstance();
+        JavaType base = factory.constructType(String.class);
+        try {
+            factory.constructGeneralizedType(base, Number.class);
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) { }
+    }
+
+    @Test
+    public void testConstructCanonicalSimpleAndGenericTypes() throws Exception {
+        TypeFactory factory = TypeFactory.defaultInstance();
+        assertSame(String.class, factory.constructFromCanonical("java.lang.String").getRawClass());
+        JavaType list = factory.constructFromCanonical("java.util.List<java.lang.String>");
+        assertSame(List.class, list.getRawClass());
+        assertSame(String.class, list.getContentType().getRawClass());
+    }
+
+    @Test
+    public void testCanonicalParserRejectsTrailingTokens() throws Exception {
+        try {
+            TypeFactory.defaultInstance().constructFromCanonical("java.lang.String java.lang.Integer");
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) { }
+    }
+
+    @Test
+    public void testFindTypeParametersForListAndUnrelatedType() throws Exception {
+        TypeFactory factory = TypeFactory.defaultInstance();
+        JavaType list = factory.constructCollectionType(ArrayList.class, String.class);
+        JavaType[] parameters = factory.findTypeParameters(list, List.class);
+        assertEquals(1, parameters.length);
+        assertSame(String.class, parameters[0].getRawClass());
+        assertEquals(0, factory.findTypeParameters(list, Map.class).length);
+    }
+
+    @Test
+    public void testMoreSpecificTypeReturnsAssignableSubtype() throws Exception {
+        TypeFactory factory = TypeFactory.defaultInstance();
+        JavaType list = factory.constructType(List.class);
+        JavaType arrayList = factory.constructType(ArrayList.class);
+        assertSame(arrayList, factory.moreSpecificType(list, arrayList));
+        assertSame(list, factory.moreSpecificType(arrayList, list));
+    }
+
+    @Test
+    public void testMoreSpecificTypeHandlesNullArguments() throws Exception {
+        TypeFactory factory = TypeFactory.defaultInstance();
+        JavaType string = factory.constructType(String.class);
+        assertSame(string, factory.moreSpecificType(null, string));
+        assertSame(string, factory.moreSpecificType(string, null));
+        assertNull(factory.moreSpecificType(null, null));
+    }
+
+    @Test
+    public void testConstructTypeFromClassAndTypeReference() throws Exception {
+        TypeFactory factory = TypeFactory.defaultInstance();
+        assertSame(String.class, factory.constructType(String.class).getRawClass());
+        JavaType list = factory.constructType(new TypeReference<List<Integer>>() { });
+        assertSame(List.class, list.getRawClass());
+        assertSame(Integer.class, list.getContentType().getRawClass());
+    }
+
+    @Test
+    public void testConstructArrayTypeFromClassAndJavaType() throws Exception {
+        TypeFactory factory = TypeFactory.defaultInstance();
+        assertSame(String[].class, factory.constructArrayType(String.class).getRawClass());
+        JavaType element = factory.constructType(Integer.class);
+        ArrayType array = factory.constructArrayType(element);
+        assertSame(Integer[].class, array.getRawClass());
+        assertSame(Integer.class, array.getContentType().getRawClass());
+    }
+
+    @Test
+    public void testConstructCollectionTypeCarriesElementType() throws Exception {
+        CollectionType type = TypeFactory.defaultInstance().constructCollectionType(
+                ArrayList.class, String.class);
+        assertSame(ArrayList.class, type.getRawClass());
+        assertSame(String.class, type.getContentType().getRawClass());
+    }
+
+    @Test
+    public void testConstructCollectionLikeTypeForIterable() throws Exception {
+        CollectionLikeType type = TypeFactory.defaultInstance().constructCollectionLikeType(
+                Iterable.class, String.class);
+        assertSame(Iterable.class, type.getRawClass());
+        assertSame(String.class, type.getContentType().getRawClass());
+    }
+
+    @Test
+    public void testConstructMapTypeCarriesKeyAndValueTypes() throws Exception {
+        MapType type = TypeFactory.defaultInstance().constructMapType(
+                HashMap.class, String.class, Integer.class);
+        assertSame(HashMap.class, type.getRawClass());
+        assertSame(String.class, type.getKeyType().getRawClass());
+        assertSame(Integer.class, type.getContentType().getRawClass());
+    }
+
+    @Test
+    public void testPropertiesMapUsesStringTypes() throws Exception {
+        MapType type = TypeFactory.defaultInstance().constructMapType(
+                Properties.class, Integer.class, Long.class);
+        assertSame(String.class, type.getKeyType().getRawClass());
+        assertSame(String.class, type.getContentType().getRawClass());
+    }
+
+    @Test
+    public void testConstructMapLikeTypeCarriesKeyAndValueTypes() throws Exception {
+        MapLikeType type = TypeFactory.defaultInstance().constructMapLikeType(
+                Map.Entry.class, String.class, Integer.class);
+        assertSame(Map.Entry.class, type.getRawClass());
+        assertSame(String.class, type.getKeyType().getRawClass());
+        assertSame(Integer.class, type.getContentType().getRawClass());
+    }
+
+    @Test
+    public void testConstructSimpleAndParametricTypes() throws Exception {
+        TypeFactory factory = TypeFactory.defaultInstance();
+        JavaType string = factory.constructType(String.class);
+        JavaType simple = factory.constructSimpleType(List.class, new JavaType[] { string });
+        JavaType parametric = factory.constructParametricType(List.class, String.class);
+        assertSame(List.class, simple.getRawClass());
+        assertSame(String.class, simple.getContentType().getRawClass());
+        assertEquals(simple, parametric);
+    }
+
+    @Test
+    public void testConstructReferenceAndRawCollectionTypes() throws Exception {
+        TypeFactory factory = TypeFactory.defaultInstance();
+        JavaType reference = factory.constructReferenceType(AtomicReference.class,
+                factory.constructType(String.class));
+        assertSame(AtomicReference.class, reference.getRawClass());
+        assertSame(String.class, reference.getContentType().getRawClass());
+
+        CollectionType rawCollection = factory.constructRawCollectionType(ArrayList.class);
+        assertSame(ArrayList.class, rawCollection.getRawClass());
+        assertSame(Object.class, rawCollection.getContentType().getRawClass());
+    }
+}
+```
+
+### 1. SOURCE CODE ANALYSIS
+Method selection is exploratory because no target method was specified. Tests exercise TypeFactory’s class lookup, type construction, specialization/generalization, canonical parsing, parameter lookup, and type selection branches.
+
+### 2. TEST CASE DESIGN
+- `testDefaultFactorySingletonAndInitialLoader`: default factory calls; same singleton and null initial loader, from `instance` and constructor configuration.
+- `testFactoryWithSpecifiedLoader`: explicit loader; it is retained by `withClassLoader`.
+- `testFactoryWithNullLoader`: null loader; returned factory reports null.
+- `testCustomCacheFactoryCanConstructType`: custom cache and String; constructed raw class is String.
+- `testClearCacheLeavesFactoryUsable`: construct, clear, reconstruct Integer; both results have Integer raw class.
+- `testUnknownTypeIsObject`: unknown type; `_unknownType()` returns the Object core type.
+- `testRawClassForClassAndParameterizedType`: Class and JavaType inputs; raw classes are String and List.
+- `testFindPrimitiveClass`: `"int"`; primitive lookup returns `Integer.TYPE`.
+- `testFindNamedClass`: `"java.lang.String"`; class lookup returns String.
+- `testSpecializeCollectionPreservesContentType`: List<String> to ArrayList; shortcut retains String content.
+- `testSpecializeRejectsUnrelatedClass`: String to Integer; assignability check throws `IllegalArgumentException`.
+- `testGeneralizeCollectionFindsParameterizedSupertype`: ArrayList<String> to List; `findSuperType` supplies List<String>.
+- `testGeneralizeRejectsUnrelatedClass`: String to Number; failed assignability throws `IllegalArgumentException`.
+- `testConstructCanonicalSimpleAndGenericTypes`: canonical String and List<String>; parser resolves base and argument classes.
+- `testCanonicalParserRejectsTrailingTokens`: valid type plus extra token; parser rejects trailing input.
+- `testFindTypeParametersForListAndUnrelatedType`: ArrayList<String>; List match has one String parameter, Map match has none.
+- `testMoreSpecificTypeReturnsAssignableSubtype`: List and ArrayList; subtype is selected, while reversed input preserves the primary type.
+- `testMoreSpecificTypeHandlesNullArguments`: null/null and single-null combinations; branches return the non-null input or null.
+- `testConstructTypeFromClassAndTypeReference`: String Class and List<Integer> reference; classes and generic content follow resolution.
+- `testConstructArrayTypeFromClassAndJavaType`: String and Integer elements; arrays have the corresponding array and content classes.
+- `testConstructCollectionTypeCarriesElementType`: ArrayList<String>; bindings specify String content.
+- `testConstructCollectionLikeTypeForIterable`: Iterable<String>; collection-like construction preserves the specified content.
+- `testConstructMapTypeCarriesKeyAndValueTypes`: HashMap<String,Integer>; two bindings provide key and value.
+- `testPropertiesMapUsesStringTypes`: Properties with other requested classes; source special-cases both types to String.
+- `testConstructMapLikeTypeCarriesKeyAndValueTypes`: Map.Entry parameters; type construction carries the supplied key and value.
+- `testConstructSimpleAndParametricTypes`: List<String> through both methods; each has List raw class and String content.
+- `testConstructReferenceAndRawCollectionTypes`: AtomicReference<String> and raw ArrayList; referred content is String and unknown raw content resolves to Object.
+
+### 4. DEFECT DETECTION STRATEGY
+The assertions pin observable type classes, generic bindings, branch-specific results, and specified exception types. This is a test design only; no detection result is claimed.
+
+### 5. SUMMARY
+27 tests.
+
+### 6. LIMITATIONS
+No faulty implementation or execution results are provided, so compilation and runtime behavior remain unverified here. Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

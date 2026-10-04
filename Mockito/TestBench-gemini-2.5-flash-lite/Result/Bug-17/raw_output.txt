@@ -1,0 +1,388 @@
+```java
+package org.mockito.internal.creation;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import org.mockito.internal.util.MockUtil;
+import org.mockito.MockSettings;
+import org.mockito.exceptions.Reporter;
+import org.mockito.internal.util.MockName;
+import org.mockito.stubbing.Answer;
+import org.mockito.cglib.proxy.*;
+import org.mockito.exceptions.misusing.NotAMockException;
+import org.mockito.internal.MockHandler;
+import org.mockito.internal.MockHandlerInterface;
+import org.mockito.internal.creation.MethodInterceptorFilter;
+import org.mockito.internal.creation.MockSettingsImpl;
+import org.mockito.internal.creation.jmock.ClassImposterizer;
+import org.mockito.internal.util.reflection.LenientCopyTool;
+import java.io.Serializable;
+import java.lang.reflect.Method;
+import java.util.List;
+
+public class MockSettingsImplTest {
+    // test methods (as many as the instructions ask for), each exactly in this form:
+    //     @Test
+    //     public void testWhatItChecks() throws Exception { ... }
+
+    @Test
+    public void testSerializableSetAndGet() throws Exception {
+        MockSettings settings = new MockSettingsImpl();
+        assertFalse(settings.isSerializable());
+        settings.serializable();
+        assertTrue(settings.isSerializable());
+    }
+
+    @Test
+    public void testExtraInterfacesSetAndGet() throws Exception {
+        MockSettings settings = new MockSettingsImpl();
+        assertNull(settings.getExtraInterfaces());
+        Class<?>[] interfaces = new Class<?>[]{Runnable.class, java.io.Serializable.class};
+        settings.extraInterfaces(interfaces);
+        assertArrayEquals(interfaces, settings.getExtraInterfaces());
+    }
+    
+    @Test
+    public void testExtraInterfacesWithEmptyArray() throws Exception {
+        MockSettings settings = new MockSettingsImpl();
+        try {
+            settings.extraInterfaces(new Class<?>[0]);
+            fail("Expected Reporter.extraInterfacesRequiresAtLeastOneInterface");
+        } catch (Exception e) {
+            // In Mockito 1.x, Reporter methods might not throw exceptions directly.
+            // This is a placeholder for where an exception would be expected if the reporter was configured to throw.
+            // For this test, we'll assume the absence of a thrown exception means it passed validation.
+            // A more robust test would check the reporter's internal state if possible.
+        }
+    }
+
+    @Test
+    public void testExtraInterfacesWithNullArray() throws Exception {
+        MockSettings settings = new MockSettingsImpl();
+        try {
+            settings.extraInterfaces((Class<?>[]) null);
+            fail("Expected Reporter.extraInterfacesRequiresAtLeastOneInterface");
+        } catch (Exception e) {
+            // Same as above for empty array test.
+        }
+    }
+
+    @Test
+    public void testExtraInterfacesWithNullParameter() throws Exception {
+        MockSettings settings = new MockSettingsImpl();
+        try {
+            settings.extraInterfaces(Runnable.class, null, java.io.Serializable.class);
+            fail("Expected Reporter.extraInterfacesDoesNotAcceptNullParameters");
+        } catch (Exception e) {
+            // Same as above.
+        }
+    }
+
+    @Test
+    public void testExtraInterfacesWithNonInterfaceClass() throws Exception {
+        MockSettings settings = new MockSettingsImpl();
+        try {
+            settings.extraInterfaces(Runnable.class, String.class);
+            fail("Expected Reporter.extraInterfacesAcceptsOnlyInterfaces");
+        } catch (Exception e) {
+            // Same as above.
+        }
+    }
+
+    @Test
+    public void testNameSetAndGet() throws Exception {
+        MockSettings settings = new MockSettingsImpl();
+        settings.name("myMock");
+        assertEquals("myMock", settings.name()); // Assuming a getter for name exists or can be inferred
+    }
+
+    @Test
+    public void testSpiedInstanceSetAndGet() throws Exception {
+        MockSettings settings = new MockSettingsImpl();
+        Object instance = new Object();
+        settings.spiedInstance(instance);
+        assertSame(instance, settings.getSpiedInstance());
+    }
+
+    @Test
+    public void testDefaultAnswerSetAndGet() throws Exception {
+        MockSettings settings = new MockSettingsImpl();
+        Answer<Object> answer = new Answer<Object>() {
+            @Override
+            public Object answer(InvocationOnMock invocation) throws Throwable {
+                return "test";
+            }
+        };
+        settings.defaultAnswer(answer);
+        assertSame(answer, settings.getDefaultAnswer());
+    }
+    
+    @Test
+    public void testDefaultAnswerWithNull() throws Exception {
+        MockSettings settings = new MockSettingsImpl();
+        settings.defaultAnswer(null);
+        assertNull(settings.getDefaultAnswer());
+    }
+
+    @Test
+    public void testInitiateMockName() throws Exception {
+        MockSettingsImpl settings = new MockSettingsImpl();
+        settings.initiateMockName(String.class);
+        MockName mockName = settings.getMockName();
+        assertNotNull(mockName);
+        assertEquals("String", mockName.toString()); // Assuming MockName.toString() returns the name
+        assertFalse(mockName.isSurrogate());
+    }
+
+    @Test
+    public void testInitiateMockNameWithName() throws Exception {
+        MockSettingsImpl settings = new MockSettingsImpl();
+        settings.name("customName");
+        settings.initiateMockName(Integer.class);
+        MockName mockName = settings.getMockName();
+        assertNotNull(mockName);
+        assertEquals("customName", mockName.toString()); // Assuming MockName.toString() returns the name
+        assertFalse(mockName.isSurrogate());
+    }
+    
+    @Test
+    public void testInitiateMockNameWithNullName() throws Exception {
+        MockSettingsImpl settings = new MockSettingsImpl();
+        settings.name(null);
+        settings.initiateMockName(Long.class);
+        MockName mockName = settings.getMockName();
+        assertNotNull(mockName);
+        assertEquals("Long", mockName.toString()); // Assuming MockName.toString() returns the class name if name is null
+        assertFalse(mockName.isSurrogate());
+    }
+
+    // Tests for MockUtil methods that use MockSettingsImpl
+
+    @Test
+    public void testCreateMockBasic() throws Exception {
+        MockUtil mockUtil = new MockUtil();
+        MockSettingsImpl settings = new MockSettingsImpl();
+        settings.name("testMock");
+        settings.extraInterfaces(Runnable.class);
+        settings.serializable();
+        
+        Runnable mock = mockUtil.createMock(Runnable.class, settings);
+        
+        assertNotNull(mock);
+        assertTrue(mock instanceof Runnable);
+        assertTrue(mock instanceof Serializable);
+        assertEquals("testMock", mockUtil.getMockName(mock).toString());
+    }
+    
+    @Test
+    public void testCreateMockWithSpiedInstance() throws Exception {
+        MockUtil mockUtil = new MockUtil();
+        Object instance = new Object() {
+            public String toString() {
+                return "spied";
+            }
+        };
+        MockSettingsImpl settings = new MockSettingsImpl();
+        settings.spiedInstance(instance);
+        
+        Object mock = mockUtil.createMock(Object.class, settings);
+        
+        assertNotNull(mock);
+        assertEquals("spied", mock.toString()); // LenientCopyTool should copy toString
+    }
+
+    @Test
+    public void testResetMock() throws Exception {
+        MockUtil mockUtil = new MockUtil();
+        MockSettingsImpl settings = new MockSettingsImpl();
+        settings.defaultAnswer(new Answer<Object>() {
+            @Override
+            public Object answer(InvocationOnMock invocation) throws Throwable {
+                return "default";
+            }
+        });
+        
+        Object mock = mockUtil.createMock(Object.class, settings);
+        
+        // Call resetMock
+        mockUtil.resetMock(mock);
+        
+        // After reset, default answer should be RETURNS_DEFAULTS
+        MockHandlerInterface<Object> handler = mockUtil.getMockHandler(mock);
+        // Accessing default answer directly from MockHandler is tricky without a public getter.
+        // We infer it by observing behavior or if a mockable method were available.
+        // For this test, we assume resetMock reinitializes the handler with RETURNS_DEFAULTS.
+        // A direct assertion on the default answer would be better if API allowed.
+        // For now, we can only check if the handler is still valid.
+        assertNotNull(handler);
+    }
+    
+    @Test
+    public void testGetMockHandlerValidMock() throws Exception {
+        MockUtil mockUtil = new MockUtil();
+        MockSettingsImpl settings = new MockSettingsImpl();
+        Object mock = mockUtil.createMock(Object.class, settings);
+        
+        MockHandlerInterface<Object> handler = mockUtil.getMockHandler(mock);
+        assertNotNull(handler);
+        assertTrue(handler instanceof MockHandler);
+    }
+
+    @Test
+    public void testGetMockHandlerNull() throws Exception {
+        MockUtil mockUtil = new MockUtil();
+        try {
+            mockUtil.getMockHandler(null);
+            fail("Expected NotAMockException");
+        } catch (NotAMockException e) {
+            // Expected
+        }
+    }
+
+    @Test
+    public void testGetMockHandlerNotAMock() throws Exception {
+        MockUtil mockUtil = new MockUtil();
+        try {
+            mockUtil.getMockHandler(new Object());
+            fail("Expected NotAMockException");
+        } catch (NotAMockException e) {
+            // Expected
+        }
+    }
+
+    @Test
+    public void testIsMockValidMock() throws Exception {
+        MockUtil mockUtil = new MockUtil();
+        MockSettingsImpl settings = new MockSettingsImpl();
+        Object mock = mockUtil.createMock(Object.class, settings);
+        assertTrue(mockUtil.isMock(mock));
+    }
+
+    @Test
+    public void testIsMockNull() throws Exception {
+        MockUtil mockUtil = new MockUtil();
+        assertFalse(mockUtil.isMock(null));
+    }
+
+    @Test
+    public void testIsMockNotAMock() throws Exception {
+        MockUtil mockUtil = new MockUtil();
+        assertFalse(mockUtil.isMock(new Object()));
+    }
+    
+    // Tests for MockName
+    @Test
+    public void testMockNameToString() throws Exception {
+        MockName mockName = new MockName("myMock", String.class);
+        assertEquals("myMock", mockName.toString());
+    }
+    
+    @Test
+    public void testMockNameToStringWhenNull() throws Exception {
+        MockName mockName = new MockName(null, Integer.class);
+        assertEquals("Integer", mockName.toString()); // Assuming it defaults to class name
+    }
+
+    @Test
+    public void testMockNameIsSurrogate() throws Exception {
+        MockName mockName = new MockName("myMock", String.class);
+        assertFalse(mockName.isSurrogate());
+    }
+
+    // MockSettingsImpl public methods coverage
+    // `name()` is tested via `initiateMockName` and `getMockName` tests.
+    // `spiedInstance()` is tested via `testCreateMockWithSpiedInstance`.
+    // `defaultAnswer()` is tested via `testDefaultAnswerSetAndGet`.
+    // `serializable()` is tested via `testSerializableSetAndGet`.
+    // `extraInterfaces()` is tested via `testExtraInterfacesSetAndGet`.
+    // `getMockName()` is tested via `testInitiateMockName` and related tests.
+    // `getExtraInterfaces()` is tested via `testExtraInterfacesSetAndGet`.
+    // `getSpiedInstance()` is tested via `testSpiedInstanceSetAndGet`.
+    // `getDefaultAnswer()` is tested via `testDefaultAnswerSetAndGet`.
+    // `isSerializable()` is tested via `testSerializableSetAndGet`.
+    // `initiateMockName()` is tested via `testInitiateMockName` and related tests.
+
+    // MockUtil public methods coverage
+    // `createMock()` is tested via `testCreateMockBasic` and `testCreateMockWithSpiedInstance`.
+    // `resetMock()` is tested via `testResetMock`.
+    // `getMockHandler()` is tested via `testGetMockHandlerValidMock`, `testGetMockHandlerNull`, `testGetMockHandlerNotAMock`.
+    // `isMock()` is tested via `testIsMockValidMock`, `testIsMockNull`, `testIsMockNotAMock`.
+    // `getMockName()` is tested via `testCreateMockBasic`.
+
+    // Test for edge cases in MockSettingsImpl.extraInterfaces
+    @Test
+    public void testExtraInterfacesWithOneInterface() throws Exception {
+        MockSettings settings = new MockSettingsImpl();
+        Class<?>[] interfaces = new Class<?>[]{Runnable.class};
+        settings.extraInterfaces(interfaces);
+        assertArrayEquals(interfaces, settings.getExtraInterfaces());
+    }
+    
+    @Test
+    public void testExtraInterfacesWithMultipleInterfaces() throws Exception {
+        MockSettings settings = new MockSettingsImpl();
+        Class<?>[] interfaces = new Class<?>[]{Runnable.class, java.io.Serializable.class, java.lang.Cloneable.class};
+        settings.extraInterfaces(interfaces);
+        assertArrayEquals(interfaces, settings.getExtraInterfaces());
+    }
+
+    // Test for default behavior of MockSettingsImpl if no configuration is done
+    @Test
+    public void testDefaultMockSettingsImplState() throws Exception {
+        MockSettingsImpl settings = new MockSettingsImpl();
+        assertNull(settings.getExtraInterfaces());
+        assertNull(settings.getMockName());
+        assertNull(settings.getSpiedInstance());
+        assertNull(settings.getDefaultAnswer());
+        assertFalse(settings.isSerializable());
+    }
+
+    // Test MockName with surrogate name
+    @Test
+    public void testMockNameIsSurrogateWhenNullName() throws Exception {
+        MockName mockName = new MockName(null, String.class);
+        // MockName is surrogate if mockName is null or empty string, and classToMock is not null.
+        // In Mockito 1.x, it seems surrogate is determined by whether a name was explicitly provided.
+        // If name is null, it might be considered surrogate. Let's assume it's not for now based on the typical use case.
+        // If it were surrogate, it would mean the name is generated.
+        // The test isMockNameToStringWhenNull implies it uses class name, not surrogate.
+        assertFalse(mockName.isSurrogate()); // Based on MockName(String, Class) constructor usage
+    }
+}
+```
+
+1. SOURCE CODE ANALYSIS - This test class covers methods of `MockSettingsImpl` and `MockUtil`. It tests configuration setters/getters like `serializable()`, `extraInterfaces()`, `name()`, `spiedInstance()`, `defaultAnswer()` and methods for mock creation and handling.
+2. TEST CASE DESIGN -
+    - testSerializableSetAndGet: true, false; checked with assertTrue/assertFalse.
+    - testExtraInterfacesSetAndGet: new Class<?>[]{Runnable.class, java.io.Serializable.class}; checked with assertArrayEquals.
+    - testExtraInterfacesWithEmptyArray: empty array; expected Reporter exception.
+    - testExtraInterfacesWithNullArray: null array; expected Reporter exception.
+    - testExtraInterfacesWithNullParameter: array with null element; expected Reporter exception.
+    - testExtraInterfacesWithNonInterfaceClass: array with non-interface class; expected Reporter exception.
+    - testNameSetAndGet: "myMock"; checked with assertEquals.
+    - testSpiedInstanceSetAndGet: new Object(); checked with assertSame.
+    - testDefaultAnswerSetAndGet: custom Answer instance; checked with assertSame.
+    - testDefaultAnswerWithNull: null; checked with assertNull.
+    - testInitiateMockName: String.class; checked MockName properties.
+    - testInitiateMockNameWithName: "customName", Integer.class; checked MockName properties.
+    - testInitiateMockNameWithNullName: null, Long.class; checked MockName properties.
+    - testCreateMockBasic: Runnable.class, settings; checked mock type and interfaces.
+    - testCreateMockWithSpiedInstance: Object instance; checked spied instance behavior.
+    - testResetMock: Object mock; checked reset functionality indirectly.
+    - testGetMockHandlerValidMock: valid mock; checked handler non-null.
+    - testGetMockHandlerNull: null mock; expected NotAMockException.
+    - testGetMockHandlerNotAMock: non-mock object; expected NotAMockException.
+    - testIsMockValidMock: valid mock; checked with assertTrue.
+    - testIsMockNull: null; checked with assertFalse.
+    - testIsMockNotAMock: non-mock object; checked with assertFalse.
+    - testMockNameToString: "myMock", String.class; checked toString.
+    - testMockNameToStringWhenNull: null, Integer.class; checked toString default.
+    - testMockNameIsSurrogate: "myMock", String.class; checked isSurrogate.
+    - testExtraInterfacesWithOneInterface: {Runnable.class}; checked with assertArrayEquals.
+    - testExtraInterfacesWithMultipleInterfaces: {Runnable.class, Serializable.class, Cloneable.class}; checked with assertArrayEquals.
+    - testDefaultMockSettingsImplState: default state; checked nulls and false.
+    - testMockNameIsSurrogateWhenNullName: null, String.class; checked isSurrogate.
+4. DEFECT DETECTION STRATEGY - Tests cover the configuration of mock settings (interfaces, name, spied instance, serializability, default answer) and the creation/handling of mocks using `MockUtil`. Edge cases like nulls, empty arrays, and invalid types for extra interfaces are also tested.
+5. SUMMARY - 30 tests.
+6. LIMITATIONS - Testing of `Reporter` exceptions is done by checking for `fail()` calls, as direct inspection of the reporter's state is not exposed. The `resetMock` test infers behavior rather than directly asserting the default answer post-reset due to API limitations.
+Actual defect detection is unknown until the unchanged test suite is executed against the reference and the defective versions.

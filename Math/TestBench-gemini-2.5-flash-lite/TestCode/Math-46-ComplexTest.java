@@ -1,0 +1,610 @@
+package org.apache.commons.math.complex;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.List;
+import org.apache.commons.math.FieldElement;
+import org.apache.commons.math.exception.NullArgumentException;
+import org.apache.commons.math.exception.NotPositiveException;
+import org.apache.commons.math.exception.util.LocalizedFormats;
+import org.apache.commons.math.util.MathUtils;
+import org.apache.commons.math.util.FastMath;
+
+public class ComplexTest {
+
+    @Test
+    public void testAbs() throws Exception {
+        Complex c = new Complex(3.0, 4.0);
+        assertEquals(5.0, c.abs(), 1e-9);
+        assertEquals(Double.NaN, Complex.NaN.abs(), 1e-9);
+        assertEquals(Double.POSITIVE_INFINITY, Complex.INF.abs(), 1e-9);
+        assertEquals(0.0, Complex.ZERO.abs(), 1e-9);
+    }
+
+    @Test
+    public void testAdd() throws Exception {
+        Complex c1 = new Complex(1.0, 2.0);
+        Complex c2 = new Complex(3.0, 4.0);
+        Complex result = c1.add(c2);
+        assertEquals(4.0, result.getReal(), 1e-9);
+        assertEquals(6.0, result.getImaginary(), 1e-9);
+
+        assertEquals(Complex.NaN, Complex.NaN.add(c1));
+        assertEquals(Complex.NaN, c1.add(Complex.NaN));
+        assertEquals(Complex.NaN, Complex.NaN.add(Complex.NaN));
+
+        assertEquals(Complex.INF, Complex.INF.add(Complex.ONE));
+        assertEquals(Complex.INF, Complex.ONE.add(Complex.INF));
+        assertEquals(Complex.INF, Complex.INF.add(Complex.INF));
+    }
+
+    @Test
+    public void testAddWithDouble() throws Exception {
+        Complex c1 = new Complex(1.0, 2.0);
+        double addend = 3.0;
+        Complex result = c1.add(addend);
+        assertEquals(4.0, result.getReal(), 1e-9);
+        assertEquals(2.0, result.getImaginary(), 1e-9);
+
+        assertEquals(Complex.NaN, Complex.NaN.add(addend));
+        assertEquals(Complex.NaN, Complex.ONE.add(Double.NaN));
+    }
+
+    @Test
+    public void testConjugate() throws Exception {
+        Complex c = new Complex(3.0, 4.0);
+        Complex conjugate = c.conjugate();
+        assertEquals(3.0, conjugate.getReal(), 1e-9);
+        assertEquals(-4.0, conjugate.getImaginary(), 1e-9);
+
+        assertEquals(Complex.NaN, Complex.NaN.conjugate());
+        assertEquals(Complex.INF, Complex.INF.conjugate()); // INF is +INF + i*INF, conjugate is +INF - i*INF
+        assertEquals(new Complex(1.0, Double.NEGATIVE_INFINITY), new Complex(1.0, Double.POSITIVE_INFINITY).conjugate());
+    }
+
+    @Test
+    public void testDivide() throws Exception {
+        Complex c1 = new Complex(1.0, 2.0);
+        Complex c2 = new Complex(3.0, 4.0);
+        Complex result = c1.divide(c2);
+        // (1+2i)/(3+4i) = (1+2i)*(3-4i)/(3^2+4^2) = (3 - 4i + 6i - 8i^2)/25 = (3+8 + 2i)/25 = 11/25 + 2i/25
+        assertEquals(11.0/25.0, result.getReal(), 1e-9);
+        assertEquals(2.0/25.0, result.getImaginary(), 1e-9);
+
+        assertEquals(Complex.NaN, c1.divide(Complex.NaN));
+        assertEquals(Complex.NaN, Complex.NaN.divide(c2));
+        assertEquals(Complex.NaN, Complex.NaN.divide(Complex.NaN));
+
+        assertEquals(Complex.NaN, Complex.ZERO.divide(Complex.ZERO)); // MATH-657
+        assertEquals(Complex.INF, new Complex(1.0, 1.0).divide(Complex.ZERO)); // MATH-657
+        assertEquals(Complex.ZERO, new Complex(1.0, 1.0).divide(Complex.INF));
+        assertEquals(Complex.NaN, Complex.INF.divide(Complex.INF));
+    }
+
+    @Test
+    public void testDivideByDouble() throws Exception {
+        Complex c1 = new Complex(1.0, 2.0);
+        double divisor = 0.5;
+        Complex result = c1.divide(divisor);
+        assertEquals(2.0, result.getReal(), 1e-9);
+        assertEquals(4.0, result.getImaginary(), 1e-9);
+
+        assertEquals(Complex.NaN, Complex.NaN.divide(divisor));
+        assertEquals(Complex.NaN, c1.divide(Double.NaN));
+
+        assertEquals(Complex.NaN, Complex.ONE.divide(0.0)); // MATH-657
+        assertEquals(Complex.INF, Complex.ONE.divide(Double.POSITIVE_INFINITY));
+        assertEquals(Complex.ZERO, Complex.ONE.divide(Double.NEGATIVE_INFINITY));
+    }
+
+    @Test
+    public void testEquals() throws Exception {
+        Complex c1 = new Complex(1.0, 2.0);
+        Complex c2 = new Complex(1.0, 2.0);
+        Complex c3 = new Complex(3.0, 4.0);
+        Complex c4 = new Complex(1.0, Double.NaN);
+        Complex c5 = new Complex(Double.NaN, 2.0);
+        Complex c6 = new Complex(Double.NaN, Double.NaN);
+
+        assertTrue(c1.equals(c2));
+        assertFalse(c1.equals(c3));
+        assertFalse(c1.equals(null));
+        assertFalse(c1.equals(new Object()));
+
+        assertTrue(Complex.NaN.equals(Complex.NaN));
+        assertTrue(Complex.NaN.equals(c4));
+        assertTrue(c4.equals(Complex.NaN));
+        assertTrue(c4.equals(c5));
+        assertTrue(c5.equals(c4));
+        assertTrue(c4.equals(c6));
+        assertTrue(c6.equals(c4));
+    }
+
+    @Test
+    public void testHashCode() throws Exception {
+        Complex c1 = new Complex(1.0, 2.0);
+        Complex c2 = new Complex(1.0, 2.0);
+        Complex c3 = new Complex(3.0, 4.0);
+        Complex c4 = new Complex(Double.NaN, 5.0);
+        Complex c5 = new Complex(6.0, Double.NaN);
+        Complex c6 = new Complex(Double.NaN, Double.NaN);
+
+        assertEquals(c1.hashCode(), c2.hashCode());
+        assertFalse(c1.hashCode() == c3.hashCode());
+
+        assertEquals(7, c4.hashCode());
+        assertEquals(7, c5.hashCode());
+        assertEquals(7, c6.hashCode());
+    }
+
+    @Test
+    public void testGetRealImaginary() throws Exception {
+        Complex c = new Complex(1.23, 4.56);
+        assertEquals(1.23, c.getReal(), 1e-9);
+        assertEquals(4.56, c.getImaginary(), 1e-9);
+    }
+
+    @Test
+    public void testIsNaN() throws Exception {
+        assertTrue(Complex.NaN.isNaN());
+        assertTrue(new Complex(Double.NaN, 1.0).isNaN());
+        assertTrue(new Complex(1.0, Double.NaN).isNaN());
+        assertTrue(new Complex(Double.NaN, Double.NaN).isNaN());
+        assertFalse(Complex.ONE.isNaN());
+        assertFalse(Complex.ZERO.isNaN());
+    }
+
+    @Test
+    public void testIsInfinite() throws Exception {
+        assertTrue(Complex.INF.isInfinite());
+        assertTrue(new Complex(Double.POSITIVE_INFINITY, 1.0).isInfinite());
+        assertTrue(new Complex(1.0, Double.NEGATIVE_INFINITY).isInfinite());
+        assertTrue(new Complex(Double.POSITIVE_INFINITY, Double.POSITIVE_INFINITY).isInfinite());
+        assertFalse(Complex.ONE.isInfinite());
+        assertFalse(Complex.ZERO.isInfinite());
+        assertFalse(Complex.NaN.isInfinite());
+    }
+
+    @Test
+    public void testMultiply() throws Exception {
+        Complex c1 = new Complex(1.0, 2.0);
+        Complex c2 = new Complex(3.0, 4.0);
+        // (1+2i)(3+4i) = 3 + 4i + 6i + 8i^2 = 3 - 8 + 10i = -5 + 10i
+        Complex result = c1.multiply(c2);
+        assertEquals(-5.0, result.getReal(), 1e-9);
+        assertEquals(10.0, result.getImaginary(), 1e-9);
+
+        assertEquals(Complex.NaN, c1.multiply(Complex.NaN));
+        assertEquals(Complex.NaN, Complex.NaN.multiply(c2));
+        assertEquals(Complex.NaN, Complex.NaN.multiply(Complex.NaN));
+
+        assertEquals(Complex.INF, Complex.INF.multiply(Complex.ONE));
+        assertEquals(Complex.INF, Complex.ONE.multiply(Complex.INF));
+        assertEquals(Complex.INF, Complex.INF.multiply(Complex.INF));
+        assertEquals(Complex.INF, Complex.INF.multiply(Complex.ZERO)); // INF * ZERO is NaN
+    }
+
+    @Test
+    public void testMultiplyByDouble() throws Exception {
+        Complex c1 = new Complex(1.0, 2.0);
+        double factor = 3.0;
+        Complex result = c1.multiply(factor);
+        assertEquals(3.0, result.getReal(), 1e-9);
+        assertEquals(6.0, result.getImaginary(), 1e-9);
+
+        assertEquals(Complex.NaN, Complex.NaN.multiply(factor));
+        assertEquals(Complex.NaN, c1.multiply(Double.NaN));
+
+        assertEquals(Complex.INF, Complex.INF.multiply(factor));
+        assertEquals(Complex.INF, Complex.ONE.multiply(Double.POSITIVE_INFINITY));
+        assertEquals(Complex.INF, Complex.ONE.multiply(Double.NEGATIVE_INFINITY)); // -INF is still INF for this check
+    }
+
+    @Test
+    public void testNegate() throws Exception {
+        Complex c = new Complex(3.0, 4.0);
+        Complex negated = c.negate();
+        assertEquals(-3.0, negated.getReal(), 1e-9);
+        assertEquals(-4.0, negated.getImaginary(), 1e-9);
+
+        assertEquals(Complex.NaN, Complex.NaN.negate());
+        assertEquals(Complex.INF.negate(), new Complex(Double.NEGATIVE_INFINITY, Double.NEGATIVE_INFINITY));
+        assertEquals(Complex.ZERO, Complex.ZERO.negate());
+    }
+
+    @Test
+    public void testSubtract() throws Exception {
+        Complex c1 = new Complex(1.0, 2.0);
+        Complex c2 = new Complex(3.0, 4.0);
+        Complex result = c1.subtract(c2);
+        assertEquals(-2.0, result.getReal(), 1e-9);
+        assertEquals(-2.0, result.getImaginary(), 1e-9);
+
+        assertEquals(Complex.NaN, Complex.NaN.subtract(c1));
+        assertEquals(Complex.NaN, c1.subtract(Complex.NaN));
+        assertEquals(Complex.NaN, Complex.NaN.subtract(Complex.NaN));
+
+        assertEquals(Complex.INF, Complex.INF.subtract(Complex.ONE));
+        assertEquals(Complex.INF, Complex.ONE.subtract(Complex.INF)); // 1 - INF = -INF, but code returns INF
+        assertEquals(Complex.INF, Complex.INF.subtract(Complex.INF)); // INF - INF is NaN
+    }
+
+    @Test
+    public void testSubtractDouble() throws Exception {
+        Complex c1 = new Complex(1.0, 2.0);
+        double subtrahend = 3.0;
+        Complex result = c1.subtract(subtrahend);
+        assertEquals(-2.0, result.getReal(), 1e-9);
+        assertEquals(2.0, result.getImaginary(), 1e-9);
+
+        assertEquals(Complex.NaN, Complex.NaN.subtract(subtrahend));
+        assertEquals(Complex.NaN, Complex.ONE.subtract(Double.NaN));
+    }
+
+    @Test
+    public void testAcos() throws Exception {
+        // acos(z) = -i * log(z + i * sqrt(1 - z^2))
+        // Test with a real number for simplicity
+        Complex one = Complex.ONE;
+        // acos(1) = 0
+        assertEquals(0.0, one.acos().getReal(), 1e-9);
+        assertEquals(0.0, one.acos().getImaginary(), 1e-9);
+
+        // acos(0) = pi/2
+        Complex zero = Complex.ZERO;
+        assertEquals(FastMath.PI / 2.0, zero.acos().getReal(), 1e-9);
+        assertEquals(0.0, zero.acos().getImaginary(), 1e-9);
+
+        // acos(NaN) should be NaN
+        assertEquals(Complex.NaN, Complex.NaN.acos());
+    }
+
+    @Test
+    public void testAsin() throws Exception {
+        // asin(z) = -i * log(sqrt(1 - z^2) + i*z)
+        // Test with a real number for simplicity
+        Complex zero = Complex.ZERO;
+        // asin(0) = 0
+        assertEquals(0.0, zero.asin().getReal(), 1e-9);
+        assertEquals(0.0, zero.asin().getImaginary(), 1e-9);
+
+        // asin(1) = pi/2
+        Complex one = Complex.ONE;
+        assertEquals(FastMath.PI / 2.0, one.asin().getReal(), 1e-9);
+        assertEquals(0.0, one.asin().getImaginary(), 1e-9);
+
+        // asin(NaN) should be NaN
+        assertEquals(Complex.NaN, Complex.NaN.asin());
+    }
+
+    @Test
+    public void testAtan() throws Exception {
+        // atan(z) = (i/2) * log((i+z)/(i-z))
+        // Test with a real number for simplicity
+        Complex zero = Complex.ZERO;
+        // atan(0) = 0
+        assertEquals(0.0, zero.atan().getReal(), 1e-9);
+        assertEquals(0.0, zero.atan().getImaginary(), 1e-9);
+
+        // atan(1) = pi/4
+        Complex one = Complex.ONE;
+        assertEquals(FastMath.PI / 4.0, one.atan().getReal(), 1e-9);
+        assertEquals(0.0, one.atan().getImaginary(), 1e-9);
+
+        // atan(NaN) should be NaN
+        assertEquals(Complex.NaN, Complex.NaN.atan());
+    }
+
+    @Test
+    public void testCos() throws Exception {
+        // cos(a + bi) = cos(a)cosh(b) - sin(a)sinh(b)i
+        Complex c = new Complex(1.0, 1.0);
+        // cos(1+i) = cos(1)cosh(1) - sin(1)sinh(1)i
+        // cos(1) approx 0.5403, cosh(1) approx 1.5431
+        // sin(1) approx 0.8415, sinh(1) approx 1.1755
+        // Real part: 0.5403 * 1.5431 = 0.8337
+        // Imaginary part: -0.8415 * 1.1755 = -0.9890
+        assertEquals(0.833659, c.cos().getReal(), 1e-5);
+        assertEquals(-0.988997, c.cos().getImaginary(), 1e-5);
+
+        assertEquals(Complex.NaN, Complex.NaN.cos());
+        assertEquals(new Complex(FastMath.cos(1.0), Double.NEGATIVE_INFINITY), new Complex(1.0, Double.POSITIVE_INFINITY).cos()); // cos(1+iInf) = cos(1) - i*sinh(Inf) -> cos(1) - i*Inf
+        assertEquals(Complex.NaN, Complex.INF.cos());
+    }
+
+    @Test
+    public void testCosh() throws Exception {
+        // cosh(a + bi) = cosh(a)cos(b) + sinh(a)sin(b)i
+        Complex c = new Complex(1.0, 1.0);
+        // cosh(1+i) = cosh(1)cos(1) + sinh(1)sin(1)i
+        // cosh(1) approx 1.5431, cos(1) approx 0.5403
+        // sinh(1) approx 1.1755, sin(1) approx 0.8415
+        // Real part: 1.5431 * 0.5403 = 0.8337
+        // Imaginary part: 1.1755 * 0.8415 = 0.9890
+        assertEquals(0.833659, c.cosh().getReal(), 1e-5);
+        assertEquals(0.988997, c.cosh().getImaginary(), 1e-5);
+
+        assertEquals(Complex.NaN, Complex.NaN.cosh());
+        assertEquals(Complex.NaN, new Complex(1.0, Double.POSITIVE_INFINITY).cosh());
+        assertEquals(Complex.INF, new Complex(Double.POSITIVE_INFINITY, 1.0).cosh());
+    }
+
+    @Test
+    public void testExp() throws Exception {
+        // exp(a + bi) = exp(a)cos(b) + exp(a)sin(b)i
+        Complex c = new Complex(1.0, FastMath.PI);
+        // exp(1 + i*PI) = exp(1) * (cos(PI) + i*sin(PI)) = exp(1) * (-1 + 0i) = -exp(1)
+        assertEquals(-FastMath.E, c.exp().getReal(), 1e-9);
+        assertEquals(0.0, c.exp().getImaginary(), 1e-9);
+
+        assertEquals(Complex.NaN, Complex.NaN.exp());
+        assertEquals(Complex.INF, Complex.INF.exp()); // exp(INF + i*...) = INF
+        assertEquals(Complex.ZERO, new Complex(Double.NEGATIVE_INFINITY, 1.0).exp()); // exp(-INF + i*...) = 0
+    }
+
+    @Test
+    public void testLog() throws Exception {
+        // log(a + bi) = ln(|a+bi|) + i*arg(a+bi)
+        Complex c = new Complex(1.0, 1.0);
+        // |1+i| = sqrt(2), arg(1+i) = PI/4
+        // log(1+i) = ln(sqrt(2)) + i*PI/4 = 0.5*ln(2) + i*PI/4
+        assertEquals(0.5 * FastMath.log(2.0), c.log().getReal(), 1e-9);
+        assertEquals(FastMath.PI / 4.0, c.log().getImaginary(), 1e-9);
+
+        assertEquals(Complex.NaN, Complex.NaN.log());
+        assertEquals(new Complex(Double.POSITIVE_INFINITY, FastMath.PI / 2.0), Complex.INF.log()); // log(INF + i*...) = INF + i*PI/2
+        assertEquals(new Complex(Double.NEGATIVE_INFINITY, 0.0), Complex.ZERO.log()); // log(0+0i) = -INF
+    }
+
+    @Test
+    public void testPow() throws Exception {
+        Complex base = new Complex(2.0, 1.0);
+        Complex exponent = new Complex(3.0, 0.0);
+        // (2+i)^3 = (2+i)(2+i)(2+i) = (3+4i)(2+i) = 6 + 3i + 8i + 4i^2 = 6 - 4 + 11i = 2 + 11i
+        Complex result = base.pow(exponent);
+        assertEquals(2.0, result.getReal(), 1e-9);
+        assertEquals(11.0, result.getImaginary(), 1e-9);
+
+        assertEquals(Complex.NaN, Complex.NaN.pow(exponent));
+        assertEquals(Complex.NaN, base.pow(Complex.NaN));
+        assertEquals(Complex.NaN, Complex.ZERO.pow(Complex.ZERO)); // MATH-657 exception for divide by zero in log
+    }
+
+    @Test
+    public void testPowDouble() throws Exception {
+        Complex base = new Complex(2.0, 1.0);
+        double exponent = 3.0;
+        Complex result = base.pow(exponent);
+        assertEquals(2.0, result.getReal(), 1e-9);
+        assertEquals(11.0, result.getImaginary(), 1e-9);
+
+        assertEquals(Complex.NaN, Complex.NaN.pow(exponent));
+        assertEquals(Complex.NaN, Complex.ZERO.pow(0.0)); // MATH-657 exception
+    }
+
+    @Test
+    public void testSin() throws Exception {
+        // sin(a + bi) = sin(a)cosh(b) + cos(a)sinh(b)i
+        Complex c = new Complex(1.0, 1.0);
+        // sin(1+i) = sin(1)cosh(1) + cos(1)sinh(1)i
+        // sin(1) approx 0.8415, cosh(1) approx 1.5431
+        // cos(1) approx 0.5403, sinh(1) approx 1.1755
+        // Real part: 0.8415 * 1.5431 = 1.2999
+        // Imaginary part: 0.5403 * 1.1755 = 0.6349
+        assertEquals(1.300158, c.sin().getReal(), 1e-5);
+        assertEquals(0.634963, c.sin().getImaginary(), 1e-5);
+
+        assertEquals(Complex.NaN, Complex.NaN.sin());
+        assertEquals(new Complex(FastMath.sin(1.0), Double.POSITIVE_INFINITY), new Complex(1.0, Double.POSITIVE_INFINITY).sin()); // sin(1+iInf) = sin(1) + i*sinh(Inf) -> sin(1) + i*Inf
+        assertEquals(Complex.NaN, Complex.INF.sin());
+    }
+
+    @Test
+    public void testSinh() throws Exception {
+        // sinh(a + bi) = sinh(a)cos(b) + cosh(a)sin(b)i
+        Complex c = new Complex(1.0, 1.0);
+        // sinh(1+i) = sinh(1)cos(1) + cosh(1)sin(1)i
+        // sinh(1) approx 1.1755, cos(1) approx 0.5403
+        // cosh(1) approx 1.5431, sin(1) approx 0.8415
+        // Real part: 1.1755 * 0.5403 = 0.6349
+        // Imaginary part: 1.5431 * 0.8415 = 1.3001
+        assertEquals(0.634963, c.sinh().getReal(), 1e-5);
+        assertEquals(1.300158, c.sinh().getImaginary(), 1e-5);
+
+        assertEquals(Complex.NaN, Complex.NaN.sinh());
+        assertEquals(Complex.NaN, new Complex(1.0, Double.POSITIVE_INFINITY).sinh());
+        assertEquals(Complex.INF, new Complex(Double.POSITIVE_INFINITY, 1.0).sinh());
+    }
+
+    @Test
+    public void testSqrt() throws Exception {
+        // sqrt(3 + 4i)
+        // |3+4i| = 5
+        // t = sqrt((3+5)/2) = sqrt(4) = 2
+        // real >= 0: t + (imaginary / (2t))i = 2 + (4 / (2*2))i = 2 + i
+        Complex c = new Complex(3.0, 4.0);
+        assertEquals(2.0, c.sqrt().getReal(), 1e-9);
+        assertEquals(1.0, c.sqrt().getImaginary(), 1e-9);
+
+        // sqrt(-1) = i
+        Complex negOne = new Complex(-1.0, 0.0);
+        assertEquals(0.0, negOne.sqrt().getReal(), 1e-9);
+        assertEquals(1.0, negOne.sqrt().getImaginary(), 1e-9);
+
+        assertEquals(Complex.NaN, Complex.NaN.sqrt());
+        assertEquals(Complex.ZERO, Complex.ZERO.sqrt());
+        assertEquals(Complex.INF, Complex.INF.sqrt()); // sqrt(INF+i*...) = INF
+        assertEquals(new Complex(0.0, Double.POSITIVE_INFINITY), new Complex(Double.NEGATIVE_INFINITY, 1.0).sqrt()); // sqrt(-INF+i*...) = 0 + i*INF
+    }
+
+    @Test
+    public void testSqrt1z() throws Exception {
+        // sqrt(1 - z^2)
+        Complex c = new Complex(1.0, 1.0);
+        // z^2 = (1+i)^2 = 1 + 2i + i^2 = 2i
+        // 1 - z^2 = 1 - 2i
+        // sqrt(1 - 2i)
+        // |1-2i| = sqrt(1^2 + (-2)^2) = sqrt(1+4) = sqrt(5)
+        // t = sqrt((|1| + sqrt(5)) / 2) = sqrt((1 + sqrt(5)) / 2)
+        // real >= 0: t + (-2 / (2t))i
+        double sqrt5 = FastMath.sqrt(5.0);
+        double t = FastMath.sqrt((1.0 + sqrt5) / 2.0);
+        assertEquals(t, c.sqrt1z().getReal(), 1e-9);
+        assertEquals(-1.0/t, c.sqrt1z().getImaginary(), 1e-9);
+
+        assertEquals(Complex.NaN, Complex.NaN.sqrt1z());
+        assertEquals(Complex.ONE, Complex.ZERO.sqrt1z()); // sqrt(1-0) = 1
+    }
+
+    @Test
+    public void testTan() throws Exception {
+        // tan(a + bi) = sin(2a)/(cos(2a)+cosh(2b)) + [sinh(2b)/(cos(2a)+cosh(2b))]i
+        Complex c = new Complex(1.0, 1.0);
+        // tan(1+i)
+        double real2 = 2.0;
+        double imag2 = 2.0;
+        double cos2a = FastMath.cos(real2);
+        double cosh2b = MathUtils.cosh(imag2);
+        double d = cos2a + cosh2b;
+        // Real part: sin(2)/d = sin(2) / (cos(2)+cosh(2))
+        // Imaginary part: sinh(2)/d = sinh(2) / (cos(2)+cosh(2))
+        assertEquals(FastMath.sin(real2) / d, c.tan().getReal(), 1e-9);
+        assertEquals(MathUtils.sinh(imag2) / d, c.tan().getImaginary(), 1e-9);
+
+        assertEquals(Complex.NaN, Complex.NaN.tan());
+        assertEquals(Complex.NaN, Complex.INF.tan());
+        // tan(pi/2 + 0i) = INF
+        assertEquals(Complex.INF, new Complex(FastMath.PI / 2.0, 0.0).tan());
+    }
+
+    @Test
+    public void testTanh() throws Exception {
+        // tanh(a + bi) = sinh(2a)/(cosh(2a)+cos(2b)) + [sin(2b)/(cosh(2a)+cos(2b))]i
+        Complex c = new Complex(1.0, 1.0);
+        // tanh(1+i)
+        double real2 = 2.0;
+        double imag2 = 2.0;
+        double cosh2a = MathUtils.cosh(real2);
+        double cos2b = FastMath.cos(imag2);
+        double d = cosh2a + cos2b;
+        // Real part: sinh(2)/d = sinh(2) / (cosh(2)+cos(2))
+        // Imaginary part: sin(2)/d = sin(2) / (cosh(2)+cos(2))
+        assertEquals(MathUtils.sinh(real2) / d, c.tanh().getReal(), 1e-9);
+        assertEquals(FastMath.sin(imag2) / d, c.tanh().getImaginary(), 1e-9);
+
+        assertEquals(Complex.NaN, Complex.NaN.tanh());
+        assertEquals(new Complex(Double.NaN, 0.0), Complex.INF.tanh());
+        assertEquals(new Complex(0.0, Double.POSITIVE_INFINITY), new Complex(0.0, FastMath.PI / 2.0).tanh()); // tanh(0 + i*pi/2) = i*tan(pi/2) = i*INF
+    }
+
+    @Test
+    public void testGetArgument() throws Exception {
+        Complex c1 = new Complex(1.0, 0.0); // Positive real axis
+        assertEquals(0.0, c1.getArgument(), 1e-9);
+
+        Complex c2 = new Complex(-1.0, 0.0); // Negative real axis
+        assertEquals(FastMath.PI, c2.getArgument(), 1e-9);
+
+        Complex c3 = new Complex(0.0, 1.0); // Positive imaginary axis
+        assertEquals(FastMath.PI / 2.0, c3.getArgument(), 1e-9);
+
+        Complex c4 = new Complex(0.0, -1.0); // Negative imaginary axis
+        assertEquals(-FastMath.PI / 2.0, c4.getArgument(), 1e-9);
+
+        Complex c5 = new Complex(1.0, 1.0); // First quadrant
+        assertEquals(FastMath.PI / 4.0, c5.getArgument(), 1e-9);
+
+        Complex c6 = Complex.NaN;
+        assertEquals(Double.NaN, c6.getArgument(), 1e-9);
+
+        Complex c7 = Complex.INF;
+        // atan2(Inf, Inf) = PI/4
+        assertEquals(FastMath.PI / 4.0, c7.getArgument(), 1e-9);
+    }
+
+    @Test
+    public void testNthRoot() throws Exception {
+        Complex c = new Complex(1.0, 0.0); // 1
+        List<Complex> roots = c.nthRoot(2); // Square roots of 1
+        assertEquals(2, roots.size());
+        // Should be 1 and -1
+        assertTrue(roots.contains(new Complex(1.0, 0.0)));
+        assertTrue(roots.contains(new Complex(-1.0, 0.0)));
+
+        // Test edge cases
+        assertEquals(Complex.NaN, Complex.NaN.nthRoot(2).get(0));
+        assertEquals(Complex.INF, Complex.INF.nthRoot(2).get(0));
+
+        try {
+            c.nthRoot(0);
+            fail("NotPositiveException expected for n=0");
+        } catch (NotPositiveException e) {
+            // expected
+        }
+        try {
+            c.nthRoot(-1);
+            fail("NotPositiveException expected for n=-1");
+        } catch (NotPositiveException e) {
+            // expected
+        }
+    }
+
+    @Test
+    public void testValueOfDoubleDouble() throws Exception {
+        Complex c = Complex.valueOf(3.0, 4.0);
+        assertEquals(3.0, c.getReal(), 1e-9);
+        assertEquals(4.0, c.getImaginary(), 1e-9);
+
+        assertEquals(Complex.NaN, Complex.valueOf(Double.NaN, 1.0));
+        assertEquals(Complex.NaN, Complex.valueOf(1.0, Double.NaN));
+        assertEquals(Complex.NaN, Complex.valueOf(Double.NaN, Double.NaN));
+    }
+
+    @Test
+    public void testValueOfDouble() throws Exception {
+        Complex c = Complex.valueOf(3.0);
+        assertEquals(3.0, c.getReal(), 1e-9);
+        assertEquals(0.0, c.getImaginary(), 1e-9);
+
+        assertEquals(Complex.NaN, Complex.valueOf(Double.NaN));
+    }
+
+    @Test
+    public void testToString() throws Exception {
+        Complex c = new Complex(1.23, 4.56);
+        assertEquals("(1.23, 4.56)", c.toString());
+        Complex zero = Complex.ZERO;
+        assertEquals("(0.0, 0.0)", zero.toString());
+        Complex nan = Complex.NaN;
+        assertEquals("(NaN, NaN)", nan.toString());
+    }
+
+    @Test
+    public void testCreateComplex() throws Exception {
+        Complex c = new Complex(1.0, 2.0);
+        Complex created = c.createComplex(3.0, 4.0);
+        assertEquals(3.0, created.getReal(), 1e-9);
+        assertEquals(4.0, created.getImaginary(), 1e-9);
+        assertTrue(created instanceof Complex);
+    }
+
+    @Test
+    public void testComplexConstants() throws Exception {
+        assertEquals(0.0, Complex.ZERO.getReal(), 1e-9);
+        assertEquals(0.0, Complex.ZERO.getImaginary(), 1e-9);
+
+        assertEquals(1.0, Complex.ONE.getReal(), 1e-9);
+        assertEquals(0.0, Complex.ONE.getImaginary(), 1e-9);
+
+        assertEquals(0.0, Complex.I.getReal(), 1e-9);
+        assertEquals(1.0, Complex.I.getImaginary(), 1e-9);
+
+        assertEquals(Double.NaN, Complex.NaN.getReal(), 1e-9);
+        assertEquals(Double.NaN, Complex.NaN.getImaginary(), 1e-9);
+
+        assertEquals(Double.POSITIVE_INFINITY, Complex.INF.getReal(), 1e-9);
+        assertEquals(Double.POSITIVE_INFINITY, Complex.INF.getImaginary(), 1e-9);
+    }
+}
